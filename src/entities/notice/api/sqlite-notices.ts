@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Notice, NoticeRepository } from '../model/types';
+import type { Notice, NoticeRepository, NoticeSummary } from '../model/types';
 
 export function openNoticeRepository(): NoticeRepository {
   const directory = join(process.cwd(), '.data');
@@ -17,7 +17,10 @@ export function openNoticeRepository(): NoticeRepository {
       PRIMARY KEY (number, revision)
     );
   `);
-  const list = db.prepare('SELECT data FROM notices ORDER BY collected_at DESC, number, revision');
+  const list = db.prepare(`
+    SELECT number, revision, collected_at AS collectedAt, json_extract(data, '$.title') AS title
+    FROM notices ORDER BY collected_at DESC, number, revision
+  `);
   const find = db.prepare('SELECT data FROM notices WHERE number = ? AND revision = ?');
   const save = db.prepare(`
     INSERT INTO notices (number, revision, collected_at, data) VALUES (?, ?, ?, ?)
@@ -28,7 +31,7 @@ export function openNoticeRepository(): NoticeRepository {
 
   return {
     async list() {
-      return list.all().map((row) => JSON.parse(String(row.data)) as Notice);
+      return list.all() as NoticeSummary[];
     },
     async find({ number, revision }) {
       const row = find.get(number, revision);

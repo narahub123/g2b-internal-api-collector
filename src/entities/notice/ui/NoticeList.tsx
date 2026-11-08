@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { Button } from '@/shared/ui/button';
 import { noticePath } from '../lib/notice-path';
-import type { Notice } from '../model/types';
+import type { NoticeSummary } from '../model/types';
 
-export function NoticeList({ notices }: { notices: Notice[] }) {
+export function NoticeList({ notices }: { notices: NoticeSummary[] }) {
   if (notices.length === 0) return <p className="text-sm text-muted-foreground">저장된 공고가 없습니다.</p>;
 
   return (
