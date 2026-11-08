@@ -1,3 +1,4 @@
+import type { ContractRequest, ContractRequestKey } from '@/entities/contract-request/model/contract-request';
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 
@@ -10,6 +11,7 @@ export type NoticeSummary = NoticeKey & {
 
 export type Notice = NoticeSummary & {
   payload: Record<string, unknown>;
+  contractRequests?: ContractRequestKey[];
   documents?: {
     attachments?: Record<string, unknown>;
     proposal?: Record<string, unknown>;
@@ -68,4 +70,15 @@ export interface NoticeRepository {
    * @returns 공고번호와 차수 목록.
    */
   findNoticesForPriorSpec(number: string): NoticeKey[];
+  /**
+   * 계약요청 상세와 품목을 조회한다.
+   * @param key 계약요청접수번호와 차수.
+   * @returns 저장된 계약요청 또는 null.
+   */
+  findContractRequest(key: ContractRequestKey): ContractRequest | null;
+  /**
+   * 상세와 품목을 함께 저장하거나 갱신한다.
+   * @param contractRequest 수집을 완료한 계약요청.
+   */
+  saveContractRequest(contractRequest: ContractRequest): void;
 }

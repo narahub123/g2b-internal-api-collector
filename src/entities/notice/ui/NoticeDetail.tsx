@@ -1,5 +1,6 @@
 import { decodeHTMLStrict } from 'entities';
 import Link from 'next/link';
+import { contractRequestPath } from '@/entities/contract-request/model/contract-request';
 import { orderPlanPath } from '@/entities/order-plan/model/order-plan';
 import { priorSpecPath } from '@/entities/prior-spec/model/prior-spec';
 import { g2bNumber } from '@/shared/model/g2b-number';
@@ -24,7 +25,8 @@ function NoticeValue({ value }: { value: string }) {
  * @returns 공고 상세 본문.
  */
 export function NoticeDetail({ notice, orderPlanNumber }: { notice: Notice; orderPlanNumber?: string }) {
-  const { groups, tables } = getNoticeDisplay(notice.payload, notice.documents);
+  const contractRequests = notice.contractRequests ?? [];
+  const { groups, tables } = getNoticeDisplay(notice.payload, notice.documents, contractRequests.length > 0);
   const { number, revision } = notice;
   const detail = notice.payload.dmItemMap as Record<string, unknown> | undefined;
   const methodCode = typeof detail?.scsbdMthdCd === 'string' ? detail.scsbdMthdCd : '';
@@ -67,6 +69,22 @@ export function NoticeDetail({ notice, orderPlanNumber }: { notice: Notice; orde
                   </dd>
                 </div>
               ))}
+              {title === '관련 공고 정보' && contractRequests.length > 0 && (
+                <div className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]">
+                  <dt className="text-muted-foreground">계약요청</dt>
+                  <dd>
+                    <ul className="grid gap-1">
+                      {contractRequests.map((request) => (
+                        <li key={contractRequestPath(request)}>
+                          <Link href={contractRequestPath(request)} className="text-primary underline underline-offset-2">
+                            {request.number} / {request.revision}
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </div>
+              )}
             </dl>
           </DetailAccordionSection>
         ))}

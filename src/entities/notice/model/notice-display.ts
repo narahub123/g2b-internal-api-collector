@@ -109,9 +109,10 @@ function attachmentDownloadUrl(detail: RecordValue, attachment: RecordValue) {
  * 저장한 응답에서 공고 상세 화면에 표시할 항목을 구성한다.
  * @param payload 공고 상세 API의 원본 응답.
  * @param documents 문서 API의 원본 응답. 이전에 저장한 공고에는 없을 수 있다.
+ * @param hasContractRequests 연결된 계약요청이 있으면 관련 공고 정보 섹션을 표시한다.
  * @returns 표시할 값이 있는 섹션과 표.
  */
-export function getNoticeDisplay(payload: RecordValue, documents?: Notice['documents']) {
+export function getNoticeDisplay(payload: RecordValue, documents?: Notice['documents'], hasContractRequests = false) {
   const detail = record(payload.dmItemMap);
   const guide = record(payload.dmItemGuidMap);
   const evaluation = record(payload.dmEvlStepMap);
@@ -196,7 +197,7 @@ export function getNoticeDisplay(payload: RecordValue, documents?: Notice['docum
       ['oderPlanNo', '발주계획번호'],
     ]) },
     { title: '공고 기타', fields: fields(detail, [['pbancEtcCn', '공고 기타 안내', standard]]) },
-  ].filter((group) => group.fields.length > 0);
+  ].filter((group) => group.fields.length > 0 || (group.title === '관련 공고 정보' && hasContractRequests));
 
   const attachments = documentRows(documents);
   const proposal = getPublicProposalRows(payload, documents);

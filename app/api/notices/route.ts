@@ -18,12 +18,15 @@ export async function POST(request: Request) {
   }
   const repository = getNoticeRepository();
   const documents = notice.documents;
-  if (documents?.unavailable?.length) {
+  if (documents?.unavailable?.length || notice.contractRequests === undefined) {
     // 일시적인 문서 조회 실패 때문에 이전에 저장한 원본 목록을 잃지 않도록 한다.
     const previous = await repository.find({ number, revision });
-    for (const kind of documents.unavailable) {
-      documents[kind] = previous?.documents?.[kind];
+    if (documents) {
+      for (const kind of documents.unavailable ?? []) {
+        documents[kind] = previous?.documents?.[kind];
+      }
     }
+    notice.contractRequests ??= previous?.contractRequests;
   }
   await repository.save(notice);
   return Response.json({ number, revision });

@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { ContractRequest } from '@/entities/contract-request/model/contract-request';
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import type { Notice, NoticeKey, NoticeRepository, NoticeSummary } from '../model/types';
@@ -28,6 +29,13 @@ export function openNoticeRepository(): NoticeRepository {
       collected_at TEXT NOT NULL,
       data TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS contract_requests (
+      number TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      collected_at TEXT NOT NULL,
+      data TEXT NOT NULL,
+      PRIMARY KEY (number, revision)
+    );
   `);
   const list = db.prepare(`
     SELECT number, revision, collected_at AS collectedAt, json_extract(data, '$.title') AS title
@@ -41,6 +49,12 @@ export function openNoticeRepository(): NoticeRepository {
     WHERE excluded.collected_at >= notices.collected_at
   `);
   const findOrderPlan = db.prepare('SELECT data FROM order_plans WHERE number = ?');
+  const findContractRequest = db.prepare('SELECT data FROM contract_requests WHERE number = ? AND revision = ?');
+  const saveContractRequest = db.prepare(`
+    INSERT INTO contract_requests (number, revision, collected_at, data) VALUES (?, ?, ?, ?)
+    ON CONFLICT (number, revision) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
+    WHERE excluded.collected_at >= contract_requests.collected_at
+  `);
   const replaceOrderPlan = db.prepare(`
     INSERT INTO order_plans (number, collected_at, data) VALUES (?, ?, ?)
     ON CONFLICT (number) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
@@ -88,6 +102,13 @@ export function openNoticeRepository(): NoticeRepository {
     },
     async save(notice) {
       save.run(notice.number, notice.revision, notice.collectedAt, JSON.stringify(notice));
+    },
+    findContractRequest({ number, revision }) {
+      const row = findContractRequest.get(number, revision);
+      return row ? JSON.parse(String(row.data)) as ContractRequest : null;
+    },
+    saveContractRequest({ number, revision, collectedAt, ...data }) {
+      saveContractRequest.run(number, revision, collectedAt, JSON.stringify({ number, revision, collectedAt, ...data }));
     },
     findOrderPlan(number) {
       const row = findOrderPlan.get(number);

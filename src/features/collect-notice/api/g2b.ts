@@ -1,3 +1,6 @@
+import {
+  contractRequestKeys, contractRequestRevision, type ContractRequestKey,
+} from '@/entities/contract-request/model/contract-request';
 import type { Notice, NoticeKey } from '@/entities/notice';
 import { getNoticeRepository } from '@/entities/notice/server';
 import { getNoticeOrderPlanNumber, orderPlanAttachmentGroup } from '@/entities/order-plan/model/order-plan';
@@ -7,19 +10,22 @@ import { attachmentGroup, attachmentSources } from '@/shared/model/g2b-attachmen
 
 const origin = 'https://www.g2b.go.kr';
 const submissionPrefix = 'FIUA027_01_wframe_popupCnts_bidPbancWfrm_mainWframe_';
+const detailMenu = '{"menuNo":"15620","menuCangVal":"FIUA027_01","bsneClsfCd":"%EC%97%85130020","scrnNo":"08542"}';
+const workProgressMenu = '{"menuNo":"13677","menuCangVal":"FIUA009_01","bsneClsfCd":"%EC%97%85130020","scrnNo":"05665"}';
+const unifiedSearchPath = '/fi/fiu/fiua/UntySrch';
 
 class G2bAccessDenied extends Error {}
 
 type G2bRequest = (url: URL, init: RequestInit) => Promise<Response>;
 
-async function postG2b(path: string, submissionid: string, input: object, request: G2bRequest = fetch) {
+async function postG2b(path: string, submissionid: string, input: object, request: G2bRequest = fetch, menuInfo = detailMenu) {
   const response = await request(new URL(path, origin), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json;charset=UTF-8',
       Accept: 'application/json',
       Origin: origin,
-      'Menu-Info': '{"menuNo":"15620","menuCangVal":"FIUA027_01","bsneClsfCd":"%EC%97%85130020","scrnNo":"08542"}',
+      'Menu-Info': menuInfo,
       submissionid,
     },
     body: JSON.stringify(input),
@@ -65,13 +71,84 @@ async function collectOnce(key: string, force: boolean, collect: () => Promise<v
   const pending = pendingCollections.get(key);
   if (pending) {
     if (!force || pending.force) return pending.promise;
-    // 수동 재수집은 첨부 보완만 진행 중이어도 상세 조회까지 실행해야 한다.
+    // 자동 수집은 저장 상태에 따라 일부 조회를 건너뛸 수 있으므로 수동 재수집은 별도로 실행한다.
     await pending.promise.catch(() => undefined);
     return collectOnce(key, force, collect);
   }
   const promise = collect().finally(() => pendingCollections.delete(key));
   pendingCollections.set(key, { force, promise });
   return promise;
+}
+
+async function fetchContractRequestKeys({ number, revision }: NoticeKey) {
+  const result = await postG2b(`${unifiedSearchPath}/srchWorkPrgs.do`, 'sbmWorkPrgs', {
+    dlWorkParamM: { workSrchSeCd: 'BK', workBizNo: number, workBizOrd: revision },
+  }, fetch, workProgressMenu);
+  if (!Array.isArray(result.dlWorkPrgsL)) throw new Error('나라장터 업무 진행 응답 형식이 올바르지 않습니다.');
+  return contractRequestKeys(result.dlWorkPrgsL, { number, revision });
+}
+
+const contractItemPageSize = 10;
+
+function fetchContractRequestData(endpoint: string, { number, revision }: ContractRequestKey, page = 1) {
+  return postG2b(`${unifiedSearchPath}/${endpoint}.do`, 'FIUA027_01_wframe_popupCnts_dmndWfrm_srchDtl', {
+    dlSrchParamM: {
+      untyInspIgiNo: '', untyPyprNo: '', ctrtDmndRcptNo: '', ctrtDmndRcptOrd: '',
+      page: String(page), pageSize: String(contractItemPageSize), ctrtNo: '', ctrtChgOrd: '',
+      bizNo: number, bizOrd: revision, prcmBsneSeCd: '',
+    },
+  });
+}
+
+async function collectContractRequestItems(key: ContractRequestKey) {
+  const items: Record<string, unknown>[] = [];
+  const seenPages = new Set<string>();
+  for (let page = 1; ; page++) {
+    const result = await fetchContractRequestData('srchDmndSttusItemSql', key, page);
+    const rows = result.dlTotalSrchItemL;
+    if (!Array.isArray(rows) || rows.some((row) =>
+      row?.ctrtDmndRcptNo !== key.number || contractRequestRevision(row.ctrtDmndRcptOrd) !== key.revision)) {
+      throw new Error('요청한 계약요청의 품목 응답을 받지 못했습니다.');
+    }
+    // API가 다음 페이지에도 같은 품목을 반환하면 중복 저장과 무한 조회를 막는다.
+    const signature = JSON.stringify(rows.map(({ rowNum, ...item }) => item));
+    if (seenPages.has(signature)) throw new Error('나라장터가 같은 계약요청 품목 페이지를 반복 반환했습니다.');
+    seenPages.add(signature);
+    items.push(...rows);
+    if (rows.length < contractItemPageSize) return items;
+  }
+}
+
+/**
+ * 계약요청의 상세와 품목을 수집해 함께 저장한다.
+ * @param key 계약요청접수번호와 차수.
+ * @param force 기본값은 false. true이면 기존 자료도 다시 조회한다.
+ * @throws 상세 또는 품목 조회에 실패했을 때. 기존 저장 자료는 유지된다.
+ */
+export async function collectContractRequest(key: ContractRequestKey, force = false) {
+  const repository = getNoticeRepository();
+  return collectOnce(`contract-request:${key.number}/${key.revision}`, force, async () => {
+    if (!force && repository.findContractRequest(key)) return;
+    const collectedAt = new Date().toISOString();
+    const [summary, items] = await Promise.allSettled([
+      fetchContractRequestData('srchDmndSttusSql', key),
+      collectContractRequestItems(key),
+    ]);
+    if (summary.status === 'rejected') throw summary.reason;
+    if (items.status === 'rejected') throw items.reason;
+    const result = summary.value;
+    const detail = Array.isArray(result.dlTotalSrchL) && result.dlTotalSrchL.find((row: Record<string, unknown>) =>
+      row?.bizNo === key.number && contractRequestRevision(row.bizOrd) === key.revision);
+    if (!detail) throw new Error('요청한 계약요청의 상세 응답을 받지 못했습니다.');
+    repository.saveContractRequest({ ...key, collectedAt, detail, items: items.value });
+  });
+}
+
+async function collectNoticeContractRequests(key: NoticeKey) {
+  const requests = await fetchContractRequestKeys(key);
+  // 상세 조회가 실패해도 공고에는 확인된 연결을 남겨 해당 페이지에서 다시 수집할 수 있게 한다.
+  await Promise.allSettled(requests.map((request) => collectContractRequest(request)));
+  return requests;
 }
 
 /**
@@ -136,7 +213,7 @@ export async function collectPriorSpec(number: string, force = false) {
 }
 
 /**
- * 공고 상세와 문서 목록을 수집하고, 연결된 미수집 발주계획과 사전규격을 별도로 저장한다.
+ * 공고 상세와 문서 목록을 수집하고, 연결된 미수집 발주계획, 사전규격과 계약요청을 저장한다.
  * 관련 자료 조회가 실패하면 다음 공고 수집 시 재시도한다.
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
@@ -159,11 +236,12 @@ export async function collectNotice(key: NoticeKey, methodCode: string): Promise
   // 첨부 목록은 공고의 첨부 그룹만 조회하고, 제안요청은 상세 JS와 같이 협상계약에만 적용한다.
   const orderPlanNumber = getNoticeOrderPlanNumber(payload);
   const priorSpecNumber = getNoticePriorSpecNumber(payload);
-  const [attachments, proposal] = await Promise.allSettled([
+  const [attachments, proposal, contractRequests] = await Promise.allSettled([
     detail.itemPbancUntyAtchFileNo?.trim() ? collectAttachments(detail.itemPbancUntyAtchFileNo, 'notice') : undefined,
     detail.scsbdMthdCd === '낙030005' && detail.rfpNo?.trim() && /^\d{1,3}$/.test(String(detail.rfpOrd))
       ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
       : undefined,
+    collectNoticeContractRequests(key),
     orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
     priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
   ]);
@@ -179,5 +257,6 @@ export async function collectNotice(key: NoticeKey, methodCode: string): Promise
     if (proposal.reason instanceof G2bAccessDenied) documents.proposalAccessDenied = true;
   }
 
-  return { ...key, title: detail.bidPbancNm, collectedAt, payload, documents };
+  return { ...key, title: detail.bidPbancNm, collectedAt, payload, documents,
+    contractRequests: contractRequests.status === 'fulfilled' ? contractRequests.value : undefined };
 }
