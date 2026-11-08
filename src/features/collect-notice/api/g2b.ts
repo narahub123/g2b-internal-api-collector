@@ -1,7 +1,9 @@
 import type { Notice, NoticeKey } from '@/entities/notice';
 import { getNoticeRepository } from '@/entities/notice/server';
 import { getNoticeOrderPlanNumber, orderPlanAttachmentGroup } from '@/entities/order-plan/model/order-plan';
+import { getNoticePriorSpecNumber, type PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import { createG2bSession } from '@/shared/api/g2b-session';
+import { attachmentGroup, attachmentSources } from '@/shared/model/g2b-attachments';
 
 const origin = 'https://www.g2b.go.kr';
 const submissionPrefix = 'FIUA027_01_wframe_popupCnts_bidPbancWfrm_mainWframe_';
@@ -40,13 +42,10 @@ async function collectDocumentList(path: string, submission: string, input: obje
   return result;
 }
 
-function collectAttachments(untyAtchFileNo: string, scope: 'notice' | 'order-plan', request?: G2bRequest) {
-  const orderPlan = scope === 'order-plan';
+function collectAttachments(untyAtchFileNo: string, scope: keyof typeof attachmentSources, request?: G2bRequest) {
   return collectDocumentList('/fs/fsc/fscb/UntyAtchFile/selectUntyAtchFileList.do', 'sbmInsertAtflGrp', {
     dlUntyAtchFileM: {
-      untyAtchFileNo, atchFileSqnos: '', bsnePath: orderPlan ? 'PRPA' : 'PNPE', bsneClsfCd: '업130020',
-      tblNm: orderPlan ? 'DMND_ODER_PLAN' : 'PBANC_BID_PBANC',
-      colNm: orderPlan ? 'ODER_PLAN_UNTY_ATCH_FILE_NO' : 'ITEM_PBANC_UNTY_ATCH_FILE_NO', webPathUse: 'N',
+      ...attachmentSources[scope], untyAtchFileNo, atchFileSqnos: '', bsneClsfCd: '업130020', webPathUse: 'N',
       isScanEnabled: false, imgUrl: '', atchFileKndCds: '', ignoreAtchFileKndCds: '',
       kbrdrIds: '', kuploadId: '', viewMode: 'view', ignoreScrnIndtYn: '',
     },
@@ -60,41 +59,85 @@ async function collectProposal(rfpNo: string, rfpOrd: string | number, prcmBsneS
   }, request);
 }
 
-const pendingOrderPlans = new Map<string, Promise<void>>();
+const pendingCollections = new Map<string, { force: boolean; promise: Promise<void> }>();
 
-async function collectOrderPlan(number: string) {
+async function collectOnce(key: string, force: boolean, collect: () => Promise<void>) {
+  const pending = pendingCollections.get(key);
+  if (pending) {
+    if (!force || pending.force) return pending.promise;
+    // 수동 재수집은 첨부 보완만 진행 중이어도 상세 조회까지 실행해야 한다.
+    await pending.promise.catch(() => undefined);
+    return collectOnce(key, force, collect);
+  }
+  const promise = collect().finally(() => pendingCollections.delete(key));
+  pendingCollections.set(key, { force, promise });
+  return promise;
+}
+
+/**
+ * 발주계획 상세와 첨부 목록을 수집해 저장한다.
+ * @param number 발주계획번호.
+ * @param force 기본값은 false. true이면 상세와 첨부를 모두 다시 조회하고 성공 시 교체한다.
+ * @throws 나라장터 상세 또는 첨부 목록 조회가 실패했을 때.
+ */
+export async function collectOrderPlan(number: string, force = false) {
   const repository = getNoticeRepository();
-  const saved = repository.findOrderPlan(number);
-  if (saved && (saved.attachments || !orderPlanAttachmentGroup(saved))) return;
 
-  const pending = pendingOrderPlans.get(number);
-  if (pending) return pending;
-
-  // 같은 계획을 참조하는 공고를 동시에 수집해도 나라장터에는 한 번만 요청한다.
-  const collection = (async () => {
+  return collectOnce(`order-plan:${number}`, force, async () => {
+    let plan = force ? null : repository.findOrderPlan(number);
+    if (plan && (plan.attachments || !orderPlanAttachmentGroup(plan))) return;
     const request = await createG2bSession();
-    let plan = saved;
     if (!plan) {
+      const collectedAt = new Date().toISOString();
       const payload = await postG2b('/pr/prp/prpa/OderPlan/selectOderPlan.do',
         'FIUA027_01_wframe_popupCnts_orderPlanWfrm_sbmSrch',
         { dlParamM: { oderPlanNo: number, resultCnt: '' } }, request);
       if (payload?.dlOderPlanM?.oderPlanNo !== number) {
         throw new Error('요청한 발주계획의 상세 응답을 받지 못했습니다.');
       }
-      plan = { number, collectedAt: new Date().toISOString(), payload };
+      plan = { number, collectedAt, payload };
       // 첨부 목록 요청에 실패해도 본문을 보존하고 다음 수집에서 첨부만 재시도한다.
-      repository.saveOrderPlan(plan);
+      if (!force) repository.saveOrderPlan(plan);
     }
     const group = orderPlanAttachmentGroup(plan);
-    if (group) repository.saveOrderPlanAttachments(number, await collectAttachments(group, 'order-plan', request));
-  })().finally(() => pendingOrderPlans.delete(number));
-  pendingOrderPlans.set(number, collection);
-  return collection;
+    const attachments = group ? await collectAttachments(group, 'order-plan', request) : undefined;
+    if (force) repository.replaceOrderPlan({ ...plan, attachments });
+    else if (attachments) repository.saveOrderPlanAttachments(number, plan.collectedAt, attachments);
+  });
 }
 
 /**
- * 공고 상세와 연결된 문서 목록을 수집하고, 미수집 발주계획은 별도로 저장한다.
- * 발주계획 조회가 실패한 경우 다음 공고 수집 시 재시도할 수 있다.
+ * 사전규격 상세와 공개 첨부 목록을 번호별로 수집한다.
+ * @param number 사전규격등록번호.
+ * @param force 기본값은 false. true이면 상세와 첨부를 다시 조회하고 성공 시 교체한다.
+ * @throws 나라장터 상세 또는 첨부 목록 조회가 실패했을 때.
+ */
+export async function collectPriorSpec(number: string, force = false) {
+  const repository = getNoticeRepository();
+  return collectOnce(`prior-spec:${number}`, force, async () => {
+    let spec: PriorSpec | null = force ? null : repository.findPriorSpec(number);
+    if (spec && (spec.attachments || !attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo))) return;
+    const request = await createG2bSession();
+    if (!spec) {
+      const collectedAt = new Date().toISOString();
+      const payload = await postG2b('/pn/pnz/pnza/BfSpec/selectBfSpec.do',
+        'FIUA027_01_wframe_popupCnts_bfSpecWfrm_sbmSrch',
+        { dlParamM: { bfSpecRegNo: number, prcmBsneSeCd: '', opnnSqno: '', jobType: '' } }, request);
+      if (payload?.dlBfSpecM?.bfSpecRegNo !== number) {
+        throw new Error('요청한 사전규격의 상세 응답을 받지 못했습니다.');
+      }
+      spec = { number, collectedAt, payload };
+      if (!force) repository.savePriorSpec(spec);
+    }
+    const group = attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo);
+    const attachments = group ? await collectAttachments(group, 'prior-spec', request) : undefined;
+    if (force || attachments) repository.savePriorSpec({ ...spec, attachments });
+  });
+}
+
+/**
+ * 공고 상세와 문서 목록을 수집하고, 연결된 미수집 발주계획과 사전규격을 별도로 저장한다.
+ * 관련 자료 조회가 실패하면 다음 공고 수집 시 재시도한다.
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
  * @returns 공고 상세 및 해당하는 문서 목록의 원본 응답.
@@ -115,12 +158,14 @@ export async function collectNotice(key: NoticeKey, methodCode: string): Promise
   }
   // 첨부 목록은 공고의 첨부 그룹만 조회하고, 제안요청은 상세 JS와 같이 협상계약에만 적용한다.
   const orderPlanNumber = getNoticeOrderPlanNumber(payload);
+  const priorSpecNumber = getNoticePriorSpecNumber(payload);
   const [attachments, proposal] = await Promise.allSettled([
     detail.itemPbancUntyAtchFileNo?.trim() ? collectAttachments(detail.itemPbancUntyAtchFileNo, 'notice') : undefined,
     detail.scsbdMthdCd === '낙030005' && detail.rfpNo?.trim() && /^\d{1,3}$/.test(String(detail.rfpOrd))
       ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
       : undefined,
     orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
+    priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
   ]);
   // 문서 조회 오류가 공고 상세와 다른 문서의 저장을 막지 않도록 실패 종류를 따로 기록한다.
   const documents: NonNullable<Notice['documents']> = {

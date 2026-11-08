@@ -1,8 +1,11 @@
 import { decodeHTMLStrict } from 'entities';
 import Link from 'next/link';
 import { orderPlanPath } from '@/entities/order-plan/model/order-plan';
+import { priorSpecPath } from '@/entities/prior-spec/model/prior-spec';
+import { g2bNumber } from '@/shared/model/g2b-number';
 import { Accordion } from '@/shared/ui/accordion';
 import { DetailAccordionSection } from '@/shared/ui/detail-accordion-section';
+import { RecollectButton } from '@/shared/ui/recollect-button';
 import { renderNoticeHtml } from '../lib/notice-html';
 import { getNoticeDisplay } from '../model/notice-display';
 import type { Notice } from '../model/types';
@@ -22,12 +25,18 @@ function NoticeValue({ value }: { value: string }) {
  */
 export function NoticeDetail({ notice, orderPlanNumber }: { notice: Notice; orderPlanNumber?: string }) {
   const { groups, tables } = getNoticeDisplay(notice.payload, notice.documents);
+  const { number, revision } = notice;
+  const detail = notice.payload.dmItemMap as Record<string, unknown> | undefined;
+  const methodCode = typeof detail?.scsbdMthdCd === 'string' ? detail.scsbdMthdCd : '';
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
-      <header className="grid gap-1">
-        <h1 className="text-xl font-semibold">{notice.title}</h1>
-        <p className="text-sm text-muted-foreground">{notice.number} / {notice.revision}</p>
+      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
+        <div>
+          <h1 className="wrap-anywhere text-xl font-semibold">{notice.title}</h1>
+          <p className="text-sm text-muted-foreground">{number} / {revision}</p>
+        </div>
+        <RecollectButton endpoint="/api/notices" requestBody={{ number, revision, methodCode }} />
       </header>
       {notice.documents?.unavailable?.map((kind) => (
         <p key={kind} className="text-sm text-muted-foreground">
@@ -47,6 +56,8 @@ export function NoticeDetail({ notice, orderPlanNumber }: { notice: Notice; orde
                   <dd>
                     {label === '발주계획번호' && orderPlanNumber === value ? (
                       <Link href={orderPlanPath(value)} className="text-primary underline underline-offset-2">{value}</Link>
+                    ) : label === '사전규격등록번호' && g2bNumber(value) ? (
+                      <Link href={priorSpecPath(value.trim())} className="text-primary underline underline-offset-2">{value}</Link>
                     ) : (
                       <>
                         <NoticeValue value={value} />

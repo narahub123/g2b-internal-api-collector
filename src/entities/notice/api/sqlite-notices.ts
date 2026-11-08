@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
+import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import type { Notice, NoticeKey, NoticeRepository, NoticeSummary } from '../model/types';
 
 export function openNoticeRepository(): NoticeRepository {
@@ -22,6 +23,11 @@ export function openNoticeRepository(): NoticeRepository {
       collected_at TEXT NOT NULL,
       data TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS prior_specs (
+      number TEXT NOT NULL PRIMARY KEY,
+      collected_at TEXT NOT NULL,
+      data TEXT NOT NULL
+    );
   `);
   const list = db.prepare(`
     SELECT number, revision, collected_at AS collectedAt, json_extract(data, '$.title') AS title
@@ -35,13 +41,32 @@ export function openNoticeRepository(): NoticeRepository {
     WHERE excluded.collected_at >= notices.collected_at
   `);
   const findOrderPlan = db.prepare('SELECT data FROM order_plans WHERE number = ?');
+  const replaceOrderPlan = db.prepare(`
+    INSERT INTO order_plans (number, collected_at, data) VALUES (?, ?, ?)
+    ON CONFLICT (number) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
+    WHERE excluded.collected_at >= order_plans.collected_at
+  `);
+  const findPriorSpec = db.prepare('SELECT data FROM prior_specs WHERE number = ?');
+  const savePriorSpec = db.prepare(`
+    INSERT INTO prior_specs (number, collected_at, data) VALUES (?, ?, ?)
+    ON CONFLICT (number) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
+    WHERE excluded.collected_at >= prior_specs.collected_at
+  `);
+  const findNoticesForPriorSpec = db.prepare(`
+    SELECT number, revision FROM notices
+    WHERE coalesce(
+      nullif(trim(json_extract(data, '$.payload.dmItemMap.bfSpecRegNo')), ''),
+      trim(json_extract(data, '$.payload.dlBfSpecM.bfSpecRegNo'))
+    ) = ?
+    ORDER BY number, revision
+  `);
   const saveOrderPlan = db.prepare(`
     INSERT INTO order_plans (number, collected_at, data) VALUES (?, ?, ?)
     ON CONFLICT (number) DO NOTHING
   `);
   const saveOrderPlanAttachments = db.prepare(`
     UPDATE order_plans SET data = json_set(data, '$.attachments', json(?))
-    WHERE number = ? AND json_type(data, '$.attachments') IS NULL
+    WHERE number = ? AND collected_at = ? AND json_type(data, '$.attachments') IS NULL
   `);
   // 기존에 수집한 공고도 원본 응답에 기록된 계획번호로 연결한다.
   const findNoticesForOrderPlan = db.prepare(`
@@ -71,11 +96,24 @@ export function openNoticeRepository(): NoticeRepository {
     saveOrderPlan(plan) {
       saveOrderPlan.run(plan.number, plan.collectedAt, JSON.stringify(plan));
     },
-    saveOrderPlanAttachments(number, attachments) {
-      saveOrderPlanAttachments.run(JSON.stringify(attachments), number);
+    saveOrderPlanAttachments(number, collectedAt, attachments) {
+      saveOrderPlanAttachments.run(JSON.stringify(attachments), number, collectedAt);
     },
     findNoticesForOrderPlan(number) {
       return findNoticesForOrderPlan.all(number) as NoticeKey[];
+    },
+    replaceOrderPlan(plan) {
+      replaceOrderPlan.run(plan.number, plan.collectedAt, JSON.stringify(plan));
+    },
+    findPriorSpec(number) {
+      const row = findPriorSpec.get(number);
+      return row ? JSON.parse(String(row.data)) as PriorSpec : null;
+    },
+    savePriorSpec(spec) {
+      savePriorSpec.run(spec.number, spec.collectedAt, JSON.stringify(spec));
+    },
+    findNoticesForPriorSpec(number) {
+      return findNoticesForPriorSpec.all(number) as NoticeKey[];
     },
   };
 }

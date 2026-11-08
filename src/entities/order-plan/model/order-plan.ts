@@ -1,3 +1,5 @@
+import { attachmentGroup, publicAttachmentFiles } from '@/shared/model/g2b-attachments';
+
 export type OrderPlan = {
   number: string;
   collectedAt: string;
@@ -11,10 +13,7 @@ export type OrderPlan = {
  * @returns 유효한 첨부 그룹 ID 또는 undefined.
  */
 export function orderPlanAttachmentGroup(plan: OrderPlan) {
-  const value = plan.payload.dlOderPlanM.oderPlanUntyAtchFileNo;
-  if (typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.trim())) {
-    return value.trim();
-  }
+  return attachmentGroup(plan.payload.dlOderPlanM.oderPlanUntyAtchFileNo);
 }
 
 /**
@@ -23,18 +22,7 @@ export function orderPlanAttachmentGroup(plan: OrderPlan) {
  * @returns 해당 계획의 첨부 그룹에서 공개 표시가 허용된 파일 목록.
  */
 export function orderPlanFiles(plan: OrderPlan) {
-  const group = orderPlanAttachmentGroup(plan);
-  const rows = plan.attachments?.dlUntyAtchFileL;
-  if (!group || !Array.isArray(rows)) return [];
-
-  return rows.flatMap((row) => {
-    const filename = row?.orgnlAtchFileNm;
-    const seq = String(row?.atchFileSqno);
-    if (row?.untyAtchFileNo !== group || row.scrnIndtYn !== 'Y' ||
-        typeof filename !== 'string' || !filename.trim() || !/^[1-9]\d*$/.test(seq)) return [];
-    return [{ filename, seq, downloadable: row.dwnldPrmsYn !== 'N' && !/[\x00-\x1f\x7f]/.test(filename),
-      businessCode: typeof row.bsneClsfCd === 'string' ? row.bsneClsfCd : '업130020' }];
-  });
+  return publicAttachmentFiles(orderPlanAttachmentGroup(plan), plan.attachments);
 }
 
 /**

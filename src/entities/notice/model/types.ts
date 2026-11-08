@@ -1,4 +1,5 @@
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
+import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 
 export type NoticeKey = { number: string; revision: string };
 
@@ -35,13 +36,36 @@ export interface NoticeRepository {
   /**
    * 최초 수집한 첨부 목록을 계획 원본에 추가한다.
    * @param number 이미 저장된 발주계획번호.
+   * @param collectedAt 첨부 그룹을 확인한 발주계획 본문의 수집 시각.
    * @param attachments 첨부 목록 API 원본 응답.
    */
-  saveOrderPlanAttachments(number: string, attachments: Record<string, unknown>): void;
+  saveOrderPlanAttachments(number: string, collectedAt: string, attachments: Record<string, unknown>): void;
   /**
    * 발주계획을 참조하는 로컬 공고를 조회한다.
    * @param number 발주계획번호.
    * @returns 공고번호와 차수 목록.
    */
   findNoticesForOrderPlan(number: string): NoticeKey[];
+  /**
+   * 저장된 발주계획을 재수집 결과로 교체한다.
+   * @param plan 새 상세와 첨부 목록.
+   */
+  replaceOrderPlan(plan: OrderPlan): void;
+  /**
+   * 번호에 해당하는 저장된 사전규격을 조회한다.
+   * @param number 사전규격등록번호.
+   * @returns 저장된 사전규격 또는 null.
+   */
+  findPriorSpec(number: string): PriorSpec | null;
+  /**
+   * 사전규격을 번호별로 저장하거나 갱신한다.
+   * @param spec 저장할 사전규격과 첨부 목록.
+   */
+  savePriorSpec(spec: PriorSpec): void;
+  /**
+   * 사전규격을 직접 참조하는 로컬 공고를 조회한다.
+   * @param number 사전규격등록번호.
+   * @returns 공고번호와 차수 목록.
+   */
+  findNoticesForPriorSpec(number: string): NoticeKey[];
 }

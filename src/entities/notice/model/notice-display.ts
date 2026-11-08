@@ -1,5 +1,6 @@
 import type { Notice } from './types';
 import { getNoticeOrderPlanNumber } from '@/entities/order-plan/model/order-plan';
+import { getNoticePriorSpecNumber } from '@/entities/prior-spec/model/prior-spec';
 
 type RecordValue = Record<string, unknown>;
 type Column = readonly [key: string, label: string];
@@ -187,7 +188,10 @@ export function getNoticeDisplay(payload: RecordValue, documents?: Notice['docum
       ['pbancInstUntyGrpNm', '공고기관'], ['pbancPicNm', '공고담당자'],
       ['pbancPicTlphNo', '공고담당자 전화번호'], ['bidBlffNm', '집행관'],
     ]) },
-    { title: '관련 공고 정보', fields: fields({ ...detail, oderPlanNo: getNoticeOrderPlanNumber(payload) }, [
+    { title: '관련 공고 정보', fields: fields({
+      ...detail, oderPlanNo: getNoticeOrderPlanNumber(payload),
+      bfSpecRegNo: getNoticePriorSpecNumber(payload) ?? detail.bfSpecRegNo,
+    }, [
       ['bfSpecRegNo', '사전규격등록번호'], ['bfSpecUndsRsnNm', '사전규격 미공개 사유'],
       ['oderPlanNo', '발주계획번호'],
     ]) },

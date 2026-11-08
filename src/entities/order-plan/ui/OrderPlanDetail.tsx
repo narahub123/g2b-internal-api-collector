@@ -2,8 +2,11 @@ import { decodeHTMLStrict } from 'entities';
 import Link from 'next/link';
 import { noticePath } from '@/entities/notice/lib/notice-path';
 import type { NoticeKey } from '@/entities/notice/model/types';
+import { priorSpecPath } from '@/entities/prior-spec/model/prior-spec';
+import { g2bNumber } from '@/shared/model/g2b-number';
 import { Accordion } from '@/shared/ui/accordion';
 import { DetailAccordionSection } from '@/shared/ui/detail-accordion-section';
+import { RecollectButton } from '@/shared/ui/recollect-button';
 import { orderPlanAttachmentGroup, orderPlanFiles, type OrderPlan } from '../model/order-plan';
 
 const groups = [
@@ -63,7 +66,7 @@ export function OrderPlanDetail({ plan, localNotices }: { plan: OrderPlan; local
   }
   const specifications = Array.isArray(detail.bfSpecRegList)
     ? [...new Set(detail.bfSpecRegList.map((row) => row?.bfSpecRegNo)
-      .filter((number): number is string => typeof number === 'string' && Boolean(number.trim())))]
+      .map(g2bNumber).filter((number): number is string => number !== undefined))]
     : [];
   const files = orderPlanFiles(plan);
   const attachmentsPending = Boolean(orderPlanAttachmentGroup(plan) && !plan.attachments);
@@ -73,16 +76,29 @@ export function OrderPlanDetail({ plan, localNotices }: { plan: OrderPlan; local
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
-      <header className="grid gap-1">
-        <h2 className="text-xl font-semibold">{title ? decodeHTMLStrict(title) : '발주계획 상세'}</h2>
-        <p className="text-sm text-muted-foreground">{plan.number}</p>
+      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
+        <div className="min-w-0">
+          <h2 className="wrap-anywhere text-xl font-semibold">
+            {title ? decodeHTMLStrict(title) : "발주계획 상세"}
+          </h2>
+          <p className="text-sm text-muted-foreground">{plan.number}</p>
+        </div>
+        <RecollectButton
+          endpoint={`/api/order-plans/${encodeURIComponent(plan.number)}`}
+        />
       </header>
-      <Accordion type="multiple" defaultValue={sections} className="min-w-0 border-t">
+      <Accordion
+        type="multiple"
+        defaultValue={sections}
+        className="min-w-0 border-t"
+      >
         {groups.map(({ title, fields }) => {
           const rows = fields.flatMap(([key, label]) => {
             const value = detail[key];
-            if (typeof value === 'number') return [{ label, value: numberFormat.format(value) }];
-            if (typeof value === 'string' && value.trim()) return [{ label, value: decodeHTMLStrict(value) }];
+            if (typeof value === "number")
+              return [{ label, value: numberFormat.format(value) }];
+            if (typeof value === "string" && value.trim())
+              return [{ label, value: decodeHTMLStrict(value) }];
             return [];
           });
           if (!rows.length) return null;
@@ -91,9 +107,14 @@ export function OrderPlanDetail({ plan, localNotices }: { plan: OrderPlan; local
             <DetailAccordionSection key={title} title={title} heading="h3">
               <dl className="grid gap-3 text-sm">
                 {rows.map(({ label, value }) => (
-                  <div key={label} className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]">
+                  <div
+                    key={label}
+                    className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]"
+                  >
                     <dt className="text-muted-foreground">{label}</dt>
-                    <dd className="wrap-anywhere whitespace-pre-wrap">{value}</dd>
+                    <dd className="wrap-anywhere whitespace-pre-wrap">
+                      {value}
+                    </dd>
                   </div>
                 ))}
               </dl>
@@ -103,32 +124,61 @@ export function OrderPlanDetail({ plan, localNotices }: { plan: OrderPlan; local
         <DetailAccordionSection title="관련 공고 정보" heading="h3">
           <div className="grid gap-3">
             {specifications.length > 0 && (
-              <p className="text-sm">사전규격등록번호 {specifications.join(', ')}</p>
+              <ul className="grid gap-2 text-sm">
+                {specifications.map((number) => (
+                  <li key={number}>
+                    사전규격등록번호{" "}
+                    <Link
+                      href={priorSpecPath(number)}
+                      className="text-primary underline underline-offset-2"
+                    >
+                      {number}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
             )}
             {notices.size > 0 ? (
               <ul className="grid gap-2 text-sm">
                 {[...notices].map(([href, { number, revision }]) => (
                   <li key={href}>
-                    <Link href={href} className="text-primary underline underline-offset-2">{number} / {revision}</Link>
+                    <Link
+                      href={href}
+                      className="text-primary underline underline-offset-2"
+                    >
+                      {number} / {revision}
+                    </Link>
                   </li>
                 ))}
               </ul>
-            ) : <p className="text-sm text-muted-foreground">관련 입찰공고가 없습니다.</p>}
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                관련 입찰공고가 없습니다.
+              </p>
+            )}
           </div>
         </DetailAccordionSection>
         {showAttachments && (
           <DetailAccordionSection title="파일첨부" heading="h3">
             {attachmentsPending ? (
-              <p className="text-muted-foreground">첨부 목록이 아직 수집되지 않았습니다. 관련 공고를 다시 수집하면 첨부 목록을 조회합니다.</p>
+              <p className="text-muted-foreground">
+                첨부 목록이 아직 수집되지 않았습니다. 재수집으로 첨부 목록을
+                조회할 수 있습니다.
+              </p>
             ) : (
               <ul className="grid gap-2 text-sm">
                 {files.map(({ filename, seq, downloadable }) => (
                   <li key={seq} className="wrap-anywhere">
                     {downloadable ? (
-                      <a href={`/api/order-plans/${encodeURIComponent(plan.number)}/attachments/${seq}`} className="text-primary underline underline-offset-2">
+                      <a
+                        href={`/api/order-plans/${encodeURIComponent(plan.number)}/attachments/${seq}`}
+                        className="text-primary underline underline-offset-2"
+                      >
                         {decodeHTMLStrict(filename)}
                       </a>
-                    ) : decodeHTMLStrict(filename)}
+                    ) : (
+                      decodeHTMLStrict(filename)
+                    )}
                   </li>
                 ))}
               </ul>
