@@ -1,0 +1,22 @@
+import type { NoticeKey } from '@/entities/notice';
+import { getNoticeRepository, getPublicProposalRows, resolveProposalDownload } from '@/entities/notice/server';
+
+export async function GET(request: Request, { params }: { params: Promise<NoticeKey> }) {
+  const { searchParams } = new URL(request.url);
+  const fileNo = searchParams.get('fileNo');
+  const seq = searchParams.get('seq');
+  const notice = await getNoticeRepository().find(await params);
+  const file = notice && getPublicProposalRows(notice.payload, notice.documents)
+    .find((row) => row.fileNo === fileNo && row.seq === seq);
+  if (!fileNo || !seq || typeof file?.orgnlAtchFileNm !== 'string') {
+    return Response.json({ error: '공개 제안요청 문서를 찾을 수 없습니다.' }, { status: 404 });
+  }
+
+  try {
+    const url = await resolveProposalDownload(fileNo, seq, file.orgnlAtchFileNm);
+    if (url) return new Response(null, { status: 302, headers: { Location: url.href, 'Cache-Control': 'no-store' } });
+    return Response.json({ error: '다운로드 가능한 문서가 아닙니다.' }, { status: 404 });
+  } catch {
+    return Response.json({ error: '나라장터 다운로드 정보를 가져오지 못했습니다.' }, { status: 502 });
+  }
+}

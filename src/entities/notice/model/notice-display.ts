@@ -1,3 +1,5 @@
+import type { Notice } from './types';
+
 type RecordValue = Record<string, unknown>;
 type Column = readonly [key: string, label: string];
 type Field = readonly [key: string, label: string, visible?: boolean];
@@ -19,6 +21,41 @@ const contactColumns = [
   ['faxNo', '팩스번호'], ['tlphNo', '전화번호'],
 ] as const;
 
+const proposalKinds = [
+  ['첨020196', '예산산출내역서'], ['첨020066', '제안요청서'], ['첨020109', '기타문서'],
+  ['첨020195', '긴급발주사유서'], ['첨020197', '대기업참여제한예외사유서'],
+] as const;
+
+function documentRows(documents: Notice['documents']) {
+  const attachmentList = documents?.attachments?.dlUntyAtchFileL;
+  const attachments = Array.isArray(attachmentList)
+    ? attachmentList.map(record).filter((row) => row.scrnIndtYn === 'Y' && displayValue(row.orgnlAtchFileNm))
+    : [];
+  return attachments;
+}
+
+/**
+ * 협상계약에서 공개 표시 대상인 제안요청 문서를 반환한다.
+ * @param payload 공고 상세 API 응답.
+ * @param documents 저장한 문서 API 응답.
+ * @returns 화면과 다운로드 라우트에서 사용하는 공개 문서 행.
+ */
+export function getPublicProposalRows(payload: RecordValue, documents: Notice['documents']) {
+  if (record(payload.dmItemMap).scsbdMthdCd !== '낙030005') return [];
+  const proposalList = documents?.proposal?.dlUntyAtchFileL;
+  const rows = Array.isArray(proposalList) ? proposalList.map(record) : [];
+  // 나라장터의 제안요청 표는 기타문서만 같은 분류의 여러 건을 표시한다.
+  return proposalKinds.flatMap(([code, kind]) => {
+    const matches = rows.filter((row) => row.rfpAtchFileKndCd === code);
+    return (code === '첨020109' ? matches : matches.slice(0, 1))
+      .filter((row) => row.rfpAtchDocRlsYn === 'Y' && displayValue(row.orgnlAtchFileNm))
+      .map((row) => ({
+        kind, orgnlAtchFileNm: row.orgnlAtchFileNm,
+        fileNo: displayValue(row.rfpUntyAtchFileNo), seq: displayValue(row.rfpAtchFileSqno),
+      }));
+  });
+}
+
 export function displayValue(value: unknown): string | undefined {
   if (typeof value === 'string') return value.trim() ? value : undefined;
   if (typeof value === 'number') return String(value);
@@ -35,18 +72,44 @@ function fields(source: RecordValue, definitions: readonly Field[]) {
   });
 }
 
-function table(title: string, source: unknown, columns: readonly Column[]) {
+function table(title: string, source: unknown, columns: readonly Column[], linkForFile?: (row: RecordValue) => string | undefined) {
   const rows = Array.isArray(source) ? source.map(record) : [];
   const visible = columns.filter(([key]) => rows.some((row) => displayValue(row[key]) !== undefined));
   return {
     title,
     columns: visible.map(([, label]) => label),
-    rows: rows.map((row) => visible.map(([key]) => displayValue(row[key])))
-      .filter((row) => row.some((value) => value !== undefined)),
+    rows: rows.map((row) => visible.map(([key]) => ({
+      value: displayValue(row[key]),
+      href: key === 'orgnlAtchFileNm' ? linkForFile?.(row) : undefined,
+    }))).filter((row) => row.some(({ value }) => value !== undefined)),
   };
 }
 
-export function getNoticeDisplay(payload: RecordValue) {
+function attachmentDownloadUrl(detail: RecordValue, attachment: RecordValue) {
+  const bidPbancNo = displayValue(detail.bidPbancNo);
+  const bidPbancOrd = displayValue(detail.bidPbancOrd)?.padStart(3, '0');
+  const prcmBsneSeCd = displayValue(detail.prcmBsneSeCd);
+  const fileSeq = displayValue(attachment.atchFileSqno);
+  if (!bidPbancNo || !/^[A-Z0-9-]{1,30}$/.test(bidPbancNo) ||
+      !bidPbancOrd || !/^\d{3}$/.test(bidPbancOrd) ||
+      !prcmBsneSeCd || !/^\d{2}$/.test(prcmBsneSeCd) ||
+      !fileSeq || !/^[1-9]\d*$/.test(fileSeq) || attachment.dwnldPrmsYn === 'N') {
+    return;
+  }
+
+  // 일반 첨부 목록의 순번을 공고 다운로드 주소의 fileSeq에 사용한다.
+  const url = new URL('https://www.g2b.go.kr/pn/pnp/pnpe/UntyAtchFile/downloadFile.do');
+  url.search = new URLSearchParams({ bidPbancNo, bidPbancOrd, fileType: '', fileSeq, prcmBsneSeCd }).toString();
+  return url.href;
+}
+
+/**
+ * 저장한 응답에서 공고 상세 화면에 표시할 항목을 구성한다.
+ * @param payload 공고 상세 API의 원본 응답.
+ * @param documents 문서 API의 원본 응답. 이전에 저장한 공고에는 없을 수 있다.
+ * @returns 표시할 값이 있는 섹션과 표.
+ */
+export function getNoticeDisplay(payload: RecordValue, documents?: Notice['documents']) {
   const detail = record(payload.dmItemMap);
   const guide = record(payload.dmItemGuidMap);
   const evaluation = record(payload.dmEvlStepMap);
@@ -130,6 +193,8 @@ export function getNoticeDisplay(payload: RecordValue) {
     { title: '공고 기타', fields: fields(detail, [['pbancEtcCn', '공고 기타 안내', standard]]) },
   ].filter((group) => group.fields.length > 0);
 
+  const attachments = documentRows(documents);
+  const proposal = getPublicProposalRows(payload, documents);
   const tables = [
     table('입찰 진행 일정', payload.dmItemList1, schedule),
     table('구매 품목', services && own ? undefined : payload.dmItemItemList,
@@ -139,6 +204,17 @@ export function getNoticeDisplay(payload: RecordValue) {
       ['bidPbancNoOrd', '입찰공고번호'], ['bidPrgrsOrd', '재입찰번호'], ['bidPbancNm', '공고명'],
       ['onbsPrnmntDt', '개찰일시'], ['bidPgstNm', '진행현황'],
     ]),
+    table('제안요청정보', proposal, [
+      ['kind', '문서 구분'], ['orgnlAtchFileNm', '파일명'],
+    ], ({ fileNo, seq }) => {
+      if (typeof fileNo !== 'string' || typeof seq !== 'string' ||
+          typeof detail.bidPbancNo !== 'string' || detail.bidPbancOrd == null) return;
+      const params = new URLSearchParams({ fileNo, seq });
+      return `/api/notices/${encodeURIComponent(detail.bidPbancNo)}/${encodeURIComponent(String(detail.bidPbancOrd).padStart(3, '0'))}/proposal-download?${params}`;
+    }),
+    table('파일첨부', attachments, [
+      ['orgnlAtchFileNm', '파일명'], ['fileExtnNm', '확장자'], ['fileSz', '크기(바이트)'],
+    ], (attachment) => attachmentDownloadUrl(detail, attachment)),
   ].filter((entry) => entry.rows.length > 0);
 
   return { groups, tables };

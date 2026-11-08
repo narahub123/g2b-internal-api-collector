@@ -12,7 +12,7 @@ function NoticeValue({ value }: { value: string }) {
 }
 
 export function NoticeDetail({ notice }: { notice: Notice }) {
-  const { groups, tables } = getNoticeDisplay(notice.payload);
+  const { groups, tables } = getNoticeDisplay(notice.payload, notice.documents);
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
@@ -20,6 +20,14 @@ export function NoticeDetail({ notice }: { notice: Notice }) {
         <h1 className="text-xl font-semibold">{notice.title}</h1>
         <p className="text-sm text-muted-foreground">{notice.number} / {notice.revision}</p>
       </header>
+      {notice.documents?.unavailable?.map((kind) => (
+        <p key={kind} className="text-sm text-muted-foreground">
+          {kind === 'proposal' && notice.documents?.proposalAccessDenied
+            ? '나라장터에서 제안요청정보 조회를 거부했습니다(403).'
+            : `${kind === 'attachments' ? '파일첨부' : '제안요청정보'}를 가져오지 못했습니다.`}
+          {notice.documents?.[kind] && ' 이전에 수집한 목록을 표시합니다.'}
+        </p>
+      ))}
       {groups.map(({ title, fields }) => (
         <section key={title} className="grid min-w-0 gap-3 border-t pt-4">
           <h2 className="font-semibold">{title}</h2>
@@ -44,9 +52,13 @@ export function NoticeDetail({ notice }: { notice: Notice }) {
               <tbody>
                 {rows.map((row, index) => (
                   <tr key={index} className="border-t align-top">
-                    {row.map((value, column) => (
+                    {row.map(({ value, href }, column) => (
                       <td key={columns[column]} className="min-w-20 px-3 py-2">
-                        {value === undefined ? '—' : <NoticeValue value={value} />}
+                        {value === undefined ? '—' : href ? (
+                          <a href={href} className="wrap-anywhere text-primary underline underline-offset-2">
+                            {decodeHTMLStrict(value)}
+                          </a>
+                        ) : <NoticeValue value={value} />}
                       </td>
                     ))}
                   </tr>

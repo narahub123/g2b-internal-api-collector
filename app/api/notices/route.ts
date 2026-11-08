@@ -16,6 +16,15 @@ export async function POST(request: Request) {
   if (!notice) {
     return Response.json({ error: '나라장터에서 공고 상세를 가져오지 못했습니다.' }, { status: 502 });
   }
-  await getNoticeRepository().save(notice);
+  const repository = getNoticeRepository();
+  const documents = notice.documents;
+  if (documents?.unavailable?.length) {
+    // 일시적인 문서 조회 실패 때문에 이전에 저장한 원본 목록을 잃지 않도록 한다.
+    const previous = await repository.find({ number, revision });
+    for (const kind of documents.unavailable) {
+      documents[kind] = previous?.documents?.[kind];
+    }
+  }
+  await repository.save(notice);
   return Response.json({ number, revision });
 }

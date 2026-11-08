@@ -7,6 +7,12 @@ export type NoticeSummary = NoticeKey & {
 
 export type Notice = NoticeSummary & {
   payload: Record<string, unknown>;
+  documents?: {
+    attachments?: Record<string, unknown>;
+    proposal?: Record<string, unknown>;
+    unavailable?: ('attachments' | 'proposal')[];
+    proposalAccessDenied?: boolean;
+  };
 };
 
 export interface NoticeRepository {
