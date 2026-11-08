@@ -18,6 +18,7 @@ export function openNoticeRepository(): NoticeRepository {
     );
   `);
   const list = db.prepare('SELECT data FROM notices ORDER BY collected_at DESC, number, revision');
+  const find = db.prepare('SELECT data FROM notices WHERE number = ? AND revision = ?');
   const save = db.prepare(`
     INSERT INTO notices (number, revision, collected_at, data) VALUES (?, ?, ?, ?)
     ON CONFLICT (number, revision) DO UPDATE SET
@@ -28,6 +29,10 @@ export function openNoticeRepository(): NoticeRepository {
   return {
     async list() {
       return list.all().map((row) => JSON.parse(String(row.data)) as Notice);
+    },
+    async find({ number, revision }) {
+      const row = find.get(number, revision);
+      return row ? JSON.parse(String(row.data)) as Notice : null;
     },
     async save(notice) {
       save.run(notice.number, notice.revision, notice.collectedAt, JSON.stringify(notice));

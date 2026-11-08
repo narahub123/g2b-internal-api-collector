@@ -1,12 +1,8 @@
-import type { NoticeRepository } from '@/entities/notice';
-import { openNoticeRepository } from '@/entities/notice/server';
+import { getNoticeRepository } from '@/entities/notice/server';
 import { collectNotice, parseCollectNoticeInput } from '@/features/collect-notice/server';
 
-let repository: NoticeRepository | undefined;
-
 export async function GET() {
-  repository ??= openNoticeRepository();
-  return Response.json(await repository.list());
+  return Response.json(await getNoticeRepository().list());
 }
 
 export async function POST(request: Request) {
@@ -20,7 +16,6 @@ export async function POST(request: Request) {
   if (!notice) {
     return Response.json({ error: '나라장터에서 공고 상세를 가져오지 못했습니다.' }, { status: 502 });
   }
-  repository ??= openNoticeRepository();
-  await repository.save(notice);
+  await getNoticeRepository().save(notice);
   return Response.json({ number, revision });
 }
