@@ -1,4 +1,5 @@
 import type { ContractRequest, ContractRequestKey } from '@/entities/contract-request/model/contract-request';
+import type { OpeningResult, OpeningResultKey } from '@/entities/opening-result/model/opening-result';
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 
@@ -81,4 +82,21 @@ export interface NoticeRepository {
    * @param contractRequest 수집을 완료한 계약요청.
    */
   saveContractRequest(contractRequest: ContractRequest): void;
+  /**
+   * 개찰결과를 복합 키로 조회한다.
+   * @param key 공고번호, 공고차수, 개찰차수.
+   * @returns 저장된 개찰결과 또는 null.
+   */
+  findOpeningResult(key: OpeningResultKey): OpeningResult | null;
+  /**
+   * 공고의 개찰결과를 개찰차수 순서로 조회한다.
+   * @param key 공고번호와 공고차수.
+   * @returns 저장된 개찰결과 목록.
+   */
+  listOpeningResults(key: NoticeKey): OpeningResult[];
+  /**
+   * 개찰차수의 유찰 상세를 함께 저장하거나 갱신한다.
+   * @param result 해당 차수에서 수집한 결과와 조회 조건.
+   */
+  saveOpeningResult(result: OpeningResult): void;
 }

@@ -1,3 +1,4 @@
+import { openingResultPath, openingResultQuery } from '@/entities/opening-result/model/opening-result';
 import type { Notice } from './types';
 import { getNoticeOrderPlanNumber } from '@/entities/order-plan/model/order-plan';
 import { getNoticePriorSpecNumber } from '@/entities/prior-spec/model/prior-spec';
@@ -74,7 +75,8 @@ function fields(source: RecordValue, definitions: readonly Field[]) {
   });
 }
 
-function table(title: string, source: unknown, columns: readonly Column[], linkForFile?: (row: RecordValue) => string | undefined) {
+function table(title: string, source: unknown, columns: readonly Column[], linkForRow?: (row: RecordValue) => string | undefined,
+  linkColumn = 'orgnlAtchFileNm') {
   const rows = Array.isArray(source) ? source.map(record) : [];
   const visible = columns.filter(([key]) => rows.some((row) => displayValue(row[key]) !== undefined));
   return {
@@ -82,7 +84,7 @@ function table(title: string, source: unknown, columns: readonly Column[], linkF
     columns: visible.map(([, label]) => label),
     rows: rows.map((row) => visible.map(([key]) => ({
       value: displayValue(row[key]),
-      href: key === 'orgnlAtchFileNm' ? linkForFile?.(row) : undefined,
+      href: key === linkColumn ? linkForRow?.(row) : undefined,
     }))).filter((row) => row.some(({ value }) => value !== undefined)),
   };
 }
@@ -209,7 +211,10 @@ export function getNoticeDisplay(payload: RecordValue, documents?: Notice['docum
     table('입찰 진행 현황', payload.dlBidBasePgstL, [
       ['bidPbancNoOrd', '입찰공고번호'], ['bidPrgrsOrd', '재입찰번호'], ['bidPbancNm', '공고명'],
       ['onbsPrnmntDt', '개찰일시'], ['bidPgstNm', '진행현황'],
-    ]),
+    ], (row) => {
+      const query = openingResultQuery(row, detail);
+      if (query) return openingResultPath(query);
+    }, 'bidPgstNm'),
     table('제안요청정보', proposal, [
       ['kind', '문서 구분'], ['orgnlAtchFileNm', '파일명'],
     ], ({ fileNo, seq }) => {

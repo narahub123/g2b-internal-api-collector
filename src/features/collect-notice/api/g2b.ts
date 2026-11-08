@@ -3,6 +3,7 @@ import {
 } from '@/entities/contract-request/model/contract-request';
 import type { Notice, NoticeKey } from '@/entities/notice';
 import { getNoticeRepository } from '@/entities/notice/server';
+import { groupOpeningResultQueries, openingResultQueries, type OpeningResultKey, type OpeningResultQuery } from '@/entities/opening-result/model/opening-result';
 import { getNoticeOrderPlanNumber, orderPlanAttachmentGroup } from '@/entities/order-plan/model/order-plan';
 import { getNoticePriorSpecNumber, type PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import { createG2bSession } from '@/shared/api/g2b-session';
@@ -12,6 +13,7 @@ const origin = 'https://www.g2b.go.kr';
 const submissionPrefix = 'FIUA027_01_wframe_popupCnts_bidPbancWfrm_mainWframe_';
 const detailMenu = '{"menuNo":"15620","menuCangVal":"FIUA027_01","bsneClsfCd":"%EC%97%85130020","scrnNo":"08542"}';
 const workProgressMenu = '{"menuNo":"13677","menuCangVal":"FIUA009_01","bsneClsfCd":"%EC%97%85130020","scrnNo":"05665"}';
+const openingResultMenu = '{"menuNo":"01523","menuCangVal":"PBOC007_01","bsneClsfCd":"%EC%97%85130028","scrnNo":"02128"}';
 const unifiedSearchPath = '/fi/fiu/fiua/UntySrch';
 
 class G2bAccessDenied extends Error {}
@@ -78,6 +80,56 @@ async function collectOnce(key: string, force: boolean, collect: () => Promise<v
   const promise = collect().finally(() => pendingCollections.delete(key));
   pendingCollections.set(key, { force, promise });
   return promise;
+}
+
+/**
+ * 개찰차수의 유찰 상세를 수집해 복합 키로 저장한다.
+ * @param key 공고번호, 공고차수, 개찰차수.
+ * @param queries 해당 차수에서 확인된 분류별 조회 조건.
+ * @param force 기본값은 false. true이면 이미 저장한 분류도 다시 조회한다.
+ * @throws 유찰 상세가 없거나 조회에 실패했을 때. 기존 저장 자료는 유지된다.
+ */
+export async function collectOpeningResult(key: OpeningResultKey, queries: OpeningResultQuery[], force = false) {
+  const repository = getNoticeRepository();
+  return collectOnce(`opening-result:${key.number}/${key.revision}/${key.openingRevision}`, force, async () => {
+    const saved = repository.findOpeningResult(key);
+    const previous = force ? [] : saved?.results ?? [];
+    const missing = queries.filter((query) => !previous.some((entry) => entry.query.classification === query.classification));
+    if (!missing.length) return;
+
+    const collectedAt = new Date().toISOString();
+    const request = await createG2bSession();
+    const results = await Promise.allSettled(missing.map(async (query) => {
+      const payload = await postG2b('/pb/pbo/pboc/OnbsRslt/selectOnbsRsltFbid.do',
+        submissionPrefix + 'onbsDtlInfo_wframe_popupCnts_selectOnbsRsltFbid', {
+          dlSrchOnbsRsltBidInM: {
+            bidPbancNo: key.number, bidPbancOrd: key.revision, bidPrgrsOrd: key.openingRevision,
+            bidClsfNo: query.classification, prcmBsneSeCd: query.businessCode,
+            bidPgstCd: '유찰', bzmnRegNo: '', reOpenPbancYN: 'Y',
+          },
+        }, request, openingResultMenu);
+      const detail = payload?.result?.bidPrgrs;
+      if (detail?.bidPbancNo !== key.number || String(detail.bidPbancOrd).padStart(3, '0') !== key.revision ||
+          String(detail.bidPrgrsOrd).padStart(3, '0') !== key.openingRevision ||
+          String(detail.bidClsfNo) !== query.classification) {
+        throw new Error('요청한 개찰차수의 유찰 상세를 받지 못했습니다.');
+      }
+      return { query, detail };
+    }));
+    const entries = results.map((result) => {
+      if (result.status === 'rejected') throw result.reason;
+      return result.value;
+    });
+    repository.saveOpeningResult({ ...key, collectedAt, results: [...previous, ...entries] });
+  });
+}
+
+async function collectNoticeOpeningResults(payload: Record<string, unknown>) {
+  const groups = groupOpeningResultQueries(openingResultQueries(payload));
+  await Promise.allSettled([...groups.values()].map(([first, ...rest]) => {
+    const { number, revision, openingRevision } = first;
+    return collectOpeningResult({ number, revision, openingRevision }, [first, ...rest]);
+  }));
 }
 
 async function fetchContractRequestKeys({ number, revision }: NoticeKey) {
@@ -213,7 +265,7 @@ export async function collectPriorSpec(number: string, force = false) {
 }
 
 /**
- * 공고 상세와 문서 목록을 수집하고, 연결된 미수집 발주계획, 사전규격과 계약요청을 저장한다.
+ * 공고 상세와 문서 목록을 수집하고, 연결된 미수집 발주계획, 사전규격, 계약요청과 개찰결과를 저장한다.
  * 관련 자료 조회가 실패하면 다음 공고 수집 시 재시도한다.
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
@@ -242,6 +294,7 @@ export async function collectNotice(key: NoticeKey, methodCode: string): Promise
       ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
       : undefined,
     collectNoticeContractRequests(key),
+    collectNoticeOpeningResults(payload),
     orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
     priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
   ]);

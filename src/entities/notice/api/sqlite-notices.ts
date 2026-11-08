@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { ContractRequest } from '@/entities/contract-request/model/contract-request';
+import type { OpeningResult } from '@/entities/opening-result/model/opening-result';
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import type { Notice, NoticeKey, NoticeRepository, NoticeSummary } from '../model/types';
@@ -36,6 +37,14 @@ export function openNoticeRepository(): NoticeRepository {
       data TEXT NOT NULL,
       PRIMARY KEY (number, revision)
     );
+    CREATE TABLE IF NOT EXISTS opening_results (
+      number TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      opening_revision TEXT NOT NULL,
+      collected_at TEXT NOT NULL,
+      data TEXT NOT NULL,
+      PRIMARY KEY (number, revision, opening_revision)
+    );
   `);
   const list = db.prepare(`
     SELECT number, revision, collected_at AS collectedAt, json_extract(data, '$.title') AS title
@@ -49,6 +58,13 @@ export function openNoticeRepository(): NoticeRepository {
     WHERE excluded.collected_at >= notices.collected_at
   `);
   const findOrderPlan = db.prepare('SELECT data FROM order_plans WHERE number = ?');
+  const findOpeningResult = db.prepare('SELECT data FROM opening_results WHERE number = ? AND revision = ? AND opening_revision = ?');
+  const listOpeningResults = db.prepare('SELECT data FROM opening_results WHERE number = ? AND revision = ? ORDER BY opening_revision');
+  const saveOpeningResult = db.prepare(`
+    INSERT INTO opening_results (number, revision, opening_revision, collected_at, data) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (number, revision, opening_revision) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
+    WHERE excluded.collected_at >= opening_results.collected_at
+  `);
   const findContractRequest = db.prepare('SELECT data FROM contract_requests WHERE number = ? AND revision = ?');
   const saveContractRequest = db.prepare(`
     INSERT INTO contract_requests (number, revision, collected_at, data) VALUES (?, ?, ?, ?)
@@ -102,6 +118,16 @@ export function openNoticeRepository(): NoticeRepository {
     },
     async save(notice) {
       save.run(notice.number, notice.revision, notice.collectedAt, JSON.stringify(notice));
+    },
+    findOpeningResult({ number, revision, openingRevision }) {
+      const row = findOpeningResult.get(number, revision, openingRevision);
+      return row ? JSON.parse(String(row.data)) as OpeningResult : null;
+    },
+    listOpeningResults({ number, revision }) {
+      return listOpeningResults.all(number, revision).map((row) => JSON.parse(String(row.data)) as OpeningResult);
+    },
+    saveOpeningResult(result) {
+      saveOpeningResult.run(result.number, result.revision, result.openingRevision, result.collectedAt, JSON.stringify(result));
     },
     findContractRequest({ number, revision }) {
       const row = findContractRequest.get(number, revision);
