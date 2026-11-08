@@ -1,4 +1,4 @@
-import type { Notice, NoticeKey } from './notice';
+import type { Notice, NoticeKey } from '@/entities/notice';
 
 const endpoint = 'https://www.g2b.go.kr/pn/pnp/pnpe/ItemBidPbac/selectItemAnncMngV.do';
 

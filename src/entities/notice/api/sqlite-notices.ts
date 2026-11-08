@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Notice, NoticeRepository } from './notice';
+import type { Notice, NoticeRepository } from '../model/types';
 
 export function openNoticeRepository(): NoticeRepository {
   const directory = join(process.cwd(), '.data');
