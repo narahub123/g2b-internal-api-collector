@@ -1,6 +1,7 @@
+import { g2bDownloadUrl } from '@/shared/api/g2b-download';
+
 const origin = 'https://www.g2b.go.kr';
 const fileNoPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-const markers = [[8, 'r'], [6, 'a'], [9, 'o'], [7, 'n'], [8, 'w'], [6, 'i'], [9, 'z']] as const;
 
 /**
  * 공개 제안요청 문서의 메타데이터를 확인하고 원본 다운로드 주소를 구성한다.
@@ -43,10 +44,5 @@ export async function resolveProposalDownload(fileNo: string, seq: string, filen
 
   // RAON 핸들러는 파일 식별자 외에 서버가 반환한 경로와 파일명을 k00에 요구한다.
   const fields = { kc: 'c11', k01: '1', k12: fileNo, k05: '0', k26: path, k31: filename, k21: fileNo, fileSeq: seq };
-  let encoded = Buffer.from(Object.entries(fields).map(([key, value]) => `${key}\f${value}`).join('\x0b')).toString('base64');
-  for (const [index, marker] of markers) encoded = encoded.slice(0, index) + marker + encoded.slice(index);
-
-  const url = new URL('/fs/fsc/fsca/fileUpload.do', origin);
-  url.search = new URLSearchParams({ k00: encoded.replaceAll('+', '%2B'), fileNo, fileSeq: seq }).toString();
-  return url;
+  return g2bDownloadUrl(fields, { fileNo, fileSeq: seq });
 }

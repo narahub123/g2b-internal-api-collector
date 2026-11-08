@@ -1,4 +1,6 @@
 import type { Notice, NoticeKey } from '@/entities/notice';
+import { getNoticeRepository } from '@/entities/notice/server';
+import { getNoticeOrderPlanNumber, orderPlanAttachmentGroup } from '@/entities/order-plan/model/order-plan';
 import { createG2bSession } from '@/shared/api/g2b-session';
 
 const origin = 'https://www.g2b.go.kr';
@@ -38,15 +40,17 @@ async function collectDocumentList(path: string, submission: string, input: obje
   return result;
 }
 
-function collectAttachments(untyAtchFileNo: string) {
+function collectAttachments(untyAtchFileNo: string, scope: 'notice' | 'order-plan', request?: G2bRequest) {
+  const orderPlan = scope === 'order-plan';
   return collectDocumentList('/fs/fsc/fscb/UntyAtchFile/selectUntyAtchFileList.do', 'sbmInsertAtflGrp', {
     dlUntyAtchFileM: {
-      untyAtchFileNo, atchFileSqnos: '', bsnePath: 'PNPE', bsneClsfCd: '업130020',
-      tblNm: 'PBANC_BID_PBANC', colNm: 'ITEM_PBANC_UNTY_ATCH_FILE_NO', webPathUse: 'N',
+      untyAtchFileNo, atchFileSqnos: '', bsnePath: orderPlan ? 'PRPA' : 'PNPE', bsneClsfCd: '업130020',
+      tblNm: orderPlan ? 'DMND_ODER_PLAN' : 'PBANC_BID_PBANC',
+      colNm: orderPlan ? 'ODER_PLAN_UNTY_ATCH_FILE_NO' : 'ITEM_PBANC_UNTY_ATCH_FILE_NO', webPathUse: 'N',
       isScanEnabled: false, imgUrl: '', atchFileKndCds: '', ignoreAtchFileKndCds: '',
       kbrdrIds: '', kuploadId: '', viewMode: 'view', ignoreScrnIndtYn: '',
     },
-  });
+  }, request);
 }
 
 async function collectProposal(rfpNo: string, rfpOrd: string | number, prcmBsneSeCd: string) {
@@ -56,8 +60,41 @@ async function collectProposal(rfpNo: string, rfpOrd: string | number, prcmBsneS
   }, request);
 }
 
+const pendingOrderPlans = new Map<string, Promise<void>>();
+
+async function collectOrderPlan(number: string) {
+  const repository = getNoticeRepository();
+  const saved = repository.findOrderPlan(number);
+  if (saved && (saved.attachments || !orderPlanAttachmentGroup(saved))) return;
+
+  const pending = pendingOrderPlans.get(number);
+  if (pending) return pending;
+
+  // 같은 계획을 참조하는 공고를 동시에 수집해도 나라장터에는 한 번만 요청한다.
+  const collection = (async () => {
+    const request = await createG2bSession();
+    let plan = saved;
+    if (!plan) {
+      const payload = await postG2b('/pr/prp/prpa/OderPlan/selectOderPlan.do',
+        'FIUA027_01_wframe_popupCnts_orderPlanWfrm_sbmSrch',
+        { dlParamM: { oderPlanNo: number, resultCnt: '' } }, request);
+      if (payload?.dlOderPlanM?.oderPlanNo !== number) {
+        throw new Error('요청한 발주계획의 상세 응답을 받지 못했습니다.');
+      }
+      plan = { number, collectedAt: new Date().toISOString(), payload };
+      // 첨부 목록 요청에 실패해도 본문을 보존하고 다음 수집에서 첨부만 재시도한다.
+      repository.saveOrderPlan(plan);
+    }
+    const group = orderPlanAttachmentGroup(plan);
+    if (group) repository.saveOrderPlanAttachments(number, await collectAttachments(group, 'order-plan', request));
+  })().finally(() => pendingOrderPlans.delete(number));
+  pendingOrderPlans.set(number, collection);
+  return collection;
+}
+
 /**
- * 공고 상세와 연결된 문서 목록을 수집한다.
+ * 공고 상세와 연결된 문서 목록을 수집하고, 미수집 발주계획은 별도로 저장한다.
+ * 발주계획 조회가 실패한 경우 다음 공고 수집 시 재시도할 수 있다.
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
  * @returns 공고 상세 및 해당하는 문서 목록의 원본 응답.
@@ -77,11 +114,13 @@ export async function collectNotice(key: NoticeKey, methodCode: string): Promise
     throw new Error('요청한 공고의 상세 응답을 받지 못했습니다.');
   }
   // 첨부 목록은 공고의 첨부 그룹만 조회하고, 제안요청은 상세 JS와 같이 협상계약에만 적용한다.
+  const orderPlanNumber = getNoticeOrderPlanNumber(payload);
   const [attachments, proposal] = await Promise.allSettled([
-    detail.itemPbancUntyAtchFileNo?.trim() ? collectAttachments(detail.itemPbancUntyAtchFileNo) : undefined,
+    detail.itemPbancUntyAtchFileNo?.trim() ? collectAttachments(detail.itemPbancUntyAtchFileNo, 'notice') : undefined,
     detail.scsbdMthdCd === '낙030005' && detail.rfpNo?.trim() && /^\d{1,3}$/.test(String(detail.rfpOrd))
       ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
       : undefined,
+    orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
   ]);
   // 문서 조회 오류가 공고 상세와 다른 문서의 저장을 막지 않도록 실패 종류를 따로 기록한다.
   const documents: NonNullable<Notice['documents']> = {
