@@ -66,12 +66,6 @@ export interface NoticeRepository {
    */
   savePriorSpec(spec: PriorSpec): void;
   /**
-   * 사전규격을 직접 참조하는 로컬 공고를 조회한다.
-   * @param number 사전규격등록번호.
-   * @returns 공고번호와 차수 목록.
-   */
-  findNoticesForPriorSpec(number: string): NoticeKey[];
-  /**
    * 계약요청 상세와 품목을 조회한다.
    * @param key 계약요청접수번호와 차수.
    * @returns 저장된 계약요청 또는 null.
