@@ -11,6 +11,7 @@ import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import type { PriorSpec } from "../model/prior-spec";
 import { priorSpecDisplay } from "../model/prior-spec-display";
+import { AttachmentTable } from "@/shared/ui/attachment-table";
 
 const linkStyle = "text-primary underline underline-offset-2";
 
@@ -158,22 +159,12 @@ export function PriorSpecDetail({ spec }: { spec: PriorSpec }) {
                 있습니다.
               </p>
             ) : (
-              <ul className="grid gap-2 text-sm">
-                {files.map(({ filename, seq, downloadable }) => (
-                  <li key={seq} className="wrap-anywhere">
-                    {downloadable ? (
-                      <a
-                        href={`${endpoint}/attachments/${seq}`}
-                        className={linkStyle}
-                      >
-                        {decodeHTMLStrict(filename)}
-                      </a>
-                    ) : (
-                      decodeHTMLStrict(filename)
-                    )}
-                  </li>
-                ))}
-              </ul>
+              <AttachmentTable
+                files={files}
+                getDownloadHref={(file) =>
+                  `${endpoint}/attachments/${file.seq}`
+                }
+              />
             )}
           </DetailAccordionSection>
         )}

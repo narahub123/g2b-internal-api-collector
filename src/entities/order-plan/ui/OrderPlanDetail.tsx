@@ -12,6 +12,7 @@ import {
   orderPlanFiles,
   type OrderPlan,
 } from "../model/order-plan";
+import { AttachmentTable } from "@/shared/ui/attachment-table";
 
 const rowClass = "grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]";
 const linkClass = "text-primary underline underline-offset-2";
@@ -40,12 +41,18 @@ export function OrderPlanDetail({ plan }: { plan: OrderPlan }) {
           !number ||
           (typeof order !== "string" && typeof order !== "number") ||
           !/^\d{1,3}$/.test(String(order))
-        ) return [];
+        )
+          return [];
 
-        return [{
-          href: noticePath({ number, revision: String(order).padStart(3, "0") }),
-          label: `${number}-${order}`,
-        }];
+        return [
+          {
+            href: noticePath({
+              number,
+              revision: String(order).padStart(3, "0"),
+            }),
+            label: `${number}-${order}`,
+          },
+        ];
       })
     : [];
   const files = orderPlanFiles(plan);
@@ -80,7 +87,9 @@ export function OrderPlanDetail({ plan }: { plan: OrderPlan }) {
             <dl className="grid gap-3 text-sm">
               {rows.map(({ label, value, prefix, suffix }) => (
                 <div key={label} className={rowClass}>
-                  <dt className="whitespace-pre-line text-muted-foreground">{label}</dt>
+                  <dt className="whitespace-pre-line text-muted-foreground">
+                    {label}
+                  </dt>
                   <dd className="min-h-5 wrap-anywhere whitespace-pre-wrap">
                     {prefix && <span className="mr-2">{prefix}</span>}
                     {value}
@@ -100,7 +109,10 @@ export function OrderPlanDetail({ plan }: { plan: OrderPlan }) {
                   <ul className="grid gap-2">
                     {specifications.map((number, index) => (
                       <li key={`${number}-${index}`} className="wrap-anywhere">
-                        <Link href={priorSpecPath(number)} className={linkClass}>
+                        <Link
+                          href={priorSpecPath(number)}
+                          className={linkClass}
+                        >
                           {number}
                         </Link>
                       </li>
@@ -116,7 +128,9 @@ export function OrderPlanDetail({ plan }: { plan: OrderPlan }) {
                   <ul className="grid gap-2">
                     {notices.map(({ href, label }, index) => (
                       <li key={`${href}-${index}`} className="wrap-anywhere">
-                        <Link href={href} className={linkClass}>{label}</Link>
+                        <Link href={href} className={linkClass}>
+                          {label}
+                        </Link>
                       </li>
                     ))}
                   </ul>
@@ -133,22 +147,12 @@ export function OrderPlanDetail({ plan }: { plan: OrderPlan }) {
                 조회할 수 있습니다.
               </p>
             ) : (
-              <ul className="grid gap-2 text-sm">
-                {files.map(({ filename, seq, downloadable }) => (
-                  <li key={seq} className="wrap-anywhere">
-                    {downloadable ? (
-                      <a
-                        href={`/api/order-plans/${encodeURIComponent(plan.number)}/attachments/${seq}`}
-                        className={linkClass}
-                      >
-                        {decodeHTMLStrict(filename)}
-                      </a>
-                    ) : (
-                      decodeHTMLStrict(filename)
-                    )}
-                  </li>
-                ))}
-              </ul>
+              <AttachmentTable
+                files={files}
+                getDownloadHref={(file) =>
+                  `/api/order-plans/${encodeURIComponent(plan.number)}/attachments/${file.seq}`
+                }
+              />
             )}
           </DetailAccordionSection>
         )}

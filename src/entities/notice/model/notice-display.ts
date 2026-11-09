@@ -5,6 +5,8 @@ import {
 import type { Notice } from "./types";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";
+import { getNoticeAttachmentKindName } from "@/shared/model/attachment-kind-codes";
+import { formatAttachmentFileSize } from "@/shared/model/attachment-file-size";
 
 type RecordValue = Record<string, unknown>;
 type Column = readonly [key: string, label: string];
@@ -85,17 +87,30 @@ const proposalKinds = [
   ["첨020197", "대기업참여제한예외사유서"],
 ] as const;
 
-// 일반 첨부파일 중 화면 표시 대상이며 파일명이 있는 행만 추린다.
+// 공개 첨부파일만 추리고, 화면 표시용 문서구분 명칭을 추가한다.
+// 기존 원본 필드는 보존하므로 다운로드 URL 생성에 영향을 주지 않는다.
 function documentRows(documents: Notice["documents"]) {
   const attachmentList = documents?.attachments?.dlUntyAtchFileL;
-  const attachments = Array.isArray(attachmentList)
-    ? attachmentList
-        .map(record)
-        .filter(
-          (row) => row.scrnIndtYn === "Y" && displayValue(row.orgnlAtchFileNm),
-        )
-    : [];
-  return attachments;
+
+  if (!Array.isArray(attachmentList)) return [];
+
+  return attachmentList
+    .map(record)
+    .filter(
+      (row) => row.scrnIndtYn === "Y" && displayValue(row.orgnlAtchFileNm),
+    )
+    .map((row) => ({
+      ...row,
+
+      // API의 첨부파일 종류 코드를 문서구분 명칭으로 변환한다.
+      documentType:
+        typeof row.atchFileKndCd === "string"
+          ? getNoticeAttachmentKindName(row.atchFileKndCd)
+          : undefined,
+
+      // API 원본 fileSz는 보존하고 표시용 문자열만 추가한다.
+      fileSizeText: formatAttachmentFileSize(row.fileSz),
+    }));
 }
 
 /**
@@ -207,6 +222,66 @@ function attachmentDownloadUrl(detail: RecordValue, attachment: RecordValue) {
     prcmBsneSeCd,
   }).toString();
   return url.href;
+}
+
+/**
+ * 기존 입찰공고 공개 파일 조건과 다운로드 주소를 유지하면서
+ * 공통 AttachmentTable에 전달할 파일 목록을 구성한다.
+ */
+export function getNoticeAttachmentFiles(
+  payload: RecordValue,
+  documents?: Notice["documents"],
+) {
+  const detail = record(payload.dmItemMap);
+  return documentRows(documents).map((row) => {
+    const source: RecordValue = row;
+    const href = attachmentDownloadUrl(detail, source);
+    return {
+      filename: displayValue(source.orgnlAtchFileNm) ?? "",
+      seq: String(source.atchFileSqno ?? ""),
+      documentType: row.documentType,
+      fileSize: source.fileSz,
+      downloadable: Boolean(href),
+      businessCode:
+        typeof source.bsneClsfCd === "string" ? source.bsneClsfCd : "업130020",
+      href,
+    };
+  });
+}
+
+/**
+ * 공개 대상으로 선별된 제안요청 문서를 공통 AttachmentTable 형식으로 변환한다.
+ * 문서 종류별 표시 순서와 공개 조건은 getPublicProposalRows()의 결과를 그대로 따른다.
+ * 일반 파일첨부와 달리 제안요청 문서는 별도의 다운로드 경로를 사용한다.
+ */
+export function getNoticeProposalFiles(
+  payload: RecordValue,
+  documents: Notice["documents"],
+) {
+  const detail = record(payload.dmItemMap);
+
+  return getPublicProposalRows(payload, documents).map((row, index) => {
+    // 기존 제안요청 문서 다운로드 라우트와 API에서 받은 파일번호·순번을 유지한다.
+    const href =
+      row.fileNo &&
+      row.seq &&
+      typeof detail.bidPbancNo === "string" &&
+      detail.bidPbancOrd != null
+        ? `/api/notices/${encodeURIComponent(detail.bidPbancNo)}/${encodeURIComponent(String(detail.bidPbancOrd).padStart(3, "0"))}/proposal-download?${new URLSearchParams({ fileNo: row.fileNo, seq: row.seq })}`
+        : undefined;
+
+    // seq는 테이블 행 식별용이며 다운로드에 사용하는 row.seq와는 별개다.
+    // 제안요청정보 API에는 파일크기 정보가 없어 해당 열을 표시하지 않는다.
+    return {
+      filename: displayValue(row.orgnlAtchFileNm) ?? "",
+      seq: String(index),
+      documentType: row.kind,
+      fileSize: undefined,
+      downloadable: Boolean(href),
+      businessCode: "업130026",
+      href,
+    };
+  });
 }
 
 /**
@@ -609,7 +684,7 @@ export function getNoticeDisplay(
       "제안요청정보",
       proposal,
       [
-        ["kind", "문서명"],
+        ["kind", "문서구분"],
         ["orgnlAtchFileNm", "파일명"],
       ],
       ({ fileNo, seq }) => {
@@ -628,10 +703,14 @@ export function getNoticeDisplay(
       "파일첨부",
       attachments,
       [
+        // 나라장터 원본 화면의 열 순서를 따른다.
+        ["documentType", "문서구분"],
         ["orgnlAtchFileNm", "파일명"],
-        ["fileExtnNm", "확장자"],
-        ["fileSz", "크기(바이트)"],
+        // 변환된 크기를 표시한다.
+        ["fileSizeText", "파일크기"],
       ],
+
+      // 기존 다운로드 URL 생성 로직을 그대로 사용한다.
       (attachment) => attachmentDownloadUrl(detail, attachment),
     ),
   ].filter((entry) => entry.rows.length > 0);

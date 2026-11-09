@@ -6,10 +6,13 @@ import { orderPlanPath } from "@/entities/order-plan/model/order-plan";
 import { priorSpecPath } from "@/entities/prior-spec/model/prior-spec";
 import { g2bNumber } from "@/shared/model/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
+import { AttachmentTable } from "@/shared/ui/attachment-table";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { renderNoticeHtml } from "../lib/notice-html";
 import {
+  getNoticeAttachmentFiles,
+  getNoticeProposalFiles,
   getNoticeDisplay,
   relatedNoticeSectionTitle,
 } from "../model/notice-display";
@@ -118,6 +121,21 @@ export function NoticeDetail({
     notice.payload,
     notice.documents,
     contractLinks.length > 0,
+  );
+  const attachmentFiles = getNoticeAttachmentFiles(
+    notice.payload,
+    notice.documents,
+  );
+  const attachmentHrefBySeq = new Map(
+    attachmentFiles.map((file) => [file.seq, file.href] as const),
+  );
+  const proposalFiles = getNoticeProposalFiles(
+    notice.payload,
+    notice.documents,
+  );
+
+  const proposalHrefBySeq = new Map(
+    proposalFiles.map((file) => [file.seq, file.href] as const),
   );
   const { number, revision } = notice;
   const detail = notice.payload.dmItemMap as
@@ -248,7 +266,22 @@ export function NoticeDetail({
                   {section.note}
                 </p>
               )}
-              <NoticeTable {...section} />
+              {title === "파일첨부" ? (
+                <AttachmentTable
+                  files={attachmentFiles}
+                  showDocumentType
+                  getDownloadHref={(file) => attachmentHrefBySeq.get(file.seq)}
+                />
+              ) : title === "제안요청정보" ? (
+                <AttachmentTable
+                  files={proposalFiles}
+                  showDocumentType
+                  showFileSize={false}
+                  getDownloadHref={(file) => proposalHrefBySeq.get(file.seq)}
+                />
+              ) : (
+                <NoticeTable {...section} />
+              )}
             </DetailAccordionSection>
           );
         })}
