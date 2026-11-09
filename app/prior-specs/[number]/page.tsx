@@ -18,7 +18,7 @@ export default async function Page({ params }: { params: Promise<{ number: strin
         <Link href="/">목록으로 돌아가기</Link>
       </Button>
       <h1 className="sr-only">사전규격</h1>
-      {spec ? <PriorSpecDetail spec={spec} notices={repository.findNoticesForPriorSpec(number)} /> : (
+      {spec ? <PriorSpecDetail spec={spec} /> : (
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-xl border bg-card p-5">
           <p className="wrap-anywhere">사전규격 {number}의 상세를 아직 수집하지 않았습니다.</p>
           <RecollectButton endpoint={`/api/prior-specs/${encodeURIComponent(number)}`} initial />
