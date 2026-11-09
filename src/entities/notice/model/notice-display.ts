@@ -213,13 +213,13 @@ function attachmentDownloadUrl(detail: RecordValue, attachment: RecordValue) {
  * 저장한 응답에서 공고 상세 화면에 표시할 항목을 구성한다.
  * @param payload 공고 상세 API의 원본 응답.
  * @param documents 문서 API의 원본 응답. 이전에 저장한 공고에는 없을 수 있다.
- * @param hasContractRequests 연결된 계약요청이 있으면 관련 공고 정보 섹션을 표시한다.
+ * @param hasContractLinks 연결된 계약요청 또는 계약현황이 있으면 관련 공고 정보 섹션을 표시한다.
  * @returns 원본 화면 순서대로 배열한 필드 및 표 섹션.
  */
 export function getNoticeDisplay(
   payload: RecordValue,
   documents?: Notice["documents"],
-  hasContractRequests = false,
+  hasContractLinks = false,
 ) {
   // 공고 기본정보·안내정보·평가정보를 각각 원본 응답에서 분리한다.
   const detail = record(payload.dmItemMap);
@@ -506,7 +506,7 @@ export function getNoticeDisplay(
     (group) =>
       group.fields.length > 0 ||
       group.nestedTable ||
-      (group.title === relatedNoticeSectionTitle && hasContractRequests),
+      (group.title === relatedNoticeSectionTitle && hasContractLinks),
   );
 
   // 일반 첨부파일과 공개 제안요청 문서를 서로 다른 데이터 원본에서 추린다.

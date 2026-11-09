@@ -1,6 +1,7 @@
 import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
 import { contractRequestPath } from "@/entities/contract-request/model/contract-request";
+import { contractPath } from "@/entities/contract/model/contract";
 import { orderPlanPath } from "@/entities/order-plan/model/order-plan";
 import { priorSpecPath } from "@/entities/prior-spec/model/prior-spec";
 import { g2bNumber } from "@/shared/model/g2b-number";
@@ -97,11 +98,26 @@ export function NoticeDetail({
   notice: Notice;
   orderPlanNumber?: string;
 }) {
-  const contractRequests = notice.contractRequests ?? [];
+  const contractLinks = [
+    {
+      label: "계약요청",
+      links: (notice.contractRequests ?? []).map((key) => ({
+        ...key,
+        href: contractRequestPath(key),
+      })),
+    },
+    {
+      label: "계약현황",
+      links: (notice.contracts ?? []).map((key) => ({
+        ...key,
+        href: contractPath(key),
+      })),
+    },
+  ].filter(({ links }) => links.length > 0);
   const sections = getNoticeDisplay(
     notice.payload,
     notice.documents,
-    contractRequests.length > 0,
+    contractLinks.length > 0,
   );
   const { number, revision } = notice;
   const detail = notice.payload.dmItemMap as
@@ -193,25 +209,28 @@ export function NoticeDetail({
                   </div>
                 ))}
                 {title === relatedNoticeSectionTitle &&
-                  contractRequests.length > 0 && (
-                    <div className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]">
-                      <dt className="text-muted-foreground">계약요청</dt>
+                  contractLinks.map(({ label, links }) => (
+                    <div
+                      key={label}
+                      className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]"
+                    >
+                      <dt className="text-muted-foreground">{label}</dt>
                       <dd>
                         <ul className="grid gap-1">
-                          {contractRequests.map((request) => (
-                            <li key={contractRequestPath(request)}>
+                          {links.map(({ number, revision, href }) => (
+                            <li key={href}>
                               <Link
-                                href={contractRequestPath(request)}
+                                href={href}
                                 className="text-primary underline underline-offset-2"
                               >
-                                {request.number} / {request.revision}
+                                {number} / {revision}
                               </Link>
                             </li>
                           ))}
                         </ul>
                       </dd>
                     </div>
-                  )}
+                  ))}
               </dl>
               {section.nestedTable && (
                 <div className="mt-4 grid gap-2">

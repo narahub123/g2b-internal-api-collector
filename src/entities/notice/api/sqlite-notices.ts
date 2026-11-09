@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { ContractRequest } from '@/entities/contract-request/model/contract-request';
+import type { Contract } from '@/entities/contract/model/contract';
 import type { OpeningResult } from '@/entities/opening-result/model/opening-result';
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
@@ -37,6 +38,13 @@ export function openNoticeRepository(): NoticeRepository {
       data TEXT NOT NULL,
       PRIMARY KEY (number, revision)
     );
+    CREATE TABLE IF NOT EXISTS contracts (
+      number TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      collected_at TEXT NOT NULL,
+      data TEXT NOT NULL,
+      PRIMARY KEY (number, revision)
+    );
     CREATE TABLE IF NOT EXISTS opening_results (
       number TEXT NOT NULL,
       revision TEXT NOT NULL,
@@ -64,6 +72,13 @@ export function openNoticeRepository(): NoticeRepository {
     INSERT INTO opening_results (number, revision, opening_revision, collected_at, data) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (number, revision, opening_revision) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
     WHERE excluded.collected_at >= opening_results.collected_at
+  `);
+  const findContract = db.prepare('SELECT data FROM contracts WHERE number = ? AND revision = ?');
+  const saveContract = db.prepare(`
+    INSERT INTO contracts (number, revision, collected_at, data) VALUES (?, ?, ?, ?)
+    ON CONFLICT (number, revision) DO UPDATE SET
+      collected_at = excluded.collected_at, data = excluded.data
+    WHERE excluded.collected_at >= contracts.collected_at
   `);
   const findContractRequest = db.prepare('SELECT data FROM contract_requests WHERE number = ? AND revision = ?');
   const saveContractRequest = db.prepare(`
@@ -120,6 +135,13 @@ export function openNoticeRepository(): NoticeRepository {
     },
     saveOpeningResult(result) {
       saveOpeningResult.run(result.number, result.revision, result.openingRevision, result.collectedAt, JSON.stringify(result));
+    },
+    findContract({ number, revision }) {
+      const row = findContract.get(number, revision);
+      return row ? JSON.parse(String(row.data)) as Contract : null;
+    },
+    saveContract(contract) {
+      saveContract.run(contract.number, contract.revision, contract.collectedAt, JSON.stringify(contract));
     },
     findContractRequest({ number, revision }) {
       const row = findContractRequest.get(number, revision);

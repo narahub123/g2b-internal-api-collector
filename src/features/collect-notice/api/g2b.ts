@@ -1,6 +1,7 @@
 import {
   contractRequestKeys, contractRequestRevision, type ContractRequestKey,
 } from '@/entities/contract-request/model/contract-request';
+import { contractKeys, contractSearchBody, parseContractResponse, type ContractKey } from '@/entities/contract/model/contract';
 import type { Notice, NoticeKey } from '@/entities/notice';
 import { getNoticeRepository } from '@/entities/notice/server';
 import { groupOpeningResultQueries, openingResultQueries, type OpeningResultKey, type OpeningResultQuery } from '@/entities/opening-result/model/opening-result';
@@ -132,12 +133,31 @@ async function collectNoticeOpeningResults(payload: Record<string, unknown>) {
   }));
 }
 
-async function fetchContractRequestKeys({ number, revision }: NoticeKey) {
+async function fetchWorkProgress({ number, revision }: NoticeKey): Promise<Record<string, unknown>[]> {
   const result = await postG2b(`${unifiedSearchPath}/srchWorkPrgs.do`, 'sbmWorkPrgs', {
     dlWorkParamM: { workSrchSeCd: 'BK', workBizNo: number, workBizOrd: revision },
   }, fetch, workProgressMenu);
   if (!Array.isArray(result.dlWorkPrgsL)) throw new Error('나라장터 업무 진행 응답 형식이 올바르지 않습니다.');
-  return contractRequestKeys(result.dlWorkPrgsL, { number, revision });
+  return result.dlWorkPrgsL;
+}
+
+/**
+ * 계약현황 상세와 세 목록을 조회하고 유효한 응답만 저장한다.
+ * @param key 계약번호와 정규화된 변경차수.
+ * @param force 기본값은 false. true이면 기존 상세도 다시 조회한다.
+ * @throws 조회 실패 또는 요청과 다른 응답을 받았을 때. 저장 자료는 유지된다.
+ */
+export async function collectContract(key: ContractKey, force = false) {
+  const repository = getNoticeRepository();
+  return collectOnce(`contract:${key.number}/${key.revision}`, force, async () => {
+    if (!force && repository.findContract(key)) return;
+    const collectedAt = new Date().toISOString();
+    const result = await postG2b(`${unifiedSearchPath}/srchCtrtDtl.do`,
+      'FIUA027_01_wframe_popupCnts_ctrtWfrm_srchDtl', contractSearchBody(key));
+    const contract = parseContractResponse(key, result);
+    if (!contract) throw new Error('요청한 계약현황의 상세 응답을 받지 못했습니다.');
+    repository.saveContract({ ...key, collectedAt, ...contract });
+  });
 }
 
 const contractItemPageSize = 10;
@@ -196,11 +216,12 @@ export async function collectContractRequest(key: ContractRequestKey, force = fa
   });
 }
 
-async function collectNoticeContractRequests(key: NoticeKey) {
-  const requests = await fetchContractRequestKeys(key);
+async function collectNoticeContractLinks(key: NoticeKey) {
+  const rows = await fetchWorkProgress(key);
+  const requests = contractRequestKeys(rows, key);
   // 상세 조회가 실패해도 공고에는 확인된 연결을 남겨 해당 페이지에서 다시 수집할 수 있게 한다.
   await Promise.allSettled(requests.map((request) => collectContractRequest(request)));
-  return requests;
+  return { contractRequests: requests, contracts: contractKeys(rows, key) };
 }
 
 /**
@@ -288,12 +309,12 @@ export async function collectNotice(key: NoticeKey, methodCode: string): Promise
   // 첨부 목록은 공고의 첨부 그룹만 조회하고, 제안요청은 상세 JS와 같이 협상계약에만 적용한다.
   const orderPlanNumber = getNoticeOrderPlanNumber(payload);
   const priorSpecNumber = getNoticePriorSpecNumber(payload);
-  const [attachments, proposal, contractRequests] = await Promise.allSettled([
+  const [attachments, proposal, contractLinks] = await Promise.allSettled([
     detail.itemPbancUntyAtchFileNo?.trim() ? collectAttachments(detail.itemPbancUntyAtchFileNo, 'notice') : undefined,
     detail.scsbdMthdCd === '낙030005' && detail.rfpNo?.trim() && /^\d{1,3}$/.test(String(detail.rfpOrd))
       ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
       : undefined,
-    collectNoticeContractRequests(key),
+    collectNoticeContractLinks(key),
     collectNoticeOpeningResults(payload),
     orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
     priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
@@ -311,5 +332,5 @@ export async function collectNotice(key: NoticeKey, methodCode: string): Promise
   }
 
   return { ...key, title: detail.bidPbancNm, collectedAt, payload, documents,
-    contractRequests: contractRequests.status === 'fulfilled' ? contractRequests.value : undefined };
+    ...(contractLinks.status === 'fulfilled' ? contractLinks.value : {}) };
 }
