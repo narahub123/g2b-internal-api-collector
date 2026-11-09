@@ -82,14 +82,6 @@ export function openNoticeRepository(): NoticeRepository {
     ON CONFLICT (number) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
     WHERE excluded.collected_at >= prior_specs.collected_at
   `);
-  const findNoticesForPriorSpec = db.prepare(`
-    SELECT number, revision FROM notices
-    WHERE coalesce(
-      nullif(trim(json_extract(data, '$.payload.dmItemMap.bfSpecRegNo')), ''),
-      trim(json_extract(data, '$.payload.dlBfSpecM.bfSpecRegNo'))
-    ) = ?
-    ORDER BY number, revision
-  `);
   const saveOrderPlan = db.prepare(`
     INSERT INTO order_plans (number, collected_at, data) VALUES (?, ?, ?)
     ON CONFLICT (number) DO NOTHING
@@ -158,9 +150,6 @@ export function openNoticeRepository(): NoticeRepository {
     },
     savePriorSpec(spec) {
       savePriorSpec.run(spec.number, spec.collectedAt, JSON.stringify(spec));
-    },
-    findNoticesForPriorSpec(number) {
-      return findNoticesForPriorSpec.all(number) as NoticeKey[];
     },
   };
 }

@@ -1,4 +1,7 @@
-import { attachmentGroup, publicAttachmentFiles } from '@/shared/model/g2b-attachments';
+import {
+  attachmentGroup,
+  publicAttachmentFiles,
+} from "@/shared/model/g2b-attachments";
 
 export type OrderPlan = {
   number: string;
@@ -22,7 +25,11 @@ export function orderPlanAttachmentGroup(plan: OrderPlan) {
  * @returns 해당 계획의 첨부 그룹에서 공개 표시가 허용된 파일 목록.
  */
 export function orderPlanFiles(plan: OrderPlan) {
-  return publicAttachmentFiles(orderPlanAttachmentGroup(plan), plan.attachments);
+  return publicAttachmentFiles(
+    orderPlanAttachmentGroup(plan),
+    plan.attachments,
+    "order-plan",
+  );
 }
 
 /**
@@ -33,7 +40,7 @@ export function orderPlanFiles(plan: OrderPlan) {
 export function getNoticeOrderPlanNumber(payload: Record<string, unknown>) {
   const detail = payload.dmItemMap as Record<string, unknown> | undefined;
   for (const number of [detail?.oderPlanUntyNo, detail?.oderPlanNo]) {
-    if (typeof number === 'string' && /^[A-Z0-9-]{1,30}$/.test(number.trim())) {
+    if (typeof number === "string" && /^[A-Z0-9-]{1,30}$/.test(number.trim())) {
       return number.trim();
     }
   }
