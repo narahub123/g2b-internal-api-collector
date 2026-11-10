@@ -1,6 +1,7 @@
 import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
 import type { NoticeKey } from "@/entities/notice/model/types";
+import { formatG2bDisplayDateTime } from "@/shared/lib/g2b-display-format";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
@@ -212,7 +213,7 @@ export function OpeningResultDetail({
                 key={`${notice.bbsNo}/${notice.pstNo}`}
                 className="wrap-anywhere whitespace-pre-wrap"
               >
-                ({display(notice.inptDt)}) {display(notice.pstNm)}
+                ({formatG2bDisplayDateTime(display(notice.inptDt))}) {display(notice.pstNm)}
               </p>
             ))}
           </dd>

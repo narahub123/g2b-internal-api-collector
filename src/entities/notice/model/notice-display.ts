@@ -7,6 +7,10 @@ import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";
 import { getNoticeAttachmentKindName } from "@/shared/model/attachment-kind-codes";
 import { formatAttachmentFileSize } from "@/shared/model/attachment-file-size";
+import {
+  formatG2bDisplayText,
+  type G2bDisplayFormat,
+} from "@/shared/lib/g2b-display-format";
 
 type RecordValue = Record<string, unknown>;
 type Column = readonly [key: string, label: string];
@@ -149,6 +153,44 @@ export function displayValue(value: unknown): string | undefined {
   if (typeof value === "number") return String(value);
 }
 
+// 공고 상세·일정·품목·담당자 API의 표시 키만 지정한다. 식별자와 다운로드 키는 원본을 사용한다.
+const fieldFormats: Readonly<Record<string, G2bDisplayFormat>> = {
+  pbancPstgDt: "dateTime",
+  pbancBfssDt: "dateTime",
+  plrlEstmPrcpRegDdlnDt: "dateTime",
+  startDt: "dateTime",
+  endDt: "dateTime",
+  onbsPrnmntDt: "dateTime",
+  inptDt: "dateTime",
+  dlvgdsTermDt: "date",
+  dlvgdsTermNody: "integer",
+  prchsDtlItemQty: "decimal",
+  prchsDtlItemUprc: "decimal",
+  bizAmt: "integer",
+  alotBgtAmt: "integer",
+  prspPrce: "integer",
+  baseAmt: "integer",
+  pmcsRtnmEvlcrtAmt: "integer",
+  prspAmt: "integer",
+  prspRt: "decimal",
+  scsbdLwlmRat: "decimal",
+  dfrlScrItvlScr: "decimal",
+  techAbltEvlRt: "decimal",
+  bidPrceEvlRt: "decimal",
+  stbltCrtrScr: "decimal",
+  minReduRt: "decimal",
+  etpsMaxBdngNotm: "integer",
+  pbancPicTlphNo: "phone",
+  faxNo: "phone",
+  tlphNo: "phone",
+};
+
+/** 기존 빈값 판정 뒤에 공고 필드의 표시 포맷을 적용한다. */
+function displayFieldValue(key: string, value: unknown): string | undefined {
+  const text = displayValue(value);
+  return text === undefined ? undefined : formatG2bDisplayText(text, fieldFormats[key]);
+}
+
 // 객체 형태의 값만 필드 접근에 사용하고 나머지는 빈 객체로 처리한다.
 function record(value: unknown): RecordValue {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -160,7 +202,9 @@ function record(value: unknown): RecordValue {
 function fields(source: RecordValue, definitions: readonly Field[]) {
   return definitions.flatMap(([key, label, visible = true]) => {
     const value = visible ? displayValue(source[key]) : undefined;
-    return value === undefined ? [] : [{ label, value }];
+    return value === undefined
+      ? []
+      : [{ label, value: formatG2bDisplayText(value, fieldFormats[key]) }];
   });
 }
 
@@ -182,7 +226,7 @@ function table(
     rows: rows
       .map((row) =>
         visible.map(([key]) => ({
-          value: displayValue(row[key]),
+          value: displayFieldValue(key, row[key]),
           href: key === linkColumn ? linkForRow?.(row) : undefined,
         })),
       )
@@ -332,7 +376,7 @@ export function getNoticeDisplay(
     detail.prsntnYn === "Y" &&
     evaluation.evlSysUtztnYn === "Y";
   const officerName = displayValue(detail.pbancPicNm);
-  const officerPhone = displayValue(detail.pbancPicTlphNo);
+  const officerPhone = displayFieldValue("pbancPicTlphNo", detail.pbancPicTlphNo);
   const officer =
     officerName && officerPhone
       ? `${officerName} ( ☎ ${officerPhone} )`
@@ -590,7 +634,7 @@ export function getNoticeDisplay(
   const baseAmounts = Array.isArray(payload.dmItemBaseAmtList)
     ? payload.dmItemBaseAmtList.map(record)
     : [];
-  const baseAmountPublishedAt = displayValue(baseAmounts[0]?.inptDt);
+  const baseAmountPublishedAt = displayFieldValue("inptDt", baseAmounts[0]?.inptDt);
   // 표 섹션을 구성한다. 행이 없는 표는 아래 필터에서 제외한다.
   const tables = [
     table("입찰진행정보", payload.dmItemList1, schedule),

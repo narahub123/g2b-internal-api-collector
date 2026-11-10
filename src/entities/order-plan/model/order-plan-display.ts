@@ -1,11 +1,17 @@
 import { decodeHTMLStrict } from "entities";
+import {
+  formatG2bDisplayDate,
+  formatG2bDisplayDateTime,
+  formatG2bDisplayNumber,
+} from "@/shared/lib/g2b-display-format";
+import { formatG2bPhone } from "@/shared/lib/g2b-phone";
 import type { OrderPlan } from "./order-plan";
 
 /** 화면에 표시할 필드의 응답 키, 라벨, 값 형식 및 앞뒤 단위 정의. */
 type Field = readonly [
   key: string,
   label: string,
-  format?: "integer" | "decimal" | "month" | "phone",
+  format?: "integer" | "decimal" | "month" | "dateTime" | "phone",
   prefix?: string,
   suffix?: string,
 ];
@@ -14,7 +20,7 @@ type Field = readonly [
 const commonFields = [
   ["prcmBsneSeCdNm", "업무구분"],
   ["oderPlanNo", "발주계획번호"],
-  ["releaseDt", "공개일시"],
+  ["releaseDt", "공개일시", "dateTime"],
   ["oderInstNm", "발주기관"],
   ["oderYymm", "발주시기", "month"],
   ["prcmMthoSeCdNm", "조달방식"],
@@ -60,11 +66,6 @@ const longTermConstructionFields = [
   ["tlbkpngAmt", "총부기금액", "integer", "￦"],
 ] as const satisfies readonly Field[];
 
-/** 정수형 금액을 한국어 천 단위 구분 형식으로 표시하는 포맷터. */
-const integer = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 });
-/** 소수점 둘째 자리까지 표시하는 한국어 숫자 포맷터. */
-const decimal = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 });
-
 /** 응답 값을 HTML 디코딩하고 필드별 숫자·연월·전화번호 형식으로 변환한다. */
 function formatValue(value: unknown, format: Field[2]) {
   if (typeof value !== "string" && typeof value !== "number") return "";
@@ -72,30 +73,12 @@ function formatValue(value: unknown, format: Field[2]) {
     typeof value === "string" ? decodeHTMLStrict(value) : String(value);
   if (!text.trim()) return "";
 
-  if (format === "month") return text.replace(/^(\d{4})(\d{2})$/, "$1/$2");
+  if (format === "month") return formatG2bDisplayDate(text, "month");
+  if (format === "dateTime") return formatG2bDisplayDateTime(text);
   if (format === "integer" || format === "decimal") {
-    // 금액 문자열을 Number로 변환하면 큰 금액의 일의 자리가 바뀔 수 있다.
-    const amount = text.trim();
-    return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(amount)
-      ? (format === "integer" ? integer : decimal).format(amount as `${number}`)
-      : text;
+    return formatG2bDisplayNumber(text, format === "integer" ? 0 : 2);
   }
-  if (
-    format === "phone" &&
-    text.length > 1 &&
-    text.length < 13 &&
-    !text.includes("*")
-  ) {
-    const digits = text.replace(/\D/g, "");
-    if (digits.startsWith("02") && /^\d{9,10}$/.test(digits)) {
-      return digits.replace(/^(02)(\d{3,4})(\d{4})$/, "$1-$2-$3");
-    }
-    if (/^\d{10,11}$/.test(digits)) {
-      return digits.replace(/^(\d{3})(\d{3,4})(\d{4})$/, "$1-$2-$3");
-    }
-    if (/^1\d{7}$/.test(digits))
-      return digits.replace(/^(\d{4})(\d{4})$/, "$1-$2");
-  }
+  if (format === "phone") return formatG2bPhone(text) ?? text;
   return text;
 }
 
@@ -241,7 +224,7 @@ export function orderPlanSections(payload: OrderPlan["payload"]) {
     sections.push(
       section("규격공개모집", [
         ["fspcRcrtPbancNo", "공개모집번호"],
-        ["rcrtDdlnDt", "공개모집마감일시"],
+        ["rcrtDdlnDt", "공개모집마감일시", "dateTime"],
       ]),
       section("구매계획 정보", [
         ...purchaseFields,

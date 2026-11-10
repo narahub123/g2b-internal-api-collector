@@ -1,5 +1,10 @@
 import { decodeHTMLStrict } from "entities";
 import { getG2bCommonCodeName } from "@/shared/lib/common-codes";
+import {
+  formatG2bDisplayNumber,
+  formatG2bDisplayText,
+  type G2bDisplayFormat,
+} from "@/shared/lib/g2b-display-format";
 
 /**
  * 계약요청 상세 화면의 표시 정의와 값 변환 로직.
@@ -170,22 +175,82 @@ const commonCodeGroups: Readonly<Record<string, string>> = {
   bizDtlItm10: "신12_PR000",
 };
 
-const numberFormat = new Intl.NumberFormat("ko-KR");
+// 상세·품목 API의 범용 키는 표시 라벨로 의미를 확인한 필드만 변환한다.
+const fieldFormats: Readonly<Record<string, G2bDisplayFormat>> = {
+  inptDt: "dateTime",
+  bizDtlItm05: "phone",
+  bizDtlItm06: "phone",
+  bizDtlItm14: "integer",
+  bizDtlItm17: "decimal",
+  bizDtlItm1: "integer",
+  dmndSrchItm02: "integer",
+  dmndSrchItm03: "decimal",
+  bizDtlItm19: "integer",
+  bizDtlItm20: "integer",
+  totlBgtAmt: "integer",
+  bgtAmt: "integer",
+  cstrnConrAmt: "integer",
+  cstrnGovcstGvspAmt: "integer",
+  cstrnEtcAmt: "integer",
+  cstrnConcstGvspAmt: "integer",
+  cstrnPrtmConrAmt: "integer",
+  cstrnTotlGvspAmt: "integer",
+  prspPrce: "integer",
+  prtmBizNody: "integer",
+  totlBizNody: "integer",
+  ctrtDmndQty: "decimal",
+  ctrtDmndUprc: "decimal",
+  ctrtDmndAmt: "decimal",
+  spamAmt: "decimal",
+  bizDtlItm27: "decimal",
+  bizDtlItm31: "decimal",
+  bizDtlItm32: "decimal",
+  bizDtlItm33: "decimal",
+  bizDtlItm34: "decimal",
+  bizDtlItm35: "decimal",
+  bizDtlItm36: "decimal",
+  bizDtlItm37: "integer",
+  bizDtlItm38: "decimal",
+  bizDtlItm40: "decimal",
+  bizDtlItm41: "date",
+  bizDtlItm42: "decimal",
+  bizDtlItm43: "decimal",
+  bizDtlItm44: "decimal",
+};
 
-/** 숫자 포맷과 HTML 디코딩 및 빈 문자열 제외 규칙을 기존과 동일하게 적용한다. */
-export function formatValue(value: unknown) {
-  if (typeof value === "number") return numberFormat.format(value);
-  if (typeof value === "string") {
-    const decoded = decodeHTMLStrict(value);
-    if (decoded.trim() && !/^[-–—]+$/.test(decoded.trim())) return decoded;
+/**
+ * 요청 상세·품목의 값을 표시 형식으로 변환한다. 빈값과 대시 제외 규칙을 유지한다.
+ * @param value API 원본 값.
+ * @param key 지정하면 필드의 의미에 맞는 포맷을 적용한다.
+ */
+export function formatValue(value: unknown, key?: string) {
+  if (typeof value !== "string" && typeof value !== "number") return;
+  const decoded =
+    typeof value === "string" ? decodeHTMLStrict(value) : String(value);
+  if (!decoded.trim() || /^[-–—]+$/.test(decoded.trim())) return;
+
+  if (key === "dlvgdsTermNody") {
+    // 품목의 납품일수/기한은 일수 또는 일자 형태로 내려올 수 있다.
+    const format =
+      /^\d{4}[-/]?(?:0[1-9]|1[0-2])[-/]?(?:0[1-9]|[12]\d|3[01])$/.test(
+        decoded.trim(),
+      )
+        ? "date"
+        : "integer";
+    return formatG2bDisplayText(decoded, format);
   }
+  const format = key && fieldFormats[key];
+  if (format) return formatG2bDisplayText(decoded, format);
+  return typeof value === "number"
+    ? formatG2bDisplayNumber(decoded, 3)
+    : decoded;
 }
 
 /** 표시용 대체 키를 먼저 조회하고, 값이 없으면 원래 키를 사용한다. */
 export function detailValue(detail: Record<string, unknown>, key: string) {
   const displayName = formatValue(detail[displayNames[key]]);
   if (displayName !== undefined) return displayName;
-  const value = formatValue(detail[key]);
+  const value = formatValue(detail[key], key);
   if (value === undefined) return undefined;
   const group = commonCodeGroups[key];
   return group ? getG2bCommonCodeName(group, value) : value;

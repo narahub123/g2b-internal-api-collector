@@ -5,6 +5,11 @@ import {
 } from "@/shared/lib/common-codes";
 import type { Contract } from "./contract";
 import { formatG2bPhone } from "@/shared/lib/g2b-phone";
+import {
+  formatG2bDisplayDate,
+  formatG2bDisplayNumber,
+  formatG2bDisplayRate,
+} from "@/shared/lib/g2b-display-format";
 
 /** 공통코드 API 조회 없이 화면에서 직접 변환하는 Y/N 선택값 목록. */
 const inlineOptions: Readonly<
@@ -18,6 +23,7 @@ const inlineOptions: Readonly<
 type Format =
   | "date"
   | "integer"
+  | "rate"
   | "phone"
   | "trade"
   | "longTerm"
@@ -41,10 +47,6 @@ function hasDisplayValue(value: string): boolean {
 }
 /** 물품 표의 두 줄 헤더 분할 위치와 행 병합 대상 열 인덱스. */
 type PairedRows = { firstRowLength: number; sharedColumns: readonly number[] };
-/** 계약 금액·수량을 한국어 숫자 표기로 출력하는 포맷터. */
-const numberFormat = new Intl.NumberFormat("ko-KR", {
-  maximumFractionDigits: 0,
-});
 
 /** 계약공통 섹션의 기본 필드. 배열 순서가 화면 표시 순서다. */
 const commonFields: readonly Field[] = [
@@ -57,7 +59,7 @@ const commonFields: readonly Field[] = [
   ["ctrtMthdCd", "계약방법", "sbxCtrtMthdCd"],
   ["tlbkpngCtrtAmt", "총 계약금액(원)", "integer"],
   ["ctrtAmt", "금차 계약금액(원)", "integer"],
-  ["ctrtGtnrt", "계약보증금율(%)"],
+  ["ctrtGtnrt", "계약보증금율(%)", "rate"],
   ["lcrtTyCd", "계약법구분", "rdoLcrtTyCd"],
   ["atcsNm", "조항호"],
   ["prvNm", "근거내역"],
@@ -67,7 +69,7 @@ const commonFields: readonly Field[] = [
   // ["intbidYn", "국내/국제입찰", "international"],
   ["dlvgdsTermChcSeCd", "총 납품기간 선택", "rdoDlvgdsTermChcSeCd"],
   ["totlDlvgdsTermYmd", "총 납품기한", "date"],
-  ["totlDlvgdsTermNody", "총 납품일수"],
+  ["totlDlvgdsTermNody", "총 납품일수", "integer"],
 ];
 
 /** 계약업체 정보 표의 기본 열 정의. 업무별로 일부 열을 제외할 수 있다. */
@@ -77,8 +79,8 @@ const companyFields: readonly Field[] = [
   ["bzmnRegNo", "사업자등록번호"],
   ["ctentUntyGrpNm", "업체명"],
   ["intpNm", "공종", "trade"],
-  ["shreIntpSharRat", "지분율(%)"],
-  ["ctrtSharRat", "전체지분율(%)"],
+  ["shreIntpSharRat", "지분율(%)", "rate"],
+  ["ctrtSharRat", "전체지분율(%)", "rate"],
   ["etpsPicNm", "업체담당자"],
   ["rprsvNm", "대표자명"],
 ];
@@ -135,17 +137,12 @@ function formatValue(value: unknown, format?: Format) {
   if (!format) return raw;
   // 날짜는 YYYYMMDD, YYYY-MM-DD 등을 동일한 YYYY/MM/DD 형태로 표시한다.
   if (format === "date") {
-    return trimmed.replace(
-      /^(\d{4})[-/]?(\d{2})[-/]?(\d{2})(?:[ T].*)?$/,
-      "$1/$2/$3",
-    );
+    return formatG2bDisplayDate(trimmed, "date");
   }
   if (format === "integer") {
-    // 숫자 문자열을 그대로 포맷해 큰 계약금액의 정밀도를 보존한다.
-    return /^[+-]?\d+(?:\.\d+)?$/.test(trimmed)
-      ? numberFormat.format(trimmed as `${number}`)
-      : raw;
+    return formatG2bDisplayNumber(raw, 0);
   }
+  if (format === "rate") return formatG2bDisplayRate(raw);
   // 전화번호 포맷은 공통 함수에서 처리한다.
   // 마스킹된 번호와 기존 구분자는 유지하고, 숫자만 있는 번호는 형식에 맞게 변환한다.
   if (format === "phone") {
@@ -210,14 +207,14 @@ export function contractDisplay(
     );
   } else if (business === "리스") {
     common.push(
-      ["lasePrdMtnb", "리스기간(개월)"],
+      ["lasePrdMtnb", "리스기간(개월)", "integer"],
       ["laseBgngYmd", "리스시작일자", "date"],
       ["laseEndYmd", "리스종료일자", "date"],
     );
   }
   // 하자 관련 필드는 업무별 추가 필드 뒤에 배치한다.
   common.push(
-    ["dcmtGtnrt", "하자보수보증금율(%)"],
+    ["dcmtGtnrt", "하자보수보증금율(%)", "rate"],
     ["fctrRspbPrdCn", "하자담보책임기간"],
   );
 
