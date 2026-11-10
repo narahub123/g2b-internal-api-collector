@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { decodeHTMLStrict } from "entities";
 import { ExternalLink } from "lucide-react";
+import type { G2bBusiness } from "@/shared/lib/g2b-business";
+import { BusinessBadge } from "./business-badge";
 
 /**
  * 상세 제목 영역에 전달할 표시 정보와 선택적 작업 요소.
@@ -9,6 +11,7 @@ import { ExternalLink } from "lucide-react";
 interface DetailTitleProps {
   title: string;
   subtitle: string;
+  business?: G2bBusiness;
   originalHref?: string;
   headingLevel?: "h1" | "h2";
   actions?: ReactNode;
@@ -25,6 +28,7 @@ interface DetailTitleProps {
 export function DetailTitle({
   title,
   subtitle,
+  business,
   originalHref,
   headingLevel = "h2",
   actions,
@@ -37,7 +41,10 @@ export function DetailTitle({
         <Heading className="wrap-anywhere text-xl font-semibold">
           {decodeHTMLStrict(title)}
         </Heading>
-        <p className="text-sm text-muted-foreground">{subtitle}</p>
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+          <span className="min-w-0 wrap-anywhere">{subtitle}</span>
+          <BusinessBadge business={business} />
+        </p>
       </div>
       {/* 원본 주소나 작업 요소가 없으면 빈 버튼 영역을 만들지 않는다. */}
       {(originalHref || actions) && (

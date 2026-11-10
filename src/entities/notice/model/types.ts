@@ -10,6 +10,8 @@ export type NoticeKey = { number: string; revision: string };
 export type NoticeSummary = NoticeKey & {
   title: string;
   collectedAt: string;
+  businessCode?: string | null;
+  businessLabel?: string | null;
 };
 
 export type Notice = NoticeSummary & {

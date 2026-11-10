@@ -1,6 +1,7 @@
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { DetailTitle } from "@/shared/ui/detail-title";
+import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import {
   contractRequestPath,
@@ -58,6 +59,7 @@ export function ContractRequestDetail({
       <DetailTitle
         title={formatValue(detail.bizNm) ?? "계약요청 상세"}
         subtitle={`${number} / ${revision}`}
+        business={resolveG2bBusiness(undefined, detail.prcmBsneAreaNm)}
         headingLevel="h2"
         actions={
           <RecollectButton

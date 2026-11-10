@@ -6,6 +6,7 @@ import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { DetailTitle } from "@/shared/ui/detail-title";
+import type { G2bBusiness } from "@/shared/lib/g2b-business";
 import { openingResultPath, type OpeningResult } from "../model/opening-result";
 import {
   getOpeningResultDisplay,
@@ -148,16 +149,19 @@ function ResultTable({ table }: { table: DisplayTable }) {
  * @param noticeKey 현재 입찰공고 식별자.
  * @param results 개찰차수별 조회 결과.
  * @param title 화면 제목. 생략하면 기본 제목을 사용한다.
+ * @param business 연결 공고나 저장된 조회 조건에서 결정한 업무구분.
  */
 export function OpeningResultDetail({
   noticeKey,
   results,
   title,
+  business,
   originalHref,
 }: {
   noticeKey: NoticeKey;
   results: OpeningResult[];
   title?: string;
+  business?: G2bBusiness;
   originalHref?: string;
 }) {
   // 개찰차수와 분류는 데이터 그룹 키일 뿐, 원본 화면에 없는 제목으로 출력하지 않는다.
@@ -194,6 +198,7 @@ export function OpeningResultDetail({
       <DetailTitle
         title={title ?? "개찰결과 상세"}
         subtitle={`${noticeKey.number} / ${noticeKey.revision}`}
+        business={business}
         originalHref={originalHref}
         headingLevel="h2"
         actions={

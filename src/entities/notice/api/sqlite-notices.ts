@@ -55,7 +55,9 @@ export function openNoticeRepository(): NoticeRepository {
     );
   `);
   const list = db.prepare(`
-    SELECT number, revision, collected_at AS collectedAt, json_extract(data, '$.title') AS title
+    SELECT number, revision, collected_at AS collectedAt, json_extract(data, '$.title') AS title,
+      CAST(json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd') AS TEXT) AS businessCode,
+      CAST(json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS TEXT) AS businessLabel
     FROM notices ORDER BY collected_at DESC, number, revision
   `);
   const find = db.prepare('SELECT data FROM notices WHERE number = ? AND revision = ?');
