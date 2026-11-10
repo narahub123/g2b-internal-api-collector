@@ -4,6 +4,7 @@ import type { NoticeKey } from "@/entities/notice/model/types";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
+import { DetailTitle } from "@/shared/ui/detail-title";
 import { openingResultPath, type OpeningResult } from "../model/opening-result";
 import {
   getOpeningResultDisplay,
@@ -151,10 +152,12 @@ export function OpeningResultDetail({
   noticeKey,
   results,
   title,
+  originalHref,
 }: {
   noticeKey: NoticeKey;
   results: OpeningResult[];
   title?: string;
+  originalHref?: string;
 }) {
   // 개찰차수와 분류는 데이터 그룹 키일 뿐, 원본 화면에 없는 제목으로 출력하지 않는다.
   const sections = results.flatMap((result) => {
@@ -187,17 +190,18 @@ export function OpeningResultDetail({
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
-      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
-        <div>
-          <h2 className="wrap-anywhere text-xl font-semibold">
-            {title ?? "개찰결과 상세"}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {noticeKey.number} / {noticeKey.revision}
-          </p>
-        </div>
-        <RecollectButton endpoint={`/api${openingResultPath(noticeKey)}`} />
-      </header>
+      <DetailTitle
+        title={title ?? "개찰결과 상세"}
+        subtitle={`${noticeKey.number} / ${noticeKey.revision}`}
+        originalHref={originalHref}
+        headingLevel="h2"
+        actions={
+          <RecollectButton
+            endpoint={`/api${openingResultPath(noticeKey)}`}
+            compact
+          />
+        }
+      />
       {/* 공지사항이 없는 경우에는 제목과 빈 영역도 생성하지 않는다. */}
       {notices.length > 0 && (
         <dl className="grid gap-2 border-t pt-4  pl-4 -mb-2 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]">
