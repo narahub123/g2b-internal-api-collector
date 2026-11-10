@@ -169,12 +169,21 @@ export function NoticeDetail({
           {notice.documents?.[kind] && " 이전에 수집한 목록을 표시합니다."}
         </p>
       ))}
-      {notice.posts && <NoticePostsSection posts={notice.posts} number={number} revision={revision} />}
       <Accordion
         type="multiple"
-        defaultValue={sections.map(({ title }) => title)}
+        defaultValue={[
+          ...(notice.posts?.entries.length ? ["공지사항"] : []),
+          ...sections.map(({ title }) => title),
+        ]}
         className="min-w-0 border-t"
       >
+        {notice.posts && (
+          <NoticePostsSection
+            posts={notice.posts}
+            number={number}
+            revision={revision}
+          />
+        )}
         {sections.map((section) => {
           const { title } = section;
           return "fields" in section ? (
