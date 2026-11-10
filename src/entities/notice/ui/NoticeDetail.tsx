@@ -10,6 +10,7 @@ import { NoticePostsSection } from "./NoticePostsSection";
 import { AttachmentTable } from "@/shared/ui/attachment-table";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { DetailTitle } from "@/shared/ui/detail-title";
+import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { renderNoticeHtml } from "../lib/notice-html";
 import {
@@ -174,6 +175,7 @@ export function NoticeDetail({
         headingLevel="h1"
         title={notice.title}
         subtitle={`${number} / ${revision}`}
+        business={resolveG2bBusiness(detail?.prcmBsneSeCd, detail?.prcmBsneSeNm)}
         originalHref={originalHref}
         actions={
           <RecollectButton

@@ -5,6 +5,7 @@ import { g2bNumber } from "@/shared/model/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { DetailTitle } from "@/shared/ui/detail-title";
+import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { orderPlanSections } from "../model/order-plan-display";
 import {
@@ -76,6 +77,7 @@ export function OrderPlanDetail({ plan }: { plan: OrderPlan }) {
       <DetailTitle
         title={title ?? "발주계획 상세"}
         subtitle={plan.number}
+        business={resolveG2bBusiness(detail.prcmBsneSeCd, detail.prcmBsneSeCdNm)}
         originalHref={originalHref}
         actions={
           <RecollectButton

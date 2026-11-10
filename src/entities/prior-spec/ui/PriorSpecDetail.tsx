@@ -8,6 +8,7 @@ import { g2bNumber } from "@/shared/model/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { DetailTitle } from "@/shared/ui/detail-title";
+import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import type { PriorSpec } from "../model/prior-spec";
 import { priorSpecDisplay } from "../model/prior-spec-display";
@@ -93,6 +94,7 @@ export function PriorSpecDetail({ spec }: { spec: PriorSpec }) {
       <DetailTitle
         title={title.trim() ? title : "사전규격 상세"}
         subtitle={spec.number}
+        business={resolveG2bBusiness(spec.payload.dlBfSpecM.prcmBsneSeCd, spec.payload.dlBfSpecM.prcmBsneSeCdNm)}
         originalHref={originalHref}
         actions={<RecollectButton endpoint={endpoint} compact />}
       />

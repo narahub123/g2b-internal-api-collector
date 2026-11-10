@@ -10,6 +10,7 @@ import {
 } from "@/entities/opening-result/model/opening-result";
 import { OpeningResultDetail } from "@/entities/opening-result/ui/OpeningResultDetail";
 import { g2bNumber } from "@/shared/model/g2b-number";
+import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
 import { Button } from "@/shared/ui/button";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 
@@ -73,6 +74,18 @@ export default async function Page({ params }: { params: Promise<NoticeKey> }) {
   )
     notFound();
 
+  const noticeDetail = notice?.payload.dmItemMap as Record<string, unknown> | undefined;
+  // 여러 차수·분류가 같은 업무일 때만 저장된 조회 조건으로 공통 제목을 보완한다.
+  const businessCodes = new Set(
+    results.flatMap(({ results }) =>
+      results.map(({ query }) => resolveG2bBusiness(query.businessCode, undefined)?.code),
+    ),
+  );
+  const business = resolveG2bBusiness(noticeDetail?.prcmBsneSeCd, noticeDetail?.prcmBsneSeNm)
+    ?? (businessCodes.size === 1
+      ? resolveG2bBusiness(businessCodes.values().next().value, undefined)
+      : undefined);
+
   return (
     <main className="mx-auto grid max-w-5xl gap-6 px-4 py-8 sm:px-6">
       <Button asChild variant="outline" className="w-fit">
@@ -86,6 +99,7 @@ export default async function Page({ params }: { params: Promise<NoticeKey> }) {
           noticeKey={key}
           results={results}
           title={notice?.title}
+          business={business}
           originalHref={openingResultOriginalHref(notice?.payload, results)}
         />
       ) : (

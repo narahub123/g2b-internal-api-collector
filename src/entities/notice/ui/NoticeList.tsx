@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { Button } from "@/shared/ui/button";
+import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
+import { BusinessBadge } from "@/shared/ui/business-badge";
 import { noticePath } from "../lib/notice-path";
 import type { NoticeSummary } from "../model/types";
 import { decodeHTMLStrict } from "entities";
@@ -25,12 +27,13 @@ export function NoticeList({ notices }: { notices: NoticeSummary[] }) {
           <Button
             asChild
             variant="outline"
-            className="h-auto min-h-9 w-full justify-start whitespace-normal text-left"
+            className="inline-block h-auto min-h-9 w-full whitespace-normal text-left"
           >
             <Link href={noticePath(notice)} prefetch={false}>
               {/* 상세 제목과 동일하게 HTML 엔티티를 디코딩하여 표시한다. */}
-              {decodeHTMLStrict(notice.title)} ({notice.number}/
-              {notice.revision})
+              <span className="wrap-anywhere">{decodeHTMLStrict(notice.title)} ({notice.number}/{notice.revision})</span>
+              {" "}
+              <BusinessBadge business={resolveG2bBusiness(notice.businessCode, notice.businessLabel)} />
             </Link>
           </Button>
         </li>
