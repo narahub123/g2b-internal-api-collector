@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
+import { DetailTitle } from "@/shared/ui/detail-title";
 import { contractPath, type Contract } from "../model/contract";
 import { contractDisplay } from "../model/contract-display";
 
@@ -103,19 +104,14 @@ export function ContractDetail({ contract }: { contract: Contract }) {
   const { title, sections, tables } = contractDisplay(contract);
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
-      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
-        <div className="min-w-0">
-          {/* 제목 값이 비어도 계약현황 기본 제목은 표시한다. */}
-          <h2 className="wrap-anywhere text-xl font-semibold">
-            {title.trim() || "계약현황"}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {contract.number} / {contract.revision}
-          </p>
-        </div>
-        {/* 재수집 버튼은 표시 필터링과 무관하게 기존 계약 경로를 사용한다. */}
-        <RecollectButton endpoint={`/api${contractPath(contract)}`} />
-      </header>
+      <DetailTitle
+        title={title.trim() || "계약현황"}
+        subtitle={`${contract.number} / ${contract.revision}`}
+        headingLevel="h2"
+        actions={
+          <RecollectButton endpoint={`/api${contractPath(contract)}`} compact />
+        }
+      />
       {/* 표시 모델에 남은 섹션·표만 열고, 기존 배열 순서대로 배치한다. */}
       <Accordion
         type="multiple"
