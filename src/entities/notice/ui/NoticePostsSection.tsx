@@ -1,10 +1,5 @@
 import { decodeHTMLStrict } from "entities";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/shared/ui/accordion";
+import { Accordion } from "@/shared/ui/accordion";
 import { AttachmentTable } from "@/shared/ui/attachment-table";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import {
@@ -32,7 +27,10 @@ export function NoticePostsSection({
 
   return (
     <DetailAccordionSection title="공지사항">
-      <Accordion type="multiple" className="min-w-0">
+      <Accordion
+        type="multiple"
+        className="min-w-0 [&_[data-slot=accordion-trigger]]:wrap-anywhere"
+      >
         {rows.map(({ row, bbsNo, pstNo }, index) => {
           const value = JSON.stringify([bbsNo, pstNo, index]);
           const post = posts.entries.find(
@@ -55,88 +53,76 @@ export function NoticePostsSection({
           ];
 
           return (
-            <AccordionItem key={value} value={value} className="min-w-0">
-              <AccordionTrigger
-                heading="h3"
-                className="wrap-anywhere px-2"
-                title={
-                  typeof row.pstNm === "string"
-                    ? decodeHTMLStrict(row.pstNm)
-                    : undefined
-                }
-              >
-                {noticePostTitle(row)}
-              </AccordionTrigger>
-              <AccordionContent className="pl-4">
-                {post?.detail ? (
-                  <Accordion
-                    type="multiple"
-                    defaultValue={sections}
-                    className="min-w-0 border-t"
-                  >
-                    <DetailAccordionSection title="게시물 상세" heading="h4">
+            <DetailAccordionSection
+              key={value}
+              value={value}
+              title={noticePostTitle(row)}
+              heading="h3"
+              triggerTitle={
+                typeof row.pstNm === "string"
+                  ? decodeHTMLStrict(row.pstNm)
+                  : undefined
+              }
+            >
+              {post?.detail ? (
+                <Accordion
+                  type="multiple"
+                  defaultValue={sections}
+                  className="ml-2 min-w-0 border-t"
+                >
+                  <DetailAccordionSection title="게시물 상세" heading="h4">
+                    <dl className="grid gap-2">
                       {[
-                        ...noticePostFields(detail),
-                        [{ label: "내용", value: bodyText }],
-                      ].map((fields) => (
-                        <dl
-                          key={fields[0].label}
-                          className={
-                            fields.length > 1
-                              ? "grid gap-4 sm:grid-cols-2"
-                              : undefined
-                          }
+                        ...noticePostFields(detail).flat(),
+                        { label: "내용", value: bodyText },
+                      ].map(({ label, value }) => (
+                        <div
+                          key={label}
+                          className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]"
                         >
-                          {fields.map(({ label, value }) => (
-                            <div
-                              key={label}
-                              className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]"
-                            >
-                              <dt className="text-muted-foreground">{label}</dt>
-                              <dd className="wrap-anywhere whitespace-pre-wrap">
-                                {label === "내용" ? (
-                                  post.body ? (
-                                    html !== null ? (
-                                      <div
-                                        className="wrap-anywhere overflow-x-auto whitespace-pre-wrap [&_a]:underline [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_ul]:list-disc [&_ul]:pl-5 [&_h1]:font-bold"
-                                        dangerouslySetInnerHTML={{
-                                          __html: html,
-                                        }}
-                                      />
-                                    ) : (
-                                      decodeHTMLStrict(bodyText)
-                                    )
-                                  ) : (
-                                    <p>공지사항 내용을 가져오지 못했습니다.</p>
-                                  )
+                          <dt className="text-muted-foreground">{label}</dt>
+                          <dd className="wrap-anywhere whitespace-pre-wrap">
+                            {label === "내용" ? (
+                              post.body ? (
+                                html !== null ? (
+                                  <div
+                                    className="wrap-anywhere overflow-x-auto whitespace-pre-wrap [&_a]:underline [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_ul]:list-disc [&_ul]:pl-5 [&_h1]:font-bold"
+                                    dangerouslySetInnerHTML={{
+                                      __html: html,
+                                    }}
+                                  />
                                 ) : (
-                                  value
-                                )}
-                              </dd>
-                            </div>
-                          ))}
-                        </dl>
+                                  decodeHTMLStrict(bodyText)
+                                )
+                              ) : (
+                                <p>공지사항 내용을 가져오지 못했습니다.</p>
+                              )
+                            ) : (
+                              value
+                            )}
+                          </dd>
+                        </div>
                       ))}
+                    </dl>
+                  </DetailAccordionSection>
+                  {hasAttachments && (
+                    <DetailAccordionSection
+                      title="게시물 첨부파일"
+                      heading="h4"
+                    >
+                      <AttachmentTable
+                        files={files}
+                        getDownloadHref={({ seq }) =>
+                          `/api/notices/${encodeURIComponent(number)}/${encodeURIComponent(revision)}/post-download?${new URLSearchParams({ bbsNo, pstNo, seq })}`
+                        }
+                      />
                     </DetailAccordionSection>
-                    {hasAttachments && (
-                      <DetailAccordionSection
-                        title="게시물 첨부파일"
-                        heading="h4"
-                      >
-                        <AttachmentTable
-                          files={files}
-                          getDownloadHref={({ seq }) =>
-                            `/api/notices/${encodeURIComponent(number)}/${encodeURIComponent(revision)}/post-download?${new URLSearchParams({ bbsNo, pstNo, seq })}`
-                          }
-                        />
-                      </DetailAccordionSection>
-                    )}
-                  </Accordion>
-                ) : (
-                  <p>공지사항 상세를 가져오지 못했습니다.</p>
-                )}
-              </AccordionContent>
-            </AccordionItem>
+                  )}
+                </Accordion>
+              ) : (
+                <p>공지사항 상세를 가져오지 못했습니다.</p>
+              )}
+            </DetailAccordionSection>
           );
         })}
       </Accordion>
