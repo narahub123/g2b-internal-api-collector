@@ -10,6 +10,7 @@ import {
   type ContractKey,
 } from "@/entities/contract/model/contract";
 import type { Notice, NoticeKey } from "@/entities/notice";
+import { noticePostRecord, noticePostRows, type NoticePost } from "@/entities/notice/model/notice-posts";
 import { getNoticeRepository } from "@/entities/notice/server";
 import {
   groupOpeningResultQueries,
@@ -148,7 +149,7 @@ function collectAttachments(
         ...attachmentSources[scope],
         untyAtchFileNo,
         atchFileSqnos: "",
-        bsneClsfCd: "업130020",
+        bsneClsfCd: scope === "notice-post" ? "업130026" : "업130020",
         webPathUse: "N",
         isScanEnabled: false,
         imgUrl: "",
@@ -735,12 +736,67 @@ export async function collectPriorSpec(number: string, force = false) {
   });
 }
 
+/** 공고의 공지 목록과 각 게시글에서 조회 가능한 원본 응답을 수집한다. */
+async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["posts"]>> {
+  const prefix = "FIUA027_01_wframe_popupCnts_bidPbancWfrm_";
+  const popupPrefix = prefix + "PNPE031_01_wframe_popupCnts_";
+  const popupMenu = '{"menuNo":"12568","menuCangVal":"PNPE031_01","bsneClsfCd":"%EC%97%85130026","scrnNo":"07883"}';
+  const list = await postG2b(
+    "/pn/pnp/pnpe/commBidPbac/selectNtcPstList.do",
+    prefix + "sbmSrchNtcPstList",
+    { dlPstM: { odn1ColCn: key.number, odn2ColCn: key.revision } },
+  );
+  const entries: NoticePost[] = [];
+  const rows = noticePostRows(list);
+  // 목록은 공개 요청으로 조회되지만 게시글 상세 API는 익명 세션을 요구한다.
+  const request = rows.length ? createG2bSession() : undefined;
+  for (const { bbsNo, pstNo } of rows) {
+    const entry: NoticePost = { bbsNo, pstNo };
+    entries.push(entry);
+    try {
+      const session = await request;
+      const detail = await postG2b(
+        "/fm/fma/fmaa/Pst/selectPst.do", popupPrefix + "sbmSrchNtcPst",
+        { dlPstM: {
+          bbsNo, pstNo, pstNm: "", bbsClsfPritmNm: "", inptEdDt: "", inptStDt: "",
+          clsfPritmSqno: "", untyAtchFileNo: "", pstRlsYn: "", tmprStrgYn: "",
+          kbrdrId: "", odn1ColCn: "", odn2ColCn: "", odn3ColCn: "", pstTy: "",
+          ntcBgngDt: "", ntcEndDt: "", popupBgngDt: "", popupEndDt: "", atrzNo: "",
+          atrzSttsCd: "", prslAuthrtUsrTyCd: "", inptDt: "", chgDt: "",
+        } }, session, popupMenu,
+      );
+      const metadata = noticePostRecord(detail.dlPstM);
+      if (metadata.bbsNo !== bbsNo || String(metadata.pstNo) !== pstNo)
+        throw new Error("공지사항 상세 키가 일치하지 않습니다.");
+      entry.detail = detail;
+      const group = attachmentGroup(metadata.untyAtchFileNo);
+      const [body, attachments] = await Promise.allSettled([
+        postG2b(
+          "/fm/fma/fmaa/PstCn/selectPstCn.do", popupPrefix + "sbmSrchNtcPstDtl",
+          { dlPstCnM: { pstNo, bbsNo, bulkPstCn: "" } }, session, popupMenu,
+        ).then((response) => {
+          const data = noticePostRecord(response.dlPstCnM);
+          if (data.bbsNo !== bbsNo || String(data.pstNo) !== pstNo)
+            throw new Error("공지사항 본문 키가 일치하지 않습니다.");
+          return response;
+        }),
+        group ? collectAttachments(group, "notice-post") : undefined,
+      ]);
+      if (body.status === "fulfilled") entry.body = body.value;
+      if (attachments.status === "fulfilled") entry.attachments = attachments.value;
+    } catch {
+      // 게시글 하나의 상세 조회가 실패해도 목록과 나머지 게시글은 보존한다.
+    }
+  }
+  return { list, entries };
+}
+
 /**
- * 공고 상세와 문서 목록을 수집하고, 연결된 미수집 발주계획, 사전규격, 계약요청과 개찰결과를 저장한다.
+ * 공고 상세, 문서 목록과 공지사항을 수집하고, 연결된 미수집 발주계획, 사전규격, 계약요청과 개찰결과를 저장한다.
  * 관련 자료 조회가 실패하면 다음 공고 수집 시 재시도한다.
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
- * @returns 공고 상세 및 해당하는 문서 목록의 원본 응답.
+ * @returns 공고 상세 및 관련 목록의 원본 응답.
  * @throws 공고 상세 요청이 실패하거나 해당 공고의 응답을 받지 못했을 때.
  */
 export async function collectNotice(
@@ -773,7 +829,7 @@ export async function collectNotice(
   const orderPlanNumber = getNoticeOrderPlanNumber(payload);
   const priorSpecNumber = getNoticePriorSpecNumber(payload);
   // 부가 조회의 실패가 공고 본문 수집을 막지 않도록 각각의 결과를 따로 수신한다.
-  const [attachments, proposal, contractLinks, openingResults] =
+  const [attachments, proposal, contractLinks, openingResults, posts] =
     await Promise.allSettled([
       detail.itemPbancUntyAtchFileNo?.trim()
         ? collectAttachments(detail.itemPbancUntyAtchFileNo, "notice")
@@ -785,6 +841,7 @@ export async function collectNotice(
         : undefined,
       collectNoticeContractLinks(key),
       collectNoticeOpeningResults(payload),
+      collectNoticePosts(key),
       orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
       priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
     ]);
@@ -811,6 +868,7 @@ export async function collectNotice(
     title: detail.bidPbancNm,
     collectedAt,
     payload,
+    posts: posts.status === "fulfilled" ? posts.value : undefined,
     documents,
     ...(contractLinks.status === "fulfilled" ? contractLinks.value : {}),
   };

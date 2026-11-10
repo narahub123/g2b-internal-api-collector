@@ -6,6 +6,7 @@ import { orderPlanPath } from "@/entities/order-plan/model/order-plan";
 import { priorSpecPath } from "@/entities/prior-spec/model/prior-spec";
 import { g2bNumber } from "@/shared/model/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
+import { NoticePostsSection } from "./NoticePostsSection";
 import { AttachmentTable } from "@/shared/ui/attachment-table";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
@@ -168,6 +169,7 @@ export function NoticeDetail({
           {notice.documents?.[kind] && " 이전에 수집한 목록을 표시합니다."}
         </p>
       ))}
+      {notice.posts && <NoticePostsSection posts={notice.posts} number={number} revision={revision} />}
       <Accordion
         type="multiple"
         defaultValue={sections.map(({ title }) => title)}

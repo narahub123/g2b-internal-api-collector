@@ -9,7 +9,7 @@ import { AccordionContent, AccordionItem, AccordionTrigger } from './accordion';
 export function DetailAccordionSection({ title, children, heading = 'h2' }: {
   title: string;
   children: ReactNode;
-  heading?: 'h2' | 'h3';
+  heading?: 'h2' | 'h3' | 'h4';
 }) {
   return (
     <AccordionItem value={title} className="min-w-0">
