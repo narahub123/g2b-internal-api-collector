@@ -9,6 +9,7 @@ import { Accordion } from "@/shared/ui/accordion";
 import { NoticePostsSection } from "./NoticePostsSection";
 import { AttachmentTable } from "@/shared/ui/attachment-table";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
+import { DetailTitle } from "@/shared/ui/detail-title";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { renderNoticeHtml } from "../lib/notice-html";
 import {
@@ -19,6 +20,12 @@ import {
 } from "../model/notice-display";
 import type { Notice } from "../model/types";
 
+/**
+ * 공고 필드값을 HTML 표시 정책에 따라 출력한다.
+ * HTML로 처리할 수 없는 값은 엔티티를 디코딩한 일반 텍스트로 표시한다.
+ * @param props 수집된 원본 필드값.
+ * @returns HTML 또는 일반 텍스트로 표시한 필드값.
+ */
 function NoticeValue({ value }: { value: string }) {
   const html = renderNoticeHtml(value);
   const className =
@@ -30,6 +37,12 @@ function NoticeValue({ value }: { value: string }) {
   );
 }
 
+/**
+ * 공고 상세의 표 데이터를 원본 열 순서대로 표시한다.
+ * 기초금액조회 항목은 현재 이동 동작을 제공하지 않으므로 비활성 버튼으로 표시한다.
+ * @param props 표 제목, 열 이름과 행 데이터.
+ * @returns 공고 상세 표.
+ */
 function NoticeTable({
   title,
   columns,
@@ -91,9 +104,10 @@ function NoticeTable({
 }
 
 /**
- * 수집한 공고의 상세 정보와 연결된 문서를 표시한다.
- * @param props 공고와 저장이 확인된 발주계획번호.
- * @returns 공고 상세 본문.
+ * 수집한 입찰공고의 상세 정보, 관련 자료 및 원본 페이지 이동 기능을 표시한다.
+ * 제목의 HTML 엔티티 디코딩은 공통 DetailTitle에서 처리하며, 재수집은 기존 요청 기능을 사용한다.
+ * @param props 공고 데이터와 저장이 확인된 발주계획번호.
+ * @returns 공고 상세 본문과 조건에 따른 관련 정보 및 첨부 목록.
  */
 export function NoticeDetail({
   notice,
@@ -145,22 +159,30 @@ export function NoticeDetail({
   const methodCode =
     typeof detail?.scsbdMthdCd === "string" ? detail.scsbdMthdCd : "";
 
+  // 현재는 원본 페이지 존재 여부를 알려주는 공고 API 항목이 없어 번호와 차수로 링크를 생성해 항상 표시한다.
+  // 향후 해당 정보가 수집되면 원본 페이지의 존재 여부에 따른 표시 조건을 적용할 수 있다.
+  const originalHref = `https://www.g2b.go.kr/link/PNPE027_01/single/?${new URLSearchParams(
+    {
+      bidPbancNo: number,
+      bidPbancOrd: revision,
+    },
+  )}`;
+
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
-      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
-        <div>
-          <h1 className="wrap-anywhere text-xl font-semibold">
-            {notice.title}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {number} / {revision}
-          </p>
-        </div>
-        <RecollectButton
-          endpoint="/api/notices"
-          requestBody={{ number, revision, methodCode }}
-        />
-      </header>
+      <DetailTitle
+        headingLevel="h1"
+        title={notice.title}
+        subtitle={`${number} / ${revision}`}
+        originalHref={originalHref}
+        actions={
+          <RecollectButton
+            endpoint="/api/notices"
+            requestBody={{ number, revision, methodCode }}
+            compact
+          />
+        }
+      />
       {notice.documents?.unavailable?.map((kind) => (
         <p key={kind} className="text-sm text-muted-foreground">
           {kind === "proposal" && notice.documents?.proposalAccessDenied
