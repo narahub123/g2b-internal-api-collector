@@ -1,7 +1,5 @@
-import {
-  openingResultPath,
-  openingResultQuery,
-} from "@/entities/opening-result/model/opening-result";
+import { openingResultPath } from "@/shared/lib/routes";
+import { openingResultQuery } from "@/entities/opening-result/model/opening-result";
 import type { Notice } from "./types";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";

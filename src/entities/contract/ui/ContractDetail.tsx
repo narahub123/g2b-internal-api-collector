@@ -1,10 +1,11 @@
+import { contractApiPath } from "@/shared/lib/routes";
 import { Fragment } from "react";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { DetailTitle } from "@/shared/ui/detail-title";
 import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
-import { contractApiPath, type Contract } from "../model/contract";
+import { type Contract } from "../model/contract";
 import { contractDisplay } from "../model/contract-display";
 
 /**

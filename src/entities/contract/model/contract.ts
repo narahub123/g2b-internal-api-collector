@@ -102,23 +102,3 @@ export function parseContractResponse(
     return;
   return { detail, companies, services, items };
 }
-
-function contractRoute({ number, revision }: ContractKey) {
-  return `/contracts/${encodeURIComponent(number)}/${encodeURIComponent(revision)}`;
-}
-
-/**
- * 관리자 계약현황 상세 화면으로 연결한다.
- * @param key 계약번호와 정규화된 변경차수.
- */
-export function contractPath(key: ContractKey) {
-  return `/admin${contractRoute(key)}`;
-}
-
-/**
- * 계약현황 재수집 요청에 쓰는 API 주소를 만든다.
- * @param key 계약번호와 정규화된 변경차수.
- */
-export function contractApiPath(key: ContractKey) {
-  return `/api${contractRoute(key)}`;
-}

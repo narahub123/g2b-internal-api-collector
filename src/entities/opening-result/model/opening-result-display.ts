@@ -1,4 +1,4 @@
-import { noticePath } from "@/entities/notice/lib/notice-path";
+import { noticePath } from "@/shared/lib/routes";
 import {
   formatG2bDisplayText,
   type G2bDisplayFormat,

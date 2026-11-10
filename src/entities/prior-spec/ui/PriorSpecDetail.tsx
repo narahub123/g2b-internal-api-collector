@@ -1,5 +1,5 @@
+import { orderPlanPath } from "@/shared/lib/routes";
 import Link from "next/link";
-import { orderPlanPath } from "@/entities/order-plan/model/order-plan";
 import {
   attachmentGroup,
   publicAttachmentFiles,

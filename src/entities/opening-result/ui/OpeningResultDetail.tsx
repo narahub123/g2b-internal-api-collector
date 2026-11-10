@@ -1,3 +1,4 @@
+import { openingResultApiPath } from "@/shared/lib/routes";
 import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
 import type { NoticeKey } from "@/entities/notice/model/types";
@@ -7,10 +8,7 @@ import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { DetailTitle } from "@/shared/ui/detail-title";
 import type { G2bBusiness } from "@/shared/lib/g2b-business";
-import {
-  openingResultApiPath,
-  type OpeningResult,
-} from "../model/opening-result";
+import { type OpeningResult } from "../model/opening-result";
 import {
   getOpeningResultDisplay,
   getOpeningResultPriceDisplay,

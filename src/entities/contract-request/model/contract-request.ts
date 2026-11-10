@@ -46,23 +46,3 @@ export function contractRequestKeys(
   }
   return [...requests.values()];
 }
-
-function contractRequestRoute({ number, revision }: ContractRequestKey) {
-  return `/contract-requests/${encodeURIComponent(number)}/${encodeURIComponent(revision)}`;
-}
-
-/**
- * 관리자 계약요청 상세 화면으로 연결한다.
- * @param key 계약요청접수번호와 차수.
- */
-export function contractRequestPath(key: ContractRequestKey) {
-  return `/admin${contractRequestRoute(key)}`;
-}
-
-/**
- * 계약요청 재수집 요청에 쓰는 API 주소를 만든다.
- * @param key 계약요청접수번호와 차수.
- */
-export function contractRequestApiPath(key: ContractRequestKey) {
-  return `/api${contractRequestRoute(key)}`;
-}

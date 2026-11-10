@@ -1,6 +1,5 @@
+import { noticePath, priorSpecPath } from "@/shared/lib/routes";
 import Link from "next/link";
-import { noticePath } from "@/entities/notice/lib/notice-path";
-import { priorSpecPath } from "@/entities/prior-spec/model/prior-spec";
 import { g2bNumber } from "@/shared/model/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";

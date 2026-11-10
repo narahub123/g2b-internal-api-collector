@@ -1,7 +1,7 @@
+import { ADMIN_HOME_PATH, contractRequestApiPath } from "@/shared/lib/routes";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  contractRequestApiPath,
   contractRequestRevision,
   type ContractRequestKey,
 } from "@/entities/contract-request/model/contract-request";
@@ -27,7 +27,7 @@ export default async function Page({
   return (
     <main className="mx-auto grid max-w-5xl gap-6 px-4 py-8 sm:px-6">
       <Button asChild variant="outline" className="w-fit">
-        <Link href="/admin">목록으로 돌아가기</Link>
+        <Link href={ADMIN_HOME_PATH}>목록으로 돌아가기</Link>
       </Button>
       <h1 className="sr-only">계약요청</h1>
       {contractRequest ? (
