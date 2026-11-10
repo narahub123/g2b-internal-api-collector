@@ -1,10 +1,10 @@
-import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
 import { noticePath } from "@/entities/notice/lib/notice-path";
 import { priorSpecPath } from "@/entities/prior-spec/model/prior-spec";
 import { g2bNumber } from "@/shared/model/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
+import { DetailTitle } from "@/shared/ui/detail-title";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { orderPlanSections } from "../model/order-plan-display";
 import {
@@ -64,19 +64,26 @@ export function OrderPlanDetail({ plan }: { plan: OrderPlan }) {
   const sections = [...groups.map(({ title }) => title), "연관 정보"];
   if (showAttachments) sections.push("파일첨부");
 
+  // 나라장터 발주계획 상세 화면은 발주계획번호를 oderPlanNo로 전달한다.
+  const originalHref = `https://www.g2b.go.kr/link/PRPA015_01/single/?${new URLSearchParams(
+    {
+      oderPlanNo: plan.number,
+    },
+  )}`;
+
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
-      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
-        <div className="min-w-0">
-          <h2 className="wrap-anywhere text-xl font-semibold">
-            {title ? decodeHTMLStrict(title) : "발주계획 상세"}
-          </h2>
-          <p className="text-sm text-muted-foreground">{plan.number}</p>
-        </div>
-        <RecollectButton
-          endpoint={`/api/order-plans/${encodeURIComponent(plan.number)}`}
-        />
-      </header>
+      <DetailTitle
+        title={title ?? "발주계획 상세"}
+        subtitle={plan.number}
+        originalHref={originalHref}
+        actions={
+          <RecollectButton
+            endpoint={`/api/order-plans/${encodeURIComponent(plan.number)}`}
+            compact
+          />
+        }
+      />
       <Accordion
         type="multiple"
         defaultValue={sections}

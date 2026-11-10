@@ -1,5 +1,6 @@
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
+import { DetailTitle } from "@/shared/ui/detail-title";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import {
   contractRequestPath,
@@ -54,19 +55,17 @@ export function ContractRequestDetail({
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
-      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
-        <div>
-          <h2 className="wrap-anywhere text-xl font-semibold">
-            {formatValue(detail.bizNm) ?? "계약요청 상세"}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {number} / {revision}
-          </p>
-        </div>
-        <RecollectButton
-          endpoint={`/api${contractRequestPath(contractRequest)}`}
-        />
-      </header>
+      <DetailTitle
+        title={formatValue(detail.bizNm) ?? "계약요청 상세"}
+        subtitle={`${number} / ${revision}`}
+        headingLevel="h2"
+        actions={
+          <RecollectButton
+            endpoint={`/api${contractRequestPath(contractRequest)}`}
+            compact
+          />
+        }
+      />
       <Accordion
         type="multiple"
         defaultValue={[...sections.map(({ title }) => title), "요청물품정보"]}

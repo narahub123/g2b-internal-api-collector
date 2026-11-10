@@ -1,4 +1,3 @@
-import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
 import { orderPlanPath } from "@/entities/order-plan/model/order-plan";
 import {
@@ -8,6 +7,7 @@ import {
 import { g2bNumber } from "@/shared/model/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
+import { DetailTitle } from "@/shared/ui/detail-title";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import type { PriorSpec } from "../model/prior-spec";
 import { priorSpecDisplay } from "../model/prior-spec-display";
@@ -81,17 +81,21 @@ export function PriorSpecDetail({ spec }: { spec: PriorSpec }) {
   if (showFiles) sections.push("파일첨부");
   if (opinions) sections.push(opinions.title);
 
+  // 나라장터 사전규격 상세 화면은 사전규격등록번호를 bfSpecRegNo로 전달한다.
+  const originalHref = `https://www.g2b.go.kr/link/PRVA004_02/single/?${new URLSearchParams(
+    {
+      bfSpecRegNo: spec.number,
+    },
+  )}`;
+
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
-      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
-        <div className="min-w-0">
-          <h2 className="wrap-anywhere text-xl font-semibold">
-            {title.trim() ? title : "사전규격 상세"}
-          </h2>
-          <p className="text-sm text-muted-foreground">{spec.number}</p>
-        </div>
-        <RecollectButton endpoint={endpoint} />
-      </header>
+      <DetailTitle
+        title={title.trim() ? title : "사전규격 상세"}
+        subtitle={spec.number}
+        originalHref={originalHref}
+        actions={<RecollectButton endpoint={endpoint} compact />}
+      />
       <Accordion
         type="multiple"
         defaultValue={sections}
