@@ -6,6 +6,7 @@ import { orderPlanPath } from "@/entities/order-plan/model/order-plan";
 import { priorSpecPath } from "@/entities/prior-spec/model/prior-spec";
 import { g2bNumber } from "@/shared/model/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
+import { NoticePostsSection } from "./NoticePostsSection";
 import { AttachmentTable } from "@/shared/ui/attachment-table";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
@@ -170,9 +171,19 @@ export function NoticeDetail({
       ))}
       <Accordion
         type="multiple"
-        defaultValue={sections.map(({ title }) => title)}
+        defaultValue={[
+          ...(notice.posts?.entries.length ? ["공지사항"] : []),
+          ...sections.map(({ title }) => title),
+        ]}
         className="min-w-0 border-t"
       >
+        {notice.posts && (
+          <NoticePostsSection
+            posts={notice.posts}
+            number={number}
+            revision={revision}
+          />
+        )}
         {sections.map((section) => {
           const { title } = section;
           return "fields" in section ? (

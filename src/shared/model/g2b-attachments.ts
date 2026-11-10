@@ -6,6 +6,11 @@ export const attachmentSources = {
     tblNm: "PBANC_BID_PBANC",
     colNm: "ITEM_PBANC_UNTY_ATCH_FILE_NO",
   },
+  "notice-post": {
+    bsnePath: "ntcbbs",
+    tblNm: "PBASP_PST",
+    colNm: "UNTY_ATCH_FILE_NO",
+  },
   "order-plan": {
     bsnePath: "PRPA",
     tblNm: "DMND_ODER_PLAN",
@@ -38,7 +43,7 @@ export function attachmentGroup(value: unknown) {
 export function publicAttachmentFiles(
   group: string | undefined,
   attachments: Record<string, unknown> | undefined,
-  scope: "notice" | "order-plan" | "prior-spec",
+  scope: keyof typeof attachmentSources,
 ) {
   const rows = attachments?.dlUntyAtchFileL;
   if (!group || !Array.isArray(rows)) return [];
@@ -72,7 +77,8 @@ export function publicAttachmentFiles(
         // API가 숫자/숫자 문자열을 반환할 수 있으므로 원본 값을 유지한다.
         fileSize: row.fileSz ?? undefined,
         downloadable:
-          row.dwnldPrmsYn !== "N" && !/[\x00-\x1f\x7f]/.test(filename),
+          (scope === "notice-post" ? row.dwnldPrmsYn === "Y" : row.dwnldPrmsYn !== "N") &&
+          !/[\x00-\x1f\x7f]/.test(filename),
         businessCode:
           typeof row.bsneClsfCd === "string" ? row.bsneClsfCd : "업130020",
       },

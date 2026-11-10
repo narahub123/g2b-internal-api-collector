@@ -19,7 +19,7 @@ export async function resolvePublicAttachmentDownload(
   group: string | undefined,
   attachments: Record<string, unknown> | undefined,
   seq: string,
-  scope: "order-plan" | "prior-spec",
+  scope: "order-plan" | "prior-spec" | "notice-post",
 ): Promise<URL | null> {
   const savedFile = publicAttachmentFiles(group, attachments, scope).find(
     (file) => file.seq === seq && file.downloadable,
@@ -67,6 +67,7 @@ export async function resolvePublicAttachmentDownload(
   if (
     file.scrnIndtYn === "N" ||
     file.dwnldPrmsYn === "N" ||
+    (scope === "notice-post" && (file.scrnIndtYn !== "Y" || file.dwnldPrmsYn !== "Y")) ||
     file.orgnlAtchFileNm !== savedFile.filename ||
     typeof path !== "string" ||
     !/^\/data\/Attachfiles\/[A-Za-z0-9_./-]+$/.test(path) ||

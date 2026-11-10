@@ -3,6 +3,7 @@ import type { Contract, ContractKey } from '@/entities/contract/model/contract';
 import type { OpeningResult, OpeningResultKey } from '@/entities/opening-result/model/opening-result';
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
+import type { NoticePosts } from './notice-posts';
 
 export type NoticeKey = { number: string; revision: string };
 
@@ -13,6 +14,7 @@ export type NoticeSummary = NoticeKey & {
 
 export type Notice = NoticeSummary & {
   payload: Record<string, unknown>;
+  posts?: NoticePosts;
   contractRequests?: ContractRequestKey[];
   contracts?: ContractKey[];
   documents?: {

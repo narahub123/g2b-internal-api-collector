@@ -29,7 +29,7 @@ function AccordionTrigger({
   children,
   heading: Heading = "h3",
   ...props
-}: React.ComponentProps<typeof AccordionPrimitive.Trigger> & { heading?: "h2" | "h3" }) {
+}: React.ComponentProps<typeof AccordionPrimitive.Trigger> & { heading?: "h2" | "h3" | "h4" }) {
   return (
     <AccordionPrimitive.Header asChild>
       <Heading className="flex">
