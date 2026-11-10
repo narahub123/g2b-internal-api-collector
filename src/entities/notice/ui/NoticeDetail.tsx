@@ -1,9 +1,6 @@
+import { contractPath, contractRequestPath, orderPlanPath, priorSpecPath } from "@/shared/lib/routes";
 import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
-import { contractRequestPath } from "@/entities/contract-request/model/contract-request";
-import { contractPath } from "@/entities/contract/model/contract";
-import { orderPlanPath } from "@/entities/order-plan/model/order-plan";
-import { priorSpecPath } from "@/entities/prior-spec/model/prior-spec";
 import { g2bNumber } from "@/shared/model/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
 import { NoticePostsSection } from "./NoticePostsSection";

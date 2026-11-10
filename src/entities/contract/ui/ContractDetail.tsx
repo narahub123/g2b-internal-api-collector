@@ -1,10 +1,11 @@
+import { contractApiPath } from "@/shared/lib/routes";
 import { Fragment } from "react";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { DetailTitle } from "@/shared/ui/detail-title";
 import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
-import { contractPath, type Contract } from "../model/contract";
+import { type Contract } from "../model/contract";
 import { contractDisplay } from "../model/contract-display";
 
 /**
@@ -108,10 +109,13 @@ export function ContractDetail({ contract }: { contract: Contract }) {
       <DetailTitle
         title={title.trim() || "계약현황"}
         subtitle={`${contract.number} / ${contract.revision}`}
-        business={resolveG2bBusiness(contract.detail.prcmBsneSeCd, contract.detail.prcmBsneSeNm)}
+        business={resolveG2bBusiness(
+          contract.detail.prcmBsneSeCd,
+          contract.detail.prcmBsneSeNm,
+        )}
         headingLevel="h2"
         actions={
-          <RecollectButton endpoint={`/api${contractPath(contract)}`} compact />
+          <RecollectButton endpoint={contractApiPath(contract)} compact />
         }
       />
       {/* 표시 모델에 남은 섹션·표만 열고, 기존 배열 순서대로 배치한다. */}

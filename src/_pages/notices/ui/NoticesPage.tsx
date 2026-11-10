@@ -1,8 +1,9 @@
 'use client';
 
+import { noticePath } from "@/shared/lib/routes";
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { NoticeList, noticeListOptions, noticePath } from '@/entities/notice';
+import { NoticeList, noticeListOptions } from '@/entities/notice';
 import { CollectNoticeForm } from '@/features/collect-notice';
 
 export function NoticesPage() {

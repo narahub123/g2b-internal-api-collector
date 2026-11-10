@@ -1,8 +1,8 @@
+import { noticePath } from "@/shared/lib/routes";
 import Link from "next/link";
 import { Button } from "@/shared/ui/button";
 import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
 import { BusinessBadge } from "@/shared/ui/business-badge";
-import { noticePath } from "../lib/notice-path";
 import type { NoticeSummary } from "../model/types";
 import { decodeHTMLStrict } from "entities";
 

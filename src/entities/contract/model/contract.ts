@@ -1,5 +1,5 @@
-import { g2bNumber } from '@/shared/model/g2b-number';
-import type { NoticeKey } from '@/entities/notice/model/types';
+import { g2bNumber } from "@/shared/model/g2b-number";
+import type { NoticeKey } from "@/entities/notice/model/types";
 
 export type ContractKey = { number: string; revision: string };
 type RecordRow = Record<string, unknown>;
@@ -16,8 +16,11 @@ export type Contract = ContractKey & ContractData & { collectedAt: string };
  * @returns 정규화된 차수. 숫자 한 자리부터 세 자리까지 허용한다.
  */
 export function contractRevision(value: unknown) {
-  if ((typeof value === 'string' || typeof value === 'number') && /^\d{1,3}$/.test(String(value).trim())) {
-    return String(Number(value)).padStart(2, '0');
+  if (
+    (typeof value === "string" || typeof value === "number") &&
+    /^\d{1,3}$/.test(String(value).trim())
+  ) {
+    return String(Number(value)).padStart(2, "0");
   }
 }
 
@@ -29,11 +32,15 @@ export function contractRevision(value: unknown) {
 export function contractKeys(rows: RecordRow[], notice: NoticeKey) {
   const keys = new Map<string, ContractKey>();
   for (const row of rows) {
-    if (g2bNumber(row?.bidPbancNo) !== notice.number ||
-        contractRevision(row?.bidPbancOrd)?.padStart(3, '0') !== notice.revision) continue;
+    if (
+      g2bNumber(row?.bidPbancNo) !== notice.number ||
+      contractRevision(row?.bidPbancOrd)?.padStart(3, "0") !== notice.revision
+    )
+      continue;
     const number = g2bNumber(row.ctrtNo);
     const revision = contractRevision(row.ctrtChgOrd);
-    if (number && revision) keys.set(`${number}/${revision}`, { number, revision });
+    if (number && revision)
+      keys.set(`${number}/${revision}`, { number, revision });
   }
   return [...keys.values()];
 }
@@ -43,15 +50,25 @@ export function contractKeys(rows: RecordRow[], notice: NoticeKey) {
  * @returns 나라장터 조회 파라미터 맵을 담은 요청 본문.
  */
 export function contractSearchBody({ number, revision }: ContractKey) {
-  return { dlSrchParamM: {
-    untyInspIgiNo: '', untyPyprNo: '', ctrtDmndRcptNo: '', ctrtDmndRcptOrd: '',
-    page: '1', pageSize: '10', ctrtNo: number, ctrtChgOrd: revision,
-    bizNo: '', bizOrd: '', prcmBsneSeCd: '',
-  } };
+  return {
+    dlSrchParamM: {
+      untyInspIgiNo: "",
+      untyPyprNo: "",
+      ctrtDmndRcptNo: "",
+      ctrtDmndRcptOrd: "",
+      page: "1",
+      pageSize: "10",
+      ctrtNo: number,
+      ctrtChgOrd: revision,
+      bizNo: "",
+      bizOrd: "",
+      prcmBsneSeCd: "",
+    },
+  };
 }
 
 function isRecord(value: unknown): value is RecordRow {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isRows(value: unknown): value is RecordRow[] {
@@ -63,19 +80,25 @@ function isRows(value: unknown): value is RecordRow[] {
  * @param response 나라장터 계약 상세 응답.
  * @returns 저장할 상세와 목록. 불일치 또는 응답 형식 오류 시 undefined.
  */
-export function parseContractResponse(key: ContractKey, response: unknown): ContractData | undefined {
+export function parseContractResponse(
+  key: ContractKey,
+  response: unknown,
+): ContractData | undefined {
   if (!isRecord(response)) return;
-  const { dlCtrtMngLstM: detail, dlCtrtEtpsLstL: companies, dlCtrtEtpsSvsLstL: services,
-    dlCtrtItemLstL: items } = response;
-  if (!isRecord(detail) || detail.ctrtNo !== key.number || contractRevision(detail.ctrtChgOrd) !== key.revision ||
-      !isRows(companies) || !isRows(services) || !isRows(items)) return;
+  const {
+    dlCtrtMngLstM: detail,
+    dlCtrtEtpsLstL: companies,
+    dlCtrtEtpsSvsLstL: services,
+    dlCtrtItemLstL: items,
+  } = response;
+  if (
+    !isRecord(detail) ||
+    detail.ctrtNo !== key.number ||
+    contractRevision(detail.ctrtChgOrd) !== key.revision ||
+    !isRows(companies) ||
+    !isRows(services) ||
+    !isRows(items)
+  )
+    return;
   return { detail, companies, services, items };
-}
-
-/** 계약현황 상세 경로를 만든다.
- * @param key 계약번호와 정규화된 변경차수.
- * @returns 앱의 계약현황 상세 경로.
- */
-export function contractPath({ number, revision }: ContractKey) {
-  return `/contracts/${encodeURIComponent(number)}/${encodeURIComponent(revision)}`;
 }

@@ -1,3 +1,4 @@
+import { openingResultApiPath } from "@/shared/lib/routes";
 import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
 import type { NoticeKey } from "@/entities/notice/model/types";
@@ -7,7 +8,7 @@ import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import { DetailTitle } from "@/shared/ui/detail-title";
 import type { G2bBusiness } from "@/shared/lib/g2b-business";
-import { openingResultPath, type OpeningResult } from "../model/opening-result";
+import { type OpeningResult } from "../model/opening-result";
 import {
   getOpeningResultDisplay,
   getOpeningResultPriceDisplay,
@@ -202,10 +203,7 @@ export function OpeningResultDetail({
         originalHref={originalHref}
         headingLevel="h2"
         actions={
-          <RecollectButton
-            endpoint={`/api${openingResultPath(noticeKey)}`}
-            compact
-          />
+          <RecollectButton endpoint={openingResultApiPath(noticeKey)} compact />
         }
       />
       {/* 공지사항이 없는 경우에는 제목과 빈 영역도 생성하지 않는다. */}
@@ -218,7 +216,8 @@ export function OpeningResultDetail({
                 key={`${notice.bbsNo}/${notice.pstNo}`}
                 className="wrap-anywhere whitespace-pre-wrap"
               >
-                ({formatG2bDisplayDateTime(display(notice.inptDt))}) {display(notice.pstNm)}
+                ({formatG2bDisplayDateTime(display(notice.inptDt))}){" "}
+                {display(notice.pstNm)}
               </p>
             ))}
           </dd>

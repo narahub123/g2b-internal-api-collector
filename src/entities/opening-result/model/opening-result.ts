@@ -161,11 +161,3 @@ export function groupOpeningResultQueries(queries: OpeningResultQuery[]) {
   }
   return groups;
 }
-
-/** 앱의 개찰결과 상세 경로. */
-export function openingResultPath({
-  number,
-  revision,
-}: Pick<OpeningResultKey, "number" | "revision">) {
-  return `/opening-results/${encodeURIComponent(number)}/${encodeURIComponent(revision)}`;
-}

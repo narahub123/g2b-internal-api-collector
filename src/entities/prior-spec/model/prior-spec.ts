@@ -1,4 +1,4 @@
-import { g2bNumber } from '@/shared/model/g2b-number';
+import { g2bNumber } from "@/shared/model/g2b-number";
 
 export type PriorSpec = {
   number: string;
@@ -16,13 +16,4 @@ export function getNoticePriorSpecNumber(payload: Record<string, unknown>) {
   const detail = payload.dmItemMap as Record<string, unknown> | undefined;
   const spec = payload.dlBfSpecM as Record<string, unknown> | undefined;
   return g2bNumber(detail?.bfSpecRegNo) ?? g2bNumber(spec?.bfSpecRegNo);
-}
-
-/**
- * 사전규격 상세 경로를 만든다.
- * @param number 사전규격등록번호.
- * @returns 앱의 사전규격 상세 경로.
- */
-export function priorSpecPath(number: string) {
-  return `/prior-specs/${encodeURIComponent(number)}`;
 }

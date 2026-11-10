@@ -1,4 +1,4 @@
-import { g2bNumber } from '@/shared/model/g2b-number';
+import { g2bNumber } from "@/shared/model/g2b-number";
 
 export type ContractRequestKey = { number: string; revision: string };
 
@@ -14,8 +14,11 @@ export type ContractRequest = ContractRequestKey & {
  * @returns 세 자리 차수 또는 undefined.
  */
 export function contractRequestRevision(value: unknown) {
-  if ((typeof value === 'string' || typeof value === 'number') && /^\d{1,3}$/.test(String(value).trim())) {
-    return String(value).trim().padStart(3, '0');
+  if (
+    (typeof value === "string" || typeof value === "number") &&
+    /^\d{1,3}$/.test(String(value).trim())
+  ) {
+    return String(value).trim().padStart(3, "0");
   }
 }
 
@@ -25,22 +28,21 @@ export function contractRequestRevision(value: unknown) {
  * @param notice 대상 공고번호와 차수.
  * @returns 중복을 제거한 계약요청 번호와 차수.
  */
-export function contractRequestKeys(rows: Record<string, unknown>[], notice: ContractRequestKey) {
+export function contractRequestKeys(
+  rows: Record<string, unknown>[],
+  notice: ContractRequestKey,
+) {
   const requests = new Map<string, ContractRequestKey>();
   for (const row of rows) {
-    if (g2bNumber(row?.bidPbancNo) !== notice.number || contractRequestRevision(row?.bidPbancOrd) !== notice.revision) continue;
+    if (
+      g2bNumber(row?.bidPbancNo) !== notice.number ||
+      contractRequestRevision(row?.bidPbancOrd) !== notice.revision
+    )
+      continue;
     const number = g2bNumber(row.ctrtDmndRcptNo);
     const revision = contractRequestRevision(row.ctrtDmndRcptOrd);
-    if (number && revision) requests.set(`${number}/${revision}`, { number, revision });
+    if (number && revision)
+      requests.set(`${number}/${revision}`, { number, revision });
   }
   return [...requests.values()];
-}
-
-/**
- * 계약요청 상세 경로를 만든다.
- * @param key 계약요청접수번호와 차수.
- * @returns 앱의 계약요청 상세 경로.
- */
-export function contractRequestPath({ number, revision }: ContractRequestKey) {
-  return `/contract-requests/${encodeURIComponent(number)}/${encodeURIComponent(revision)}`;
 }
