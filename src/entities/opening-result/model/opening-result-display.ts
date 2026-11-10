@@ -1,3 +1,4 @@
+import { noticePath } from "@/entities/notice/lib/notice-path";
 import {
   formatG2bDisplayText,
   type G2bDisplayFormat,
@@ -83,7 +84,10 @@ function displayFieldValue(key: string, value: unknown): unknown {
 }
 
 /** 표시할 열만 별도 행에 포맷하고 API 행은 보존한다. */
-function displayTableRows(rows: Data[], columns: DisplayTable["columns"]): Data[] {
+function displayTableRows(
+  rows: Data[],
+  columns: DisplayTable["columns"],
+): Data[] {
   return rows.map((row) => ({
     ...row,
     ...Object.fromEntries(
@@ -377,24 +381,15 @@ function noticeDisplayFields(
           ? (queryData.classification ?? bidInfo.bidClsfNo)
           : source[definition.key];
       if (!hasValue(value)) return [];
-      return [{
-        key: definition.key,
-        label: definition.label,
-        value: displayFieldValue(definition.key, value),
-      }];
+      return [
+        {
+          key: definition.key,
+          label: definition.label,
+          value: displayFieldValue(definition.key, value),
+        },
+      ];
     },
   );
-}
-
-/**
- * 공고번호와 차수를 내부 공고 상세 경로로 변환한다.
- * 원본 수집값은 변경하지 않으며 외부 나라장터 URL로 이동하지 않는다.
- * @param number 입찰공고번호.
- * @param revision 입찰공고차수.
- * @returns 내부 공고 상세 경로.
- */
-function noticeDetailHref(number: string, revision: string): string {
-  return `/notices/${encodeURIComponent(number)}/${encodeURIComponent(revision.padStart(3, "0"))}`;
 }
 
 // OnbsRsltAllUsrV-2.js 각 gridView의 header와 gBody를 순서대로 대조한 열 정의.
@@ -614,7 +609,10 @@ export function getOpeningResultDisplay(
         ({ key }) => key === "bidPbancNoPbancOrd",
       );
       if (noticeNumber && number && revision) {
-        noticeNumber.href = noticeDetailHref(number, revision);
+        noticeNumber.href = noticePath({
+          number,
+          revision: revision.padStart(3, "0"),
+        });
       }
       if (fields.length)
         sections.push({ kind: "fields", title: "공고정보", fields });

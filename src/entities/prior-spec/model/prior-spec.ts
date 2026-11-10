@@ -1,4 +1,4 @@
-import { g2bNumber } from '@/shared/model/g2b-number';
+import { g2bNumber } from "@/shared/model/g2b-number";
 
 export type PriorSpec = {
   number: string;
@@ -24,5 +24,5 @@ export function getNoticePriorSpecNumber(payload: Record<string, unknown>) {
  * @returns 앱의 사전규격 상세 경로.
  */
 export function priorSpecPath(number: string) {
-  return `/prior-specs/${encodeURIComponent(number)}`;
+  return `/admin/prior-specs/${encodeURIComponent(number)}`;
 }

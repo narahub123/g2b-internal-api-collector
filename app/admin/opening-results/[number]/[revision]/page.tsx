@@ -4,7 +4,7 @@ import { noticePath } from "@/entities/notice/lib/notice-path";
 import type { NoticeKey } from "@/entities/notice/model/types";
 import { getNoticeRepository } from "@/entities/notice/server";
 import {
-  openingResultPath,
+  openingResultApiPath,
   openingResultQueries,
   type OpeningResult,
 } from "@/entities/opening-result/model/opening-result";
@@ -89,7 +89,7 @@ export default async function Page({ params }: { params: Promise<NoticeKey> }) {
   return (
     <main className="mx-auto grid max-w-5xl gap-6 px-4 py-8 sm:px-6">
       <Button asChild variant="outline" className="w-fit">
-        <Link href={notice ? noticePath(key) : "/"}>
+        <Link href={notice ? noticePath(key) : "/admin"}>
           {notice ? "입찰공고로 돌아가기" : "목록으로 돌아가기"}
         </Link>
       </Button>
@@ -107,7 +107,7 @@ export default async function Page({ params }: { params: Promise<NoticeKey> }) {
           <p className="wrap-anywhere">
             이 공고의 유찰 상세를 아직 수집하지 않았습니다.
           </p>
-          <RecollectButton endpoint={`/api${openingResultPath(key)}`} initial />
+          <RecollectButton endpoint={openingResultApiPath(key)} initial />
         </div>
       )}
     </main>

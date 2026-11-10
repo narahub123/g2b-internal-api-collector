@@ -52,5 +52,5 @@ export function getNoticeOrderPlanNumber(payload: Record<string, unknown>) {
  * @returns 앱의 발주계획 상세 경로.
  */
 export function orderPlanPath(number: string) {
-  return `/order-plans/${encodeURIComponent(number)}`;
+  return `/admin/order-plans/${encodeURIComponent(number)}`;
 }

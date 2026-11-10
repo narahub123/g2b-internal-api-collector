@@ -4,7 +4,7 @@ import { DetailTitle } from "@/shared/ui/detail-title";
 import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
 import { RecollectButton } from "@/shared/ui/recollect-button";
 import {
-  contractRequestPath,
+  contractRequestApiPath,
   type ContractRequest,
 } from "../model/contract-request";
 
@@ -63,7 +63,7 @@ export function ContractRequestDetail({
         headingLevel="h2"
         actions={
           <RecollectButton
-            endpoint={`/api${contractRequestPath(contractRequest)}`}
+            endpoint={contractRequestApiPath(contractRequest)}
             compact
           />
         }

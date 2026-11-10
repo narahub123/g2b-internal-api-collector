@@ -162,10 +162,29 @@ export function groupOpeningResultQueries(queries: OpeningResultQuery[]) {
   return groups;
 }
 
-/** 앱의 개찰결과 상세 경로. */
-export function openingResultPath({
+function openingResultRoute({
   number,
   revision,
 }: Pick<OpeningResultKey, "number" | "revision">) {
   return `/opening-results/${encodeURIComponent(number)}/${encodeURIComponent(revision)}`;
+}
+
+/**
+ * 관리자 개찰결과 상세 화면으로 연결한다.
+ * @param key 입찰공고번호와 차수.
+ */
+export function openingResultPath(
+  key: Pick<OpeningResultKey, "number" | "revision">,
+) {
+  return `/admin${openingResultRoute(key)}`;
+}
+
+/**
+ * 개찰결과 재수집 요청에 쓰는 API 주소를 만든다.
+ * @param key 입찰공고번호와 차수.
+ */
+export function openingResultApiPath(
+  key: Pick<OpeningResultKey, "number" | "revision">,
+) {
+  return `/api${openingResultRoute(key)}`;
 }
