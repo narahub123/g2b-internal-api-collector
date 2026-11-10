@@ -2,6 +2,7 @@ import {
   resolveOpeningResultEndpoint,
   type OpeningResultEndpoint,
   type OpeningResultQuery,
+  type OpeningResultPrice,
 } from "./opening-result";
 
 type Data = Record<string, unknown>;
@@ -11,6 +12,10 @@ export type DisplayField = {
   value: unknown;
   /** 원본 화면의 클릭 가능한 공고번호만 내부 공고 상세로 연결한다. */
   href?: string;
+  /** 원본 JS에 정의된 조회/선택/안내 항목. 실제 클릭 동작은 UI에서 별도 연결한다. */
+  control?: "action" | "select" | "notice" | "detail";
+  /** 원본 WebSquare 요소 ID. */
+  originalId?: string;
 };
 export type DisplayTable = {
   columns: { key: string; label: string }[];
@@ -30,78 +35,293 @@ const hasValue = (value: unknown) =>
   value !== null && value !== undefined && value !== "";
 const field = (key: string, label: string) => ({ key, label });
 
-// OnbsRsltAllUsrV-2.js의 개찰완료 공고정보 표시 순서.
-// 접수 시작/마감일시 및 개찰예정일시는 이 영역의 화면 필드가 아니므로 표시하지 않는다.
-const noticeFields = [
-  field("bidPbancNoPbancOrd", "입찰공고번호"),
-  field("usrDocNoVal", "참조번호"),
-  field("realOnbsDt", "실제개찰일시"),
-  field("bidPbancNm", "입찰공고명"),
-  field("pbancInstUntyGrpNm", "공고기관"),
-  field("dmstNm", "수요기관"),
-  field("bidBlffNm", "집행관"),
-  field("picNm", "공고담당자"),
-] as const;
-
-// OnbsRsltAllUsrV-2.js의 각 sBid*Box 공고정보 테이블에 실제로 배치된 필드.
-// API 응답에 값이 있더라도 해당 업무 화면에 없는 필드는 노출하지 않는다.
-// 용역의 설계공모(isPssrp)는 기본 행을 숨기고 대체 행을 표시하지만,
-// 공고기관·수요기관·집행관의 필드 자체는 두 행에 공통으로 존재한다.
-const noticeVisibleKeys: Partial<
-  Record<OpeningResultEndpoint, readonly string[]>
-> = {
-  // 물품: 공고담당자까지 표시
-  selectOnbsRsltSbidGods: [
-    "bidPbancNoPbancOrd",
-    "usrDocNoVal",
-    "realOnbsDt",
-    "bidPbancNm",
-    "pbancInstUntyGrpNm",
-    "dmstNm",
-    "bidBlffNm",
-    "picNm",
-  ],
-  // 용역: 설계공모 여부에 따라 행만 교체하며 공고담당자 필드는 없음
-  selectOnbsRsltSbidSrvc: [
-    "bidPbancNoPbancOrd",
-    "usrDocNoVal",
-    "realOnbsDt",
-    "bidPbancNm",
-    "pbancInstUntyGrpNm",
-    "dmstNm",
-    "bidBlffNm",
-  ],
-  // 공사: 공고담당자 필드는 없음
-  selectOnbsRsltSbidCstn: [
-    "bidPbancNoPbancOrd",
-    "usrDocNoVal",
-    "realOnbsDt",
-    "bidPbancNm",
-    "pbancInstUntyGrpNm",
-    "dmstNm",
-    "bidBlffNm",
-  ],
-  // 외자: 공고기관·집행관·공고담당자 필드는 없음
-  selectOnbsRsltSbidFrcp: [
-    "bidPbancNoPbancOrd",
-    "usrDocNoVal",
-    "realOnbsDt",
-    "bidPbancNm",
-    "dmstNm",
-  ],
-  // 리스: 참조번호 필드가 없고, 입찰분류번호는 별도의 화면 항목
-  selectOnbsRsltSbidLase: [
-    "bidPbancNoPbancOrd",
-    "realOnbsDt",
-    "bidPbancNm",
-    "pbancInstUntyGrpNm",
-    "dmstNm",
-    "picNm",
-    "bidBlffNm",
-  ],
-  // 비축: 참조번호·기관·담당자 필드가 없고, 입찰분류번호는 별도의 화면 항목
-  selectOnbsRsltSbidRsrv: ["bidPbancNoPbancOrd", "realOnbsDt", "bidPbancNm"],
+/**
+ * OnbsRsltAllUsrV-2.js 각 sBid*Box의 공고정보 행 정의.
+ * 빈 값의 일반 필드는 표시하지 않되, 정의 자체는 절대 삭제하지 않는다.
+ * 조회/선택/안내 행은 값 필드와 구별하여 원본 요소 ID를 보존한다.
+ * UI에서 아직 구현하지 않은 동작을 가짜 버튼이나 링크로 대체하지 않는다.
+ */
+type NoticeFieldDefinition = {
+  key: string;
+  label: string;
+  source?: "bidInfo" | "etcData" | "query" | "detail";
+  control?: DisplayField["control"];
+  originalId?: string;
 };
+const bid = (key: string, label: string): NoticeFieldDefinition => ({
+  key,
+  label,
+  source: "bidInfo",
+});
+const etc = (key: string, label: string): NoticeFieldDefinition => ({
+  key,
+  label,
+  source: "etcData",
+});
+const control = (
+  key: string,
+  label: string,
+  kind: NonNullable<DisplayField["control"]>,
+  originalId?: string,
+): NoticeFieldDefinition => ({ key, label, control: kind, originalId });
+
+const common = {
+  number: bid("bidPbancNoPbancOrd", "입찰공고번호"),
+  reference: bid("usrDocNoVal", "참조번호"),
+  date: bid("realOnbsDt", "실제개찰일시"),
+  name: bid("bidPbancNm", "입찰공고명"),
+  agency: bid("pbancInstUntyGrpNm", "공고기관"),
+  demand: bid("dmstNm", "수요기관"),
+  officer: bid("bidBlffNm", "집행관"),
+  manager: bid("picNm", "공고담당자"),
+  review: control("qualificationReview", "적격심사결과", "action"),
+  price: control("reservePrice", "복수예비가격 및 예정가격", "detail"),
+  equalPrice: control("samePrice", "동일가격 추첨결과", "action"),
+  technical: control("technicalEvaluation", "기술평가점수 조회", "action"),
+  proposal: control("proposalEvaluation", "규격제안서 평가결과", "action"),
+  notice: control("precautions", "유의사항", "notice"),
+  rebid: control("rebidNumber", "재입찰번호", "select"),
+  outcome: control("bidOutcome", "입찰결과", "notice"),
+} as const;
+
+const noticeFieldsByEndpoint: Partial<
+  Record<OpeningResultEndpoint, readonly NoticeFieldDefinition[]>
+> = {
+  selectOnbsRsltSbidGods: [
+    common.number,
+    common.reference,
+    common.date,
+    common.name,
+    common.agency,
+    common.demand,
+    { ...common.review, originalId: "btnQlemRslt" },
+    common.officer,
+    { ...common.price, originalId: "godsBtnRsvePrce" },
+    common.manager,
+    { ...common.equalPrice, originalId: "godsBtnSamePrice" },
+    { ...common.technical, originalId: "btnGodsEvalRslt" },
+    { ...common.proposal, originalId: "btnSpecPrplEvlRslt" },
+    common.notice,
+    { ...common.rebid, originalId: "godsSelectBidPrgrsOrd" },
+    { ...common.outcome, originalId: "godsBidPrgrsOrdTxt" },
+  ],
+  selectOnbsRsltSbidSrvc: [
+    common.number,
+    common.reference,
+    common.date,
+    common.name,
+    common.agency,
+    common.demand,
+    { ...common.review, originalId: "srvcBtnQlemRslt" },
+    common.officer,
+    { ...common.price, originalId: "srvcBtnRsvePrce" },
+    { ...common.equalPrice, originalId: "srvcBtnSamePrice" },
+    { ...common.technical, originalId: "btnSrvcEvalRslt" },
+    { ...common.proposal, originalId: "srvcBtnSpecPrplEvlRslt" },
+    control(
+      "designEvaluation",
+      "설계공모 평가결과",
+      "action",
+      "srvcBtnDesignPbcsEvlRslt",
+    ),
+    common.notice,
+    { ...common.rebid, originalId: "srvcSelectBidPrgrsOrd" },
+    { ...common.outcome, originalId: "srvcBidPrgrsOrdTxt" },
+  ],
+  selectOnbsRsltSbidCstn: [
+    common.number,
+    common.reference,
+    common.date,
+    common.name,
+    common.agency,
+    common.demand,
+    { ...common.review, originalId: "cstnBtnQlemRslt" },
+    common.officer,
+    { ...common.price, originalId: "cstnBtnRsvePrce" },
+    etc("budget", "공사예정금액(추정금액)"),
+    { ...common.equalPrice, originalId: "cstnBtnSamePrice" },
+    control(
+      "comprehensiveReview",
+      "종합심사/종합평가 입찰금액 심사결과",
+      "action",
+      "btnBidAmtSrngRsltExcelDwnld",
+    ),
+    common.notice,
+    { ...common.rebid, originalId: "cstnSelectBidPrgrsOrd" },
+    { ...common.outcome, originalId: "cstnBidPrgrsOrdTxt" },
+  ],
+  selectOnbsRsltSbidFrcp: [
+    common.number,
+    common.reference,
+    common.date,
+    common.name,
+    common.demand,
+    etc("bidQty", "수량"),
+    etc("unit", "단위"),
+    control("prNo", "PR No.", "notice"),
+    { ...common.technical, originalId: "btnTechElgd" },
+    { ...common.rebid, originalId: "frcpSelectBidPrgrsOrd" },
+    { ...common.outcome, originalId: "frcpBidPrgrsOrdTxt" },
+  ],
+  selectOnbsRsltSbidLase: [
+    common.number,
+    { key: "bidClsfNo", label: "입찰분류", source: "query" },
+    common.date,
+    common.name,
+    common.agency,
+    common.demand,
+    common.manager,
+    common.officer,
+    common.notice,
+    { ...common.rebid, originalId: "laseSelectBidPrgrsOrd" },
+    { ...common.outcome, originalId: "laseBidPrgrsOrdTxt" },
+  ],
+  selectOnbsRsltSbidRsrv: [
+    common.number,
+    { key: "bidClsfNo", label: "입찰분류", source: "query" },
+    { ...common.date, label: "개찰일시" },
+    common.name,
+    etc("itrlPrcmItemIdnfNm", "세부품명"),
+    etc("itemDtlSpecCn", "세부품명(규격)"),
+    { ...common.equalPrice, originalId: "rsrvBtnSamePrice" },
+    common.notice,
+    { ...common.rebid, originalId: "rsrvSelectBidPrgrsOrd" },
+    { ...common.outcome, originalId: "rsrvBidPrgrsOrdTxt" },
+  ],
+};
+
+/** 원본 화면의 전체 필드 정의(값이나 표시 조건과 무관). */
+export function getOpeningResultNoticeFieldDefinitions(
+  endpoint: OpeningResultEndpoint,
+): readonly NoticeFieldDefinition[] {
+  return noticeFieldsByEndpoint[endpoint] ?? [];
+}
+
+/**
+ * OnbsRsltAllUsrV-2.js의 개찰완료 초기 hide 및 API 응답 후 show/hide 조건.
+ * 필드 정의(noticeFieldsByEndpoint)는 수정하지 않는다.
+ */
+function isNoticeControlVisible(
+  endpoint: OpeningResultEndpoint,
+  key: string,
+  bidInfo: Data,
+  etcData: Data,
+): boolean {
+  const isTruthy = (value: unknown) => Boolean(value);
+  const opened = etcData.openYn === "Y";
+  const isDesign =
+    endpoint === "selectOnbsRsltSbidSrvc" && isTruthy(etcData.isPssrp);
+  const rebidVisible =
+    isTruthy(etcData.isRebidResultShow) &&
+    Number(etcData.maxBidPrgrsOrd) > 0 &&
+    (bidInfo.bidMthdCd === "입180002" || bidInfo.bidMthdCd === "입180008");
+
+  switch (key) {
+    case "qualificationReview":
+      return (
+        !isDesign &&
+        (bidInfo.scsbdMthdCd === "낙030001" ||
+          bidInfo.scsbdMthdCd === "낙030033")
+      );
+    case "reservePrice":
+      // 용역 설계공모에서는 기본사항 행 자체를 숨긴다.
+      return !isDesign;
+    case "samePrice":
+      return etcData.isSamePriceYn === "Y";
+    case "technicalEvaluation":
+      if (endpoint === "selectOnbsRsltSbidFrcp")
+        return etcData.negoYn === "Y" && etcData.eeOrderEvalYn === "Y";
+      return (
+        opened &&
+        (isTruthy(etcData.isNego) ||
+          (isTruthy(etcData.isCmpetDialgBid) && etcData.epropoEvalYn === "Y"))
+      );
+    case "proposalEvaluation":
+      return (
+        opened &&
+        (isTruthy(etcData.isTwoStepCompetYn) ||
+          isTruthy(etcData.isStdPrcConcurYn))
+      );
+    case "designEvaluation":
+      return isDesign && opened;
+    case "comprehensiveReview":
+      return (
+        isTruthy(etcData.isGnrlzJdgmnScsbid) &&
+        isTruthy(etcData.isGnrlzJdgmnScsbidResultYn)
+      );
+    case "prNo":
+      // 외자 조회 후 원본 JS에서 prNoGrp.hide()를 호출한다.
+      return false;
+    case "rebidNumber":
+    case "bidOutcome":
+      // 입찰결과 표시도 재입찰번호 선택 그룹을 표시할 때 설정한다.
+      return rebidVisible;
+    case "precautions":
+      if (
+        endpoint === "selectOnbsRsltSbidGods" ||
+        endpoint === "selectOnbsRsltSbidSrvc"
+      )
+        return (
+          isTruthy(etcData.isCmpetDialgBid) ||
+          isTruthy(etcData.isNego) ||
+          bidInfo.prnmntPrceDcsnMthoCd !== "예050001" ||
+          isDesign
+        );
+      if (endpoint === "selectOnbsRsltSbidCstn")
+        return (
+          isTruthy(etcData.isTunkeyBid) ||
+          isTruthy(etcData.isNewQlfdJudgeAamtExclWbidMethodCdYn) ||
+          bidInfo.prnmntPrceDcsnMthoCd !== "예050001"
+        );
+      return true;
+    default:
+      // 원본에 별도의 숨김 조건이 없는 항목은 임의로 제외하지 않는다.
+      return true;
+  }
+}
+
+function noticeDisplayFields(
+  endpoint: OpeningResultEndpoint,
+  query: OpeningResultQuery,
+  detail: Data,
+): DisplayField[] {
+  const bidInfo = isData(detail.bidInfo) ? detail.bidInfo : {};
+  const etcData = isData(detail.etcData) ? detail.etcData : {};
+  const queryData = query as unknown as Data;
+  return getOpeningResultNoticeFieldDefinitions(endpoint).flatMap(
+    (definition) => {
+      if (definition.control) {
+        if (!isNoticeControlVisible(endpoint, definition.key, bidInfo, etcData))
+          return [];
+        // UI에 연결되지 않은 조회 동작을 실제 데이터인 것처럼 표시하지 않는다.
+        // 정의와 원본 ID를 유지하여 이후 UI 연결 시 원본 위치에 삽입한다.
+        return [
+          {
+            key: definition.key,
+            label: definition.label,
+            value: undefined,
+            control: definition.control,
+            originalId: definition.originalId,
+          },
+        ];
+      }
+      const source =
+        definition.source === "etcData"
+          ? etcData
+          : definition.source === "query"
+            ? queryData
+            : definition.source === "detail"
+              ? detail
+              : bidInfo;
+      const value =
+        definition.key === "bidClsfNo"
+          ? (queryData.classification ?? bidInfo.bidClsfNo)
+          : source[definition.key];
+      if (!hasValue(value)) return [];
+      return [{ key: definition.key, label: definition.label, value }];
+    },
+  );
+}
 
 /**
  * 공고번호와 차수를 내부 공고 상세 경로로 변환한다.
@@ -310,13 +530,8 @@ export function getOpeningResultDisplay(
   } else {
     const bidInfo = isData(detail.bidInfo) ? detail.bidInfo : undefined;
     if (bidInfo) {
-      const visibleKeys = noticeVisibleKeys[endpoint] ?? [];
-      const fields = selectedFields(
-        bidInfo,
-        noticeFields.filter(({ key }) => visibleKeys.includes(key)),
-      );
+      const fields = noticeDisplayFields(endpoint, query, detail);
       if (
-        visibleKeys.includes("bidPbancNoPbancOrd") &&
         !fields.some(({ key }) => key === "bidPbancNoPbancOrd") &&
         hasValue(bidInfo.bidPbancNo)
       ) {
@@ -355,4 +570,104 @@ export function getOpeningResultDisplay(
     table: { rows, columns },
   });
   return { status, sections };
+}
+
+/** RsvePrceCmpuRsltPL.js의 팝업 섹션 순서와 조건부 행을 적용한다. */
+export function getOpeningResultPriceDisplay(
+  price: OpeningResultPrice,
+): OpeningResultDisplay {
+  const pbanc = price.pbancInfo;
+  const amount = price.bsisAmtInfo ?? {};
+  const calc = price.plrlRsvePrceCalcInfo ?? {};
+  const pcsp = price.pcspInfo ?? {};
+  const method = pbanc.prnmntPrceDcsnMthoCd;
+  const isMultiple = method === "예050003";
+  const isNoPrice = method === "예050001";
+  const isRate = pbanc.prspFeeRatBdngYn === "Y";
+  const isInterest =
+    method === "예050002" &&
+    ["10", "11", "14"].includes(String(pbanc.prcmBsneSeCd ?? ""));
+  const fields: DisplayField[] = [];
+  const add = (key: string, label: string, value: unknown) => {
+    fields.push({ key, label, value });
+  };
+
+  // 공고정보: 원본 팝업의 테이블 행 순서.
+  add("bidPbancNoPbancOrd", "입찰공고번호", pbanc.bidPbancNoPbancOrd);
+  add("bidClsfNo", "입찰분류", pbanc.bidClsfNo);
+  add("bidPrgrsOrd", "재입찰번호", pbanc.bidPrgrsOrd);
+  add("bidPbancNm", "입찰공고명", pbanc.bidPbancNm);
+  add("usrDocNoVal", "참조번호", pbanc.usrDocNoVal);
+  add("lcrtTyCdNm", "계약법구분", pbanc.lcrtTyCdNm);
+  add("realOnbsPrnmntDt", "실제 개찰일시", pbanc.realOnbsPrnmntDt);
+
+  if (
+    hasValue(calc.prceCrtRangRtNm) &&
+    isMultiple &&
+    ["입180002", "입180008", "입180010"].includes(String(pbanc.bidMthdCd ?? ""))
+  ) {
+    add(
+      "prceCrtRangRtNm",
+      isRate ? "예비수수료율범위" : "예비가격범위",
+      calc.prceCrtRangRtNm,
+    );
+    add(
+      "upRsvePrceCrtTnum",
+      isRate ? "기초수수료율 상위갯수" : "기초금액 상위갯수",
+      calc.upRsvePrceCrtTnum,
+    );
+    add(
+      "inptDt",
+      isRate ? "복수예비수수료율 작성일시" : "복수예비가격 작성일시",
+      calc.inptDt,
+    );
+  }
+  if (isInterest) {
+    add("goalItrt", "목표금리", amount.goalItrt);
+  } else if (!isNoPrice) {
+    add("pnpr", isRate ? "예정수수료율" : "예정가격", amount.pnpr);
+    add("bsamt", isRate ? "기초수수료율" : "기초금액", amount.bsamt);
+  }
+  if (
+    String(pbanc.prcmBsneSeCd ?? "") === "07" &&
+    pcsp.isPureConstExpsTrget === "Y" &&
+    hasValue(amount.pnprPcsp)
+  ) {
+    add("pnprPcsp", "예정가격 중 순공사원가", amount.pnprPcsp);
+    add("bsamtPcsp", "기초금액 중 순공사원가", pcsp.bsamtPcsp);
+  }
+
+  const sections: OpeningResultDisplay["sections"] = [
+    { kind: "fields", title: "공고정보", fields },
+  ];
+  if (isMultiple) {
+    sections.push({
+      kind: "table",
+      title: "예비가격정보",
+      table: {
+        columns: [
+          field("plrlRsvePrceSqno1", "구분"),
+          field("plrlRsvePrce1", isRate ? "수수료율(%)" : "금액(원)"),
+          field("drawNotm1", "추첨횟수"),
+          field("plrlRsvePrceSqno2", "구분"),
+          field("plrlRsvePrce2", isRate ? "수수료율(%)" : "금액(원)"),
+          field("drawNotm2", "추첨횟수"),
+        ],
+        rows: price.rsvePrceList,
+      },
+    });
+  } else if (isNoPrice) {
+    sections.push({
+      kind: "fields",
+      title: "예비가격정보",
+      fields: [
+        {
+          key: "noPrice",
+          label: "안내",
+          value: "비예가 방식입니다. 데이터가 존재하지 않습니다.",
+        },
+      ],
+    });
+  }
+  return { status: "", sections };
 }

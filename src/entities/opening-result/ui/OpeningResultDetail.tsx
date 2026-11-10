@@ -7,26 +7,75 @@ import { RecollectButton } from "@/shared/ui/recollect-button";
 import { openingResultPath, type OpeningResult } from "../model/opening-result";
 import {
   getOpeningResultDisplay,
+  getOpeningResultPriceDisplay,
   type DisplayField,
   type DisplayTable,
+  type OpeningResultDisplay,
 } from "../model/opening-result-display";
 
+/**
+ * API 응답값을 화면에 표시할 문자열로 변환한다.
+ * 문자열은 HTML 엔티티를 해제하고, 빈 값은 빈 문자열로 유지한다.
+ * @param value 표시할 원본 값.
+ * @returns 화면에 표시할 문자열.
+ */
 function display(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
+  if (value === null || value === undefined || value === "") return "";
   if (typeof value === "string") return decodeHTMLStrict(value);
   if (typeof value === "number" || typeof value === "boolean")
     return String(value);
   return JSON.stringify(value);
 }
 
-function Fields({ fields }: { fields: DisplayField[] }) {
+type PriceSections = OpeningResultDisplay["sections"];
+
+/**
+ * 공고정보의 필드를 정의된 순서대로 출력한다.
+ * reservePrice는 일반 텍스트 값이 아니라 같은 개찰차수의 가격 상세 섹션을
+ * 해당 필드의 값 영역에 중첩 아코디언으로 표시한다.
+ * @param fields 표시할 공고정보 필드 목록.
+ * @param priceSections 해당 개찰차수의 가격 상세 섹션. 없으면 중첩 내용을 표시하지 않는다.
+ */
+function Fields({
+  fields,
+  priceSections = [],
+}: {
+  fields: DisplayField[];
+  priceSections?: PriceSections;
+}) {
   return (
     <dl className="grid gap-3 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]">
       {fields.map(({ key, label, value, href }) => (
         <div key={key} className="grid gap-1 sm:contents">
           <dt className="text-muted-foreground">{label}</dt>
-          <dd className="wrap-anywhere whitespace-pre-wrap">
-            {href ? (
+          <dd className="min-w-0 wrap-anywhere whitespace-pre-wrap">
+            {/* 가격 상세는 별도 최상위 섹션을 만들지 않고 원래 필드 위치에 삽입한다. */}
+            {key === "reservePrice" ? (
+              priceSections.length > 0 ? (
+                <div className="grid min-w-0 gap-2">
+                  {priceSections.map((section, index) => (
+                    <Accordion
+                      key={`${section.title}/${index}`}
+                      type="multiple"
+                      defaultValue={[section.title]}
+                      className="min-w-0 border-t text-sm [&_button]:py-2 [&_button]:text-sm"
+                    >
+                      <DetailAccordionSection
+                        title={section.title}
+                        heading="h3"
+                      >
+                        {/* 가격 상세도 필드형과 표형 섹션을 동일한 표시 컴포넌트로 처리한다. */}
+                        {section.kind === "fields" ? (
+                          <Fields fields={section.fields} />
+                        ) : (
+                          <ResultTable table={section.table} />
+                        )}
+                      </DetailAccordionSection>
+                    </Accordion>
+                  ))}
+                </div>
+              ) : null
+            ) : href ? (
               <Link
                 href={href}
                 className="text-primary underline underline-offset-2"
@@ -43,6 +92,11 @@ function Fields({ fields }: { fields: DisplayField[] }) {
   );
 }
 
+/**
+ * 개찰결과 및 예비가격정보의 표를 공통 렌더링한다.
+ * 행 또는 표시 가능한 열이 없으면 빈 표 대신 해당 사유를 안내한다.
+ * @param table 표시 열 정의와 행 데이터.
+ */
 function ResultTable({ table }: { table: DisplayTable }) {
   if (!table.rows.length)
     return (
@@ -85,6 +139,14 @@ function ResultTable({ table }: { table: DisplayTable }) {
   );
 }
 
+/**
+ * 개찰결과 응답을 공고정보·목록 등의 화면 섹션으로 구성한다.
+ * 가격 상세는 동일 개찰차수의 공고정보 필드에만 연결하며,
+ * 공지사항은 게시글 식별자로 중복을 제거해 결과 섹션보다 먼저 표시한다.
+ * @param noticeKey 현재 입찰공고 식별자.
+ * @param results 개찰차수별 조회 결과.
+ * @param title 화면 제목. 생략하면 기본 제목을 사용한다.
+ */
 export function OpeningResultDetail({
   noticeKey,
   results,
@@ -95,14 +157,24 @@ export function OpeningResultDetail({
   title?: string;
 }) {
   // 개찰차수와 분류는 데이터 그룹 키일 뿐, 원본 화면에 없는 제목으로 출력하지 않는다.
-  const sections = results.flatMap((result) =>
-    result.results.flatMap(({ query, detail }) =>
+  const sections = results.flatMap((result) => {
+    // 가격 상세가 없는 개찰차수에는 빈 목록을 전달해 중첩 내용을 표시하지 않는다.
+    const priceSections = result.price
+      ? getOpeningResultPriceDisplay(result.price).sections
+      : [];
+    return result.results.flatMap(({ query, detail }) =>
       getOpeningResultDisplay(query, detail).sections.map((section, index) => ({
+        // 개찰차수·업무 분류·섹션 순서로 서로 다른 조회 결과의 렌더링 키를 구분한다.
         key: `${result.openingRevision}/${query.classification}/${index}`,
         section,
+        // 동일 개찰차수의 가격 정보는 공고정보 필드에만 연결한다.
+        priceSections:
+          section.kind === "fields" && section.title === "공고정보"
+            ? priceSections
+            : [],
       })),
-    ),
-  );
+    );
+  });
 
   // 공지사항은 개찰결과 섹션보다 앞에 배치하며, 같은 게시글은 한 번만 표시한다.
   const notices = Array.from(
@@ -126,6 +198,7 @@ export function OpeningResultDetail({
         </div>
         <RecollectButton endpoint={`/api${openingResultPath(noticeKey)}`} />
       </header>
+      {/* 공지사항이 없는 경우에는 제목과 빈 영역도 생성하지 않는다. */}
       {notices.length > 0 && (
         <dl className="grid gap-2 border-t pt-4  pl-4 -mb-2 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]">
           <dt className="font-medium">공지사항</dt>
@@ -142,7 +215,7 @@ export function OpeningResultDetail({
         </dl>
       )}
       <div className="grid min-w-0 gap-3">
-        {sections.map(({ key, section }) => (
+        {sections.map(({ key, section, priceSections }) => (
           <Accordion
             key={key}
             type="multiple"
@@ -151,7 +224,7 @@ export function OpeningResultDetail({
           >
             <DetailAccordionSection title={section.title} heading="h3">
               {section.kind === "fields" ? (
-                <Fields fields={section.fields} />
+                <Fields fields={section.fields} priceSections={priceSections} />
               ) : (
                 <ResultTable table={section.table} />
               )}

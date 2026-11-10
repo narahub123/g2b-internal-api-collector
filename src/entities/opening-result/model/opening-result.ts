@@ -32,12 +32,23 @@ export type OpeningResultNotice = {
   pstNm: string;
 };
 
+/** 복수예비가격 및 예정가격 API 원본 응답. 화면 표시 여부와 무관하게 보존한다. */
+export type OpeningResultPrice = {
+  pbancInfo: Record<string, unknown>;
+  bsisAmtInfo: Record<string, unknown> | null;
+  pcspInfo: Record<string, unknown> | null;
+  plrlRsvePrceCalcInfo: Record<string, unknown> | null;
+  rsvePrceList: Record<string, unknown>[];
+};
+
 export type OpeningResult = OpeningResultKey & {
   collectedAt: string;
   // 기존 유찰 저장 자료의 { query, detail } 형태는 유지한다.
   results: { query: OpeningResultQuery; detail: Record<string, unknown> }[];
   // undefined: 미조회, null: 조회 완료·공지 없음, 객체: 표시할 공지
   notice?: OpeningResultNotice | null;
+  // undefined: 미조회. 조회 성공 시 원본 가격 응답을 보존한다.
+  price?: OpeningResultPrice;
 };
 
 const statusByCode: Record<string, OpeningResultStatus> = {
