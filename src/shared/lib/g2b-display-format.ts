@@ -1,3 +1,5 @@
+import { formatG2bPhone } from "./g2b-phone";
+
 /** 숫자 표시에 사용하는 자릿수별 포맷터. */
 const numberFormats = {
   0: new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 }),
@@ -71,4 +73,38 @@ export function formatG2bDisplayDateTime(value: string): string {
 
   const [, year, month, day, hour, minute, second] = compact;
   return `${year}/${month}/${day} ${hour}:${minute}${second ? `:${second}` : ""}`;
+}
+
+/** 화면의 필드 정의에서 선택할 공통 표시 형식. */
+export type G2bDisplayFormat =
+  | "integer"
+  | "decimal"
+  | "date"
+  | "dateTime"
+  | "phone";
+
+/**
+ * 표시 문자열에 필드별 공통 포맷을 적용한다.
+ * @param value 표시 단계에서 문자열로 준비한 값.
+ * @param format 필드에 선언된 형식. decimal은 원본 소수 자릿수를 보존한다.
+ * @returns 선택한 형식의 표시값.
+ */
+export function formatG2bDisplayText(
+  value: string,
+  format?: G2bDisplayFormat,
+): string {
+  switch (format) {
+    case "integer":
+      return formatG2bDisplayNumber(value, 0);
+    case "decimal":
+      return formatG2bDisplayRate(value);
+    case "date":
+      return formatG2bDisplayDate(value.trim(), "date");
+    case "dateTime":
+      return formatG2bDisplayDateTime(value);
+    case "phone":
+      return formatG2bPhone(value) ?? value;
+    default:
+      return value;
+  }
 }

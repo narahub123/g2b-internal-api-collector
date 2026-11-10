@@ -1,4 +1,8 @@
 import {
+  formatG2bDisplayText,
+  type G2bDisplayFormat,
+} from "@/shared/lib/g2b-display-format";
+import {
   resolveOpeningResultEndpoint,
   type OpeningResultEndpoint,
   type OpeningResultQuery,
@@ -34,6 +38,61 @@ const isData = (value: unknown): value is Data =>
 const hasValue = (value: unknown) =>
   value !== null && value !== undefined && value !== "";
 const field = (key: string, label: string) => ({ key, label });
+
+// 상태별 개찰 API와 예비가격 API에서 실제로 노출하는 수치·일시만 변환한다.
+// 외자·비축 가격과 수수료율은 응답이 제공한 소수부를 보존한다.
+const fieldFormats: Readonly<Record<string, G2bDisplayFormat>> = {
+  realOnbsDt: "dateTime",
+  realOnbsPrnmntDt: "dateTime",
+  slprRcptDdlnDt: "dateTime",
+  jsagrSbmsnDdlnDt: "dateTime",
+  onbsPrnmntDt: "dateTime",
+  slprRcptnDt: "dateTime",
+  inptDt: "dateTime",
+  budget: "integer",
+  bidQty: "decimal",
+  prchsDtlItemQty: "decimal",
+  prchsDtlItemUprc: "decimal",
+  onbsRnkg: "integer",
+  bdngAmt: "decimal",
+  bdrt: "decimal",
+  hopeQty: "decimal",
+  bpfaaExclBdrt: "decimal",
+  bdngItrt: "decimal",
+  bidWght: "decimal",
+  trffRat: "decimal",
+  lmeOfntPrce: "decimal",
+  cvrsUprc: "decimal",
+  upRsvePrceCrtTnum: "integer",
+  goalItrt: "decimal",
+  pnpr: "decimal",
+  bsamt: "decimal",
+  pnprPcsp: "integer",
+  bsamtPcsp: "integer",
+  plrlRsvePrce1: "decimal",
+  plrlRsvePrce2: "decimal",
+  drawNotm1: "integer",
+  drawNotm2: "integer",
+};
+
+function displayFieldValue(key: string, value: unknown): unknown {
+  const format = fieldFormats[key];
+  return format && (typeof value === "string" || typeof value === "number")
+    ? formatG2bDisplayText(String(value), format)
+    : value;
+}
+
+/** 표시할 열만 별도 행에 포맷하고 API 행은 보존한다. */
+function displayTableRows(rows: Data[], columns: DisplayTable["columns"]): Data[] {
+  return rows.map((row) => ({
+    ...row,
+    ...Object.fromEntries(
+      columns
+        .filter(({ key }) => fieldFormats[key] && Object.hasOwn(row, key))
+        .map(({ key }) => [key, displayFieldValue(key, row[key])]),
+    ),
+  }));
+}
 
 /**
  * OnbsRsltAllUsrV-2.js 각 sBid*Box의 공고정보 행 정의.
@@ -318,7 +377,11 @@ function noticeDisplayFields(
           ? (queryData.classification ?? bidInfo.bidClsfNo)
           : source[definition.key];
       if (!hasValue(value)) return [];
-      return [{ key: definition.key, label: definition.label, value }];
+      return [{
+        key: definition.key,
+        label: definition.label,
+        value: displayFieldValue(definition.key, value),
+      }];
     },
   );
 }
@@ -567,7 +630,7 @@ export function getOpeningResultDisplay(
   sections.push({
     kind: "table",
     title: endpoint === "selectOnbsRsltRbid" ? "개찰결과" : "목록",
-    table: { rows, columns },
+    table: { rows: displayTableRows(rows, columns), columns },
   });
   return { status, sections };
 }
@@ -589,7 +652,7 @@ export function getOpeningResultPriceDisplay(
     ["10", "11", "14"].includes(String(pbanc.prcmBsneSeCd ?? ""));
   const fields: DisplayField[] = [];
   const add = (key: string, label: string, value: unknown) => {
-    fields.push({ key, label, value });
+    fields.push({ key, label, value: displayFieldValue(key, value) });
   };
 
   // 공고정보: 원본 팝업의 테이블 행 순서.
@@ -641,19 +704,20 @@ export function getOpeningResultPriceDisplay(
     { kind: "fields", title: "공고정보", fields },
   ];
   if (isMultiple) {
+    const columns = [
+      field("plrlRsvePrceSqno1", "구분"),
+      field("plrlRsvePrce1", isRate ? "수수료율(%)" : "금액(원)"),
+      field("drawNotm1", "추첨횟수"),
+      field("plrlRsvePrceSqno2", "구분"),
+      field("plrlRsvePrce2", isRate ? "수수료율(%)" : "금액(원)"),
+      field("drawNotm2", "추첨횟수"),
+    ];
     sections.push({
       kind: "table",
       title: "예비가격정보",
       table: {
-        columns: [
-          field("plrlRsvePrceSqno1", "구분"),
-          field("plrlRsvePrce1", isRate ? "수수료율(%)" : "금액(원)"),
-          field("drawNotm1", "추첨횟수"),
-          field("plrlRsvePrceSqno2", "구분"),
-          field("plrlRsvePrce2", isRate ? "수수료율(%)" : "금액(원)"),
-          field("drawNotm2", "추첨횟수"),
-        ],
-        rows: price.rsvePrceList,
+        columns,
+        rows: displayTableRows(price.rsvePrceList, columns),
       },
     });
   } else if (isNoPrice) {

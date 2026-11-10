@@ -110,7 +110,7 @@ export function ContractRequestDetail({
                         <tr key={index} className="border-t">
                           {columns.map(([key]) => (
                             <td key={key} className="px-3 py-2">
-                              {formatValue(item[key])}
+                              {formatValue(item[key], key)}
                             </td>
                           ))}
                         </tr>
