@@ -1,6 +1,11 @@
 import { decodeHTMLStrict } from "entities";
 import type { PriorSpec } from "./prior-spec";
 import { formatG2bPhone } from "@/shared/lib/g2b-phone";
+import {
+  formatG2bDisplayDate,
+  formatG2bDisplayDateTime,
+  formatG2bDisplayNumber,
+} from "@/shared/lib/g2b-display-format";
 
 /** 기본정보의 한 항목을 표현한다. 추가 정보와 링크·금액 단위는 표시 단계에서 조합한다. */
 type Row = {
@@ -28,11 +33,6 @@ const ownItemAgencies = new Set([
   "IN0100000031685",
   "IN0100000014181",
 ]);
-// 국내 금액·수량과 외자 금액의 소수점 표시 기준을 구분한다.
-const integer = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 });
-const foreignAmount = new Intl.NumberFormat("ko-KR", {
-  maximumFractionDigits: 3,
-});
 
 /**
  * API 필드값을 화면에 사용할 문자열로 변환하고 HTML 엔터티를 해제한다.
@@ -47,16 +47,11 @@ function text(value: unknown) {
 /**
  * 숫자로 해석할 수 있는 값만 지정된 형식으로 표시한다.
  * @param value 원본 금액 또는 수량.
- * @param formatter 숫자 표시 규칙. 기본값은 정수 형식이다.
+ * @param maximumFractionDigits 최대 소수 자릿수. 외자 금액은 셋째 자리까지 표시한다.
  * @returns 숫자 형식이 적용된 문자열 또는 변환하지 않은 원본 문자열.
  */
-function numberText(value: unknown, formatter = integer) {
-  const raw = text(value);
-  const amount = raw.trim();
-  // 큰 금액도 원본의 자릿수를 유지하도록 숫자 문자열을 그대로 포맷한다.
-  return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(amount)
-    ? formatter.format(amount as `${number}`)
-    : raw;
+function numberText(value: unknown, maximumFractionDigits: 0 | 3 = 0) {
+  return formatG2bDisplayNumber(text(value), maximumFractionDigits);
 }
 
 // 목록 공통 순번 열과 수요기관 담당자·의견 목록의 표시 열을 정의한다.
@@ -83,7 +78,11 @@ const opinionColumns: Column[] = [
   { key: "opnnNm", label: "제목" },
   { key: "ogdpNm", label: "소속" },
   { key: "wrtrNm", label: "성명" },
-  { key: "inptDt", label: "등록일시" },
+  {
+    key: "inptDt",
+    label: "등록일시",
+    format: (value) => formatG2bDisplayDateTime(text(value)),
+  },
 ];
 
 /**
@@ -143,10 +142,14 @@ export function priorSpecDisplay(payload: PriorSpec["payload"]) {
     : contactName;
 
   // 단일 필드는 API 키를 유지한 채 화면용 행으로 변환한다.
-  const field = (key: string, label: string): Row => ({
+  const field = (
+    key: string,
+    label: string,
+    format = (value: string) => value,
+  ): Row => ({
     key,
     label,
-    value: text(detail[key]),
+    value: format(text(detail[key])),
   });
   // 원본 기본정보의 표시 순서를 유지하며 업무구분별 조건부 필드를 삽입한다.
   const rows = [field("bfSpecRegNo", "사전규격등록번호")];
@@ -183,14 +186,11 @@ export function priorSpecDisplay(payload: PriorSpec["payload"]) {
         : foreign
           ? "배정예산액"
           : "배정예산액\n(부가세포함)",
-      value: numberText(
-        detail.alotBgtPrspAmt,
-        foreign ? foreignAmount : integer,
-      ),
+      value: numberText(detail.alotBgtPrspAmt, foreign ? 3 : 0),
       prefix: foreign ? "$" : undefined,
       suffix: foreign ? undefined : "원",
     },
-    field("opnnRegDdlnDt", "의견등록마감일시"),
+    field("opnnRegDdlnDt", "의견등록마감일시", formatG2bDisplayDateTime),
   );
   // 외자·공사에서는 납품기한 항목을 표시하지 않는다.
   if (!foreign && !construction) {
@@ -200,13 +200,13 @@ export function priorSpecDisplay(payload: PriorSpec["payload"]) {
       key: "dlvgdsTerm",
       label: "납품(완수)기한\n(납품일수)",
       value: date
-        ? date.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1/$2/$3")
-        : `(${service ? "착수 후" : "계약 후"} ${text(detail.dlvgdsTermNody)}일 이내)`,
+        ? formatG2bDisplayDate(date, "date")
+        : `(${service ? "착수 후" : "계약 후"} ${numberText(detail.dlvgdsTermNody)}일 이내)`,
     });
   }
   // 공개일시는 실제 값이 있을 때만 기본정보에 추가한다.
   if (text(detail.specRlsDt).trim())
-    rows.push(field("specRlsDt", "사전규격 공개일시"));
+    rows.push(field("specRlsDt", "사전규격 공개일시", formatG2bDisplayDateTime));
   // 연계기관 공고는 원문 URL과 안내 문구를 별도 항목으로 제공한다.
   if (linked) {
     rows.push({
