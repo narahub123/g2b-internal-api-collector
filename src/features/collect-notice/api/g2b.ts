@@ -38,6 +38,11 @@ import {
 } from "@/entities/prior-spec/model/prior-spec";
 import { createG2bSession } from "@/shared/api/g2b-session";
 import {
+  findMaintenance,
+  readG2bResponse,
+  throwIfMaintenance,
+} from "@/shared/api/g2b-maintenance";
+import {
   attachmentGroup,
   attachmentSources,
 } from "@/shared/model/g2b-attachments";
@@ -58,10 +63,12 @@ const unifiedSearchPath = "/fi/fiu/fiua/UntySrch";
 /** 제안요청 문서의 접근 거부를 일반 요청 실패와 구분하기 위한 오류 유형. */
 class G2bAccessDenied extends Error {}
 
+// 공개 조회와 익명 쿠키가 필요한 조회가 같은 응답 검증 경로를 사용하도록 요청 함수를 주입한다.
 type G2bRequest = (url: URL, init: RequestInit) => Promise<Response>;
 
 /**
  * 나라장터 내부 API에 JSON 요청을 보내고 HTTP 상태 및 업무 오류 코드를 검사한다.
+ * 점검 화면은 HTTP 200으로도 반환되므로 본문을 먼저 확인한다.
  * 세션이 필요한 호출은 주입된 request를 사용하며, 메뉴 정보는 조회 화면에 맞게 지정한다.
  *
  * @param path API 경로.
@@ -70,7 +77,7 @@ type G2bRequest = (url: URL, init: RequestInit) => Promise<Response>;
  * @param request 세션 요청 함수. 기본값은 fetch.
  * @param menuInfo 화면별 메뉴 식별 정보.
  * @returns 오류 코드 검증을 통과한 API 원본 응답.
- * @throws HTTP 접근 거부, 요청 실패 또는 API 업무 오류가 발생한 경우.
+ * @throws 점검 응답, HTTP 접근 거부, 통신·본문 읽기·JSON 파싱 실패 또는 API 업무 오류가 발생한 경우.
  */
 async function postG2b(
   path: string,
@@ -93,11 +100,12 @@ async function postG2b(
     redirect: "error",
     signal: AbortSignal.timeout(15000),
   });
+  const body = await readG2bResponse(response);
   if (response.status === 403)
     throw new G2bAccessDenied(`나라장터 API 접근이 거부됐습니다: ${path}`);
   if (!response.ok)
     throw new Error(`나라장터 API 요청에 실패했습니다: ${path}`);
-  const result = await response.json();
+  const result = JSON.parse(body);
   if (String(result?.ErrorCode) !== "0")
     throw new Error(`나라장터 API가 오류를 반환했습니다: ${path}`);
   return result;
@@ -198,6 +206,7 @@ const pendingCollections = new Map<
 /**
  * 동일 수집 대상의 진행 중 작업을 재사용하고 완료 후 공유 상태를 해제한다.
  * 강제 재수집은 진행 중인 일반 수집이 끝난 뒤 새로 실행해 요청이 생략되지 않게 한다.
+ * 일반 수집에서 점검이 확인되면 대기 중인 강제 재수집도 보류한다.
  *
  * @param key 수집 대상 식별자.
  * @param force 기존 저장 여부와 무관한 강제 재수집 여부.
@@ -212,8 +221,11 @@ async function collectOnce(
   const pending = pendingCollections.get(key);
   if (pending) {
     if (!force || pending.force) return pending.promise;
-    // 자동 수집은 저장 상태에 따라 일부 조회를 건너뛸 수 있으므로 수동 재수집은 별도로 실행한다.
-    await pending.promise.catch(() => undefined);
+    // 일반 수집은 저장된 자료를 건너뛸 수 있다. 점검이 없을 때만 대기하던 강제 수집을 새로 실행한다.
+    await pending.promise.catch((error: unknown) => {
+      const maintenance = findMaintenance(error);
+      if (maintenance) throw maintenance;
+    });
     return collectOnce(key, force, collect);
   }
   const promise = collect().finally(() => pendingCollections.delete(key));
@@ -235,6 +247,7 @@ const pendingPostponement = new Map<
  * @param queries 조회 대상 분류 목록.
  * @param request 세션 요청 함수.
  * @returns 선택된 공지사항 또는 공지가 없을 때 null.
+ * @throws 조회가 실패한 경우. 동시에 점검과 일반 오류가 확인되면 점검 오류를 우선 전달한다.
  */
 async function collectOpeningNotice(
   key: OpeningResultKey,
@@ -265,7 +278,7 @@ async function collectOpeningNotice(
       })
       .catch(() => undefined);
   }
-  const [postponement, ...openingNotices] = await Promise.all([
+  const outcomes = await Promise.allSettled([
     postponementPromise,
     ...openingConfigs.map(async (config) =>
       openingResultNoticeFromResponse(
@@ -279,6 +292,11 @@ async function collectOpeningNotice(
       ),
     ),
   ]);
+  throwIfMaintenance(...outcomes);
+  const [postponement, ...openingNotices] = outcomes.map((outcome) => {
+    if (outcome.status === "rejected") throw outcome.reason;
+    return outcome.value;
+  });
   return openingNotices.reduce<OpeningResultNotice | null>(
     (selected, opening) => selectOpeningResultNotice(selected, opening),
     postponement,
@@ -286,16 +304,16 @@ async function collectOpeningNotice(
 }
 
 /**
- * 개찰결과·공지사항·예정가격을 독립적으로 수집하며 성공한 데이터만 저장한다.
- * 저장된 분류는 일반 수집에서 건너뛰되, 강제 재수집 시 모두 다시 요청한다.
- * 일부 조회에 실패해도 성공 결과를 먼저 저장하고 실패 원인을 모아 호출자에게 전달한다.
+ * 개찰결과·공지사항·예정가격을 독립적으로 조회하고 개찰차수별로 저장한다.
+ * 일반 수집은 이미 확인한 자료를 건너뛰며, 일반 오류가 섞이면 성공 결과를 먼저 저장한다.
+ * 점검을 확인하면 성공 결과가 있어도 해당 차수를 갱신하지 않는다.
  *
  * @param key 공고번호·공고차수·개찰차수.
  * @param queries 개찰차수에 속한 분류별 조회 조건.
  * @param force 저장 여부와 무관하게 다시 조회할지 여부.
- * @throws 하나 이상의 분류·공지사항·예정가격 조회가 실패한 경우 AggregateError.
+ * @throws 점검 확인 시 G2bMaintenanceError, 일반 부가 조회 실패 시 AggregateError.
+ * 세션 발급이나 저장소 접근이 실패하면 해당 오류를 전달한다.
  */
-/** 개찰결과·공지사항·예정가격을 독립적으로 수집하며 성공한 데이터만 저장한다. */
 export async function collectOpeningResult(
   key: OpeningResultKey,
   queries: OpeningResultQuery[],
@@ -367,6 +385,8 @@ export async function collectOpeningResult(
             )
           : Promise.resolve({ status: "skipped" as const }),
       ]);
+      // 점검 중 일부 조회가 성공해도 해당 개찰차수의 기존 자료를 유지한다.
+      throwIfMaintenance(...resultOutcome, noticeOutcome, priceOutcome);
       const successes = resultOutcome.flatMap((result) =>
         result.status === "fulfilled" ? [result.value] : [],
       );
@@ -403,7 +423,7 @@ export async function collectOpeningResult(
               : {}),
         });
       }
-      // 저장 후 오류를 반환해 호출자가 부분 실패를 인지하도록 한다.
+      // 일반 조회 오류는 성공 자료를 저장한 뒤 모아서 전달해 부분 실패를 알린다.
       const failures = resultOutcome.filter(
         (result): result is PromiseRejectedResult =>
           result.status === "rejected",
@@ -481,10 +501,11 @@ async function fetchWorkProgress({
 }
 
 /**
- * 계약현황 상세와 세 목록을 조회하고 유효한 응답만 저장한다.
+ * 계약현황 상세와 세 목록을 조회하고 요청한 계약과 일치하는 응답만 저장한다.
+ * 일반 수집은 해당 계약의 저장 자료가 있으면 조회를 생략한다.
  * @param key 계약번호와 정규화된 변경차수.
  * @param force 기본값은 false. true이면 기존 상세도 다시 조회한다.
- * @throws 조회 실패 또는 요청과 다른 응답을 받았을 때. 저장 자료는 유지된다.
+ * @throws 점검, 조회 실패, 응답 불일치 또는 저장소 접근 실패가 발생한 경우.
  */
 export async function collectContract(key: ContractKey, force = false) {
   const repository = getNoticeRepository();
@@ -507,6 +528,7 @@ export async function collectContract(key: ContractKey, force = false) {
   );
 }
 
+// 품목 API의 요청 크기와 마지막 페이지 판정에 같은 기준을 사용한다.
 const contractItemPageSize = 10;
 
 /**
@@ -548,13 +570,18 @@ function fetchContractRequestData(
  * 같은 페이지가 반복되면 종료 조건에 도달하지 못할 수 있어 오류로 처리한다.
  *
  * @param key 계약요청 식별자.
+ * @param checkMaintenance 상세 조회에서 점검을 확인했으면 다음 품목 요청 전에 중단하는 검사.
  * @returns 검증을 통과한 전체 품목 목록.
- * @throws 식별자가 다른 품목이나 반복 페이지가 반환된 경우.
+ * @throws 상세 또는 품목에서 점검을 확인했거나, 조회에 실패했거나, 다른 식별자 또는 반복 페이지를 받은 경우.
  */
-async function collectContractRequestItems(key: ContractRequestKey) {
+async function collectContractRequestItems(
+  key: ContractRequestKey,
+  checkMaintenance: () => void,
+) {
   const items: Record<string, unknown>[] = [];
   const seenPages = new Set<string>();
   for (let page = 1; ; page++) {
+    checkMaintenance();
     const result = await fetchContractRequestData(
       "srchDmndSttusItemSql",
       key,
@@ -584,10 +611,11 @@ async function collectContractRequestItems(key: ContractRequestKey) {
 }
 
 /**
- * 계약요청의 상세와 품목을 수집해 함께 저장한다.
+ * 상세와 전체 품목을 검증한 뒤 계약요청 한 건으로 저장한다.
+ * 상세에서 점검이 확인되면 진행 중인 품목 요청 이후 다음 페이지 조회를 보류한다.
  * @param key 계약요청접수번호와 차수.
  * @param force 기본값은 false. true이면 기존 자료도 다시 조회한다.
- * @throws 상세 또는 품목 조회에 실패했을 때. 기존 저장 자료는 유지된다.
+ * @throws 점검, 상세·품목 조회 또는 검증 실패, 저장소 접근 실패가 발생한 경우. 조회나 검증이 실패하면 기존 자료를 유지한다.
  */
 export async function collectContractRequest(
   key: ContractRequestKey,
@@ -600,10 +628,18 @@ export async function collectContractRequest(
     async () => {
       if (!force && repository.findContractRequest(key)) return;
       const collectedAt = new Date().toISOString();
+      // 상세에서 점검을 확인하면 진행 중인 품목 요청 이후에는 다음 페이지를 요청하지 않는다.
+      let maintenance: ReturnType<typeof findMaintenance>;
       const [summary, items] = await Promise.allSettled([
-        fetchContractRequestData("srchDmndSttusSql", key),
-        collectContractRequestItems(key),
+        fetchContractRequestData("srchDmndSttusSql", key).catch((error: unknown) => {
+          maintenance = findMaintenance(error);
+          throw error;
+        }),
+        collectContractRequestItems(key, () => {
+          if (maintenance) throw maintenance;
+        }),
       ]);
+      throwIfMaintenance(summary, items);
       if (summary.status === "rejected") throw summary.reason;
       if (items.status === "rejected") throw items.reason;
       const result = summary.value;
@@ -628,32 +664,36 @@ export async function collectContractRequest(
 
 /**
  * 공고 업무 진행 내역에서 계약요청·계약 연결을 추출한다.
- * 계약요청 상세 조회 실패와 관계없이 확인된 연결 관계는 반환한다.
+ * 계약요청 상세의 일반 조회 실패가 있어도 확인된 연결 관계는 반환한다.
  *
  * @param key 공고번호와 공고차수.
  * @returns 계약요청 및 계약 식별자 목록.
+ * @throws 업무 진행 내역을 조회할 수 없거나 연결된 계약요청 수집에서 점검을 확인한 경우.
  */
 async function collectNoticeContractLinks(key: NoticeKey) {
   const rows = await fetchWorkProgress(key);
   const requests = contractRequestKeys(rows, key);
-  // 상세 조회가 실패해도 공고에는 확인된 연결을 남겨 해당 페이지에서 다시 수집할 수 있게 한다.
-  await Promise.allSettled(
+  // 일반 조회 오류에서는 확인된 연결을 남겨 계약요청 페이지에서 다시 수집할 수 있게 한다.
+  const outcomes = await Promise.allSettled(
     requests.map((request) => collectContractRequest(request)),
   );
+  throwIfMaintenance(...outcomes);
   return { contractRequests: requests, contracts: contractKeys(rows, key) };
 }
 
 /**
- * 발주계획 상세와 첨부 목록을 수집해 저장한다.
+ * 발주계획 본문과 첨부 목록을 수집한다. 일반 수집은 저장된 본문을 재사용하고 누락된 첨부만 보충한다.
+ * 새 본문의 첨부 조회가 일반 오류로 끝나면 본문을 남겨 다음 수집에서 첨부만 조회한다. 점검이면 저장을 보류한다.
  * @param number 발주계획번호.
  * @param force 기본값은 false. true이면 상세와 첨부를 모두 다시 조회하고 성공 시 교체한다.
- * @throws 나라장터 상세 또는 첨부 목록 조회가 실패했을 때.
+ * @throws 점검, 세션 발급, 상세·첨부 조회 또는 검증, 저장소 접근이 실패한 경우.
  */
 export async function collectOrderPlan(number: string, force = false) {
   const repository = getNoticeRepository();
 
   return collectOnce(`order-plan:${number}`, force, async () => {
     let plan = force ? null : repository.findOrderPlan(number);
+    const needsDetail = !plan;
     // 저장된 본문이 있고 첨부 수집이 끝났거나 첨부 그룹이 없으면 중복 요청을 피한다.
     if (plan && (plan.attachments || !orderPlanAttachmentGroup(plan))) return;
     const request = await createG2bSession();
@@ -669,14 +709,17 @@ export async function collectOrderPlan(number: string, force = false) {
         throw new Error("요청한 발주계획의 상세 응답을 받지 못했습니다.");
       }
       plan = { number, collectedAt, payload };
-      // 첨부 목록 요청에 실패해도 본문을 보존하고 다음 수집에서 첨부만 재시도한다.
-      if (!force) repository.saveOrderPlan(plan);
     }
     const group = orderPlanAttachmentGroup(plan);
     const attachments = group
-      ? await collectAttachments(group, "order-plan", request)
+      ? await collectAttachments(group, "order-plan", request).catch((error: unknown) => {
+          // 일반 오류일 때만 새 본문을 남겨 다음 수집에서 첨부 조회를 이어간다.
+          if (!findMaintenance(error) && !force && needsDetail) repository.saveOrderPlan(plan);
+          throw error;
+        })
       : undefined;
     if (force) repository.replaceOrderPlan({ ...plan, attachments });
+    else if (needsDetail) repository.saveOrderPlan({ ...plan, attachments });
     else if (attachments)
       repository.saveOrderPlanAttachments(
         number,
@@ -687,10 +730,11 @@ export async function collectOrderPlan(number: string, force = false) {
 }
 
 /**
- * 사전규격 상세와 공개 첨부 목록을 번호별로 수집한다.
+ * 사전규격 상세와 공개 첨부를 저장한다. 일반 수집은 저장된 본문이 있으면 미수집 첨부만 조회한다.
+ * 일반 첨부 조회 오류에서는 새 본문을 보존하며, 점검이 확인되면 본문과 첨부의 저장을 보류한다.
  * @param number 사전규격등록번호.
  * @param force 기본값은 false. true이면 상세와 첨부를 다시 조회하고 성공 시 교체한다.
- * @throws 나라장터 상세 또는 첨부 목록 조회가 실패했을 때.
+ * @throws 점검, 세션 발급, 상세·첨부 조회 또는 검증, 저장소 접근이 실패한 경우.
  */
 export async function collectPriorSpec(number: string, force = false) {
   const repository = getNoticeRepository();
@@ -698,6 +742,7 @@ export async function collectPriorSpec(number: string, force = false) {
     let spec: PriorSpec | null = force
       ? null
       : repository.findPriorSpec(number);
+    const needsDetail = !spec;
     // 첨부 그룹이 없는 사전규격은 첨부 조회 없이 수집 완료로 취급한다.
     if (
       spec &&
@@ -725,18 +770,24 @@ export async function collectPriorSpec(number: string, force = false) {
         throw new Error("요청한 사전규격의 상세 응답을 받지 못했습니다.");
       }
       spec = { number, collectedAt, payload };
-      if (!force) repository.savePriorSpec(spec);
     }
     const group = attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo);
     const attachments = group
-      ? await collectAttachments(group, "prior-spec", request)
+      ? await collectAttachments(group, "prior-spec", request).catch((error: unknown) => {
+          if (!findMaintenance(error) && !force && needsDetail) repository.savePriorSpec(spec);
+          throw error;
+        })
       : undefined;
-    if (force || attachments)
+    if (force || needsDetail || attachments)
       repository.savePriorSpec({ ...spec, attachments });
   });
 }
 
-/** 공고의 공지 목록과 각 게시글에서 조회 가능한 원본 응답을 수집한다. */
+/**
+ * 공고의 공지 목록과 각 게시글의 상세·본문·첨부 응답을 수집한다.
+ * 게시글의 일반 오류는 허용하되 점검을 확인하면 다음 게시글을 조회하지 않는다.
+ * @throws 공지 목록 조회가 실패하거나 목록 또는 개별 게시글 조회에서 점검을 확인한 경우.
+ */
 async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["posts"]>> {
   const prefix = "FIUA027_01_wframe_popupCnts_bidPbancWfrm_";
   const popupPrefix = prefix + "PNPE031_01_wframe_popupCnts_";
@@ -782,10 +833,13 @@ async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["p
         }),
         group ? collectAttachments(group, "notice-post") : undefined,
       ]);
+      throwIfMaintenance(body, attachments);
       if (body.status === "fulfilled") entry.body = body.value;
       if (attachments.status === "fulfilled") entry.attachments = attachments.value;
-    } catch {
-      // 게시글 하나의 상세 조회가 실패해도 목록과 나머지 게시글은 보존한다.
+    } catch (error) {
+      const maintenance = findMaintenance(error);
+      if (maintenance) throw maintenance;
+      // 일반 상세 오류에서는 목록의 게시글 식별자를 보존하고 다음 게시글을 조회한다.
     }
   }
   return { list, entries };
@@ -793,11 +847,12 @@ async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["p
 
 /**
  * 공고 상세, 문서 목록과 공지사항을 수집하고, 연결된 미수집 발주계획, 사전규격, 계약요청과 개찰결과를 저장한다.
- * 관련 자료 조회가 실패하면 다음 공고 수집 시 재시도한다.
+ * 일반 부가 조회 오류는 허용하며, 점검을 확인하면 공고 행을 저장할 호출자에게 오류를 전달한다.
+ * 독립적으로 완료된 관련 자료는 저장될 수 있다.
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
  * @returns 공고 상세 및 관련 목록의 원본 응답.
- * @throws 공고 상세 요청이 실패하거나 해당 공고의 응답을 받지 못했을 때.
+ * @throws 공고 상세 조회 또는 식별자 검증에 실패하거나 상세·부가 조회에서 점검을 확인한 경우.
  */
 export async function collectNotice(
   key: NoticeKey,
@@ -828,23 +883,24 @@ export async function collectNotice(
   // 첨부 목록은 공고의 첨부 그룹만 조회하고, 제안요청은 상세 JS와 같이 협상계약에만 적용한다.
   const orderPlanNumber = getNoticeOrderPlanNumber(payload);
   const priorSpecNumber = getNoticePriorSpecNumber(payload);
-  // 부가 조회의 실패가 공고 본문 수집을 막지 않도록 각각의 결과를 따로 수신한다.
-  const [attachments, proposal, contractLinks, openingResults, posts] =
-    await Promise.allSettled([
-      detail.itemPbancUntyAtchFileNo?.trim()
-        ? collectAttachments(detail.itemPbancUntyAtchFileNo, "notice")
-        : undefined,
-      detail.scsbdMthdCd === "낙030005" &&
-      detail.rfpNo?.trim() &&
-      /^\d{1,3}$/.test(String(detail.rfpOrd))
-        ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
-        : undefined,
-      collectNoticeContractLinks(key),
-      collectNoticeOpeningResults(payload),
-      collectNoticePosts(key),
-      orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
-      priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
-    ]);
+  // 일반 부가 조회 오류는 공고 저장을 허용하지만, 점검이 하나라도 확인되면 공고 저장을 보류한다.
+  const outcomes = await Promise.allSettled([
+    detail.itemPbancUntyAtchFileNo?.trim()
+      ? collectAttachments(detail.itemPbancUntyAtchFileNo, "notice")
+      : undefined,
+    detail.scsbdMthdCd === "낙030005" &&
+    detail.rfpNo?.trim() &&
+    /^\d{1,3}$/.test(String(detail.rfpOrd))
+      ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
+      : undefined,
+    collectNoticeContractLinks(key),
+    collectNoticeOpeningResults(payload),
+    collectNoticePosts(key),
+    orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
+    priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
+  ]);
+  throwIfMaintenance(...outcomes);
+  const [attachments, proposal, contractLinks, openingResults, posts] = outcomes;
   if (openingResults.status === "rejected") {
     console.error("개찰결과 수집 실패:", openingResults.reason);
   }

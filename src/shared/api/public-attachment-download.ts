@@ -1,4 +1,5 @@
 import { g2bDownloadUrl } from "@/shared/api/g2b-download";
+import { readG2bResponse } from "@/shared/api/g2b-maintenance";
 import {
   attachmentSources,
   publicAttachmentFiles,
@@ -13,7 +14,7 @@ const origin = "https://www.g2b.go.kr";
  * @param seq 첨부 그룹 내 파일 순번.
  * @param scope 첨부를 소유한 상세 자료 유형.
  * @returns 다운로드 주소. 공개 파일이 아니거나 응답에서 파일을 확인할 수 없으면 null.
- * @throws 나라장터 메타데이터 요청이 실패하거나 응답 형식이 올바르지 않을 때.
+ * @throws 메타데이터 응답이 점검 화면이거나 요청 또는 응답 검증에 실패한 경우.
  */
 export async function resolvePublicAttachmentDownload(
   group: string | undefined,
@@ -48,8 +49,9 @@ export async function resolvePublicAttachmentDownload(
       signal: AbortSignal.timeout(15000),
     },
   );
+  const body = await readG2bResponse(response);
   if (!response.ok) throw new Error("첨부 메타데이터를 가져오지 못했습니다.");
-  const result = await response.json();
+  const result = JSON.parse(body);
   if (
     String(result?.ErrorCode) !== "0" ||
     !Array.isArray(result.dlUntyAtchFileL)

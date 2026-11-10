@@ -1,6 +1,8 @@
 import { g2bDownloadUrl } from '@/shared/api/g2b-download';
+import { readG2bResponse } from '@/shared/api/g2b-maintenance';
 
 const origin = 'https://www.g2b.go.kr';
+// 다운로드 메타데이터 API에는 UUID 형식으로 저장된 첨부 그룹만 전달한다.
 const fileNoPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 /**
@@ -9,7 +11,7 @@ const fileNoPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
  * @param seq 첨부 그룹 내 양의 파일 순번.
  * @param filename 제안요청 API에서 받은 원본 파일명.
  * @returns 문서 식별자와 파일명이 일치할 때 다운로드 URL, 조회 결과가 일치하지 않으면 null.
- * @throws 나라장터 메타데이터 요청이 실패했을 때.
+ * @throws 메타데이터 응답이 점검 화면이거나 요청 또는 응답 검증에 실패한 경우.
  */
 export async function resolveProposalDownload(fileNo: string, seq: string, filename: string): Promise<URL | null> {
   if (!fileNoPattern.test(fileNo) || !/^[1-9]\d*$/.test(seq) || /[\x00-\x1f\x7f]/.test(filename)) return null;
@@ -27,8 +29,9 @@ export async function resolveProposalDownload(fileNo: string, seq: string, filen
     redirect: 'error',
     signal: AbortSignal.timeout(15000),
   });
+  const body = await readG2bResponse(response);
   if (!response.ok) throw new Error('제안요청 첨부 메타데이터를 가져오지 못했습니다.');
-  const result = await response.json();
+  const result = JSON.parse(body);
   if (String(result?.ErrorCode) !== '0' || !Array.isArray(result.dlUntyAtchFileL)) {
     throw new Error('제안요청 첨부 메타데이터 응답이 올바르지 않습니다.');
   }

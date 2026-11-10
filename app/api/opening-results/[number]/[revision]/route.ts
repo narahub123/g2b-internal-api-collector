@@ -6,6 +6,7 @@ import {
   type OpeningResultQuery,
 } from "@/entities/opening-result/model/opening-result";
 import { collectOpeningResult } from "@/features/collect-notice/api/g2b";
+import { maintenanceResponse } from "@/shared/api/g2b-maintenance";
 import { g2bNumber } from "@/shared/model/g2b-number";
 
 /**
@@ -47,7 +48,9 @@ function mergeSavedQueries(
  *
  * @param _request HTTP 요청 객체. 현재 처리에서는 요청 본문을 사용하지 않는다.
  * @param params 공고번호와 공고차수가 포함된 비동기 경로 매개변수.
- * @returns 수집 성공 시 공고 식별자, 실패 시 오류 정보가 포함된 JSON 응답.
+ * @returns 성공 시 공고 식별자를 반환한다. 입력 오류는 400, 조회 조건이 없으면 404를 반환한다.
+ * 점검이 확인되면 503, 그 외 수집 실패는 502를 반환하며 두 응답 모두 성공·실패 차수를 포함한다.
+ * @throws 조회 조건을 구성하는 데 필요한 저장 자료를 읽지 못한 경우.
  */
 export async function POST(
   _request: Request,
@@ -91,6 +94,17 @@ export async function POST(
   const failedRevisions = [...groups.keys()].filter(
     (_, index) => settled[index].status === "rejected",
   );
+  const succeededRevisions = [...groups.keys()].filter(
+    (_, index) => settled[index].status === "fulfilled",
+  );
+  const errors = settled.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  const maintenance = maintenanceResponse(new AggregateError(errors), {
+    failedRevisions,
+    succeededRevisions,
+  });
+  if (maintenance) return maintenance;
 
   // 실패한 차수와 오류 원인을 서버 로그에 기록하여 수집 실패를 추적할 수 있도록 한다.
   settled.forEach((result, index) => {
@@ -109,10 +123,8 @@ export async function POST(
       {
         error: "나라장터에서 일부 개찰결과를 수집하지 못했습니다.",
         failedRevisions,
-        succeededRevisions: [...groups.keys()].filter(
-          (_, index) => settled[index].status === "fulfilled",
-        ),
-        // 수집 함수는 성공한 분류를 먼저 저장하고 실패를 반환한다.
+        succeededRevisions,
+        // 일반 오류에서는 수집 함수가 성공한 분류를 먼저 저장한다.
         // 따라서 실패한 개찰차수에도 일부 성공 자료가 저장되었을 수 있다.
       },
       { status: 502 },
