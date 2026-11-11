@@ -38,6 +38,18 @@ const { POST: postNotice } = require('../app/api/notices/route');
 const { POST: postOpeningResults } = require('../app/api/opening-results/[number]/[revision]/route');
 const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]/attachments/[seq]/route');
 
+test('사용자 상세의 목록 복귀 주소는 같은 업무의 홈 조회 조건만 허용한다', () => {
+  const { userDetailPath, userListReturnHref } = require('../src/_pages/g2b/config/routes');
+  assert.equal(userDetailPath('order-plans', { number: 'PLAN-1', revision: '' }), '/g2b/order-plans/PLAN-1');
+  assert.equal(userDetailPath('opening-results', { number: 'R26BK00001', revision: '000' }), '/g2b/opening-results/R26BK00001/000');
+  const from = '/?section=notices&q=test&region=A&region=B&sort=title-asc&page=2';
+  assert.equal(userListReturnHref('notices', from), from);
+  for (const invalid of [undefined, [from], '//example.com/?section=notices', '/admin?section=notices',
+    '/?section=contracts', '/?section=notices&section=contracts']) {
+    assert.equal(userListReturnHref('notices', invalid), '/?section=notices');
+  }
+});
+
 // 실제 점검 응답의 제목과 중단 문구를 재현해 HTTP 200에서도 판별하는지 확인한다.
 const interruption = '현재 웹서비스가 중단되고 있음을 알려드립니다.';
 const maintenanceHtml = `<html><title>시스템 점검 안내</title><h2>시스템점검안내</h2><p>${interruption}</p></html>`;

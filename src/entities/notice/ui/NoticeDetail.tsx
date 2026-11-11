@@ -102,7 +102,7 @@ function NoticeTable({
 
 /**
  * 수집한 입찰공고의 상세 정보, 관련 자료 및 원본 페이지 이동 기능을 표시한다.
- * 제목의 HTML 엔티티 디코딩은 공통 DetailTitle에서 처리하며, 재수집은 기존 요청 기능을 사용한다.
+ * 관련 자료의 주소가 없으면 원래 값을 표시하고, 제목 동작은 호출 화면이 제공할 때만 표시한다.
  * @param props 공고 데이터, 저장된 발주계획번호, 연관 업무 링크와 제목 영역의 동작.
  * @returns 공고 상세 본문과 조건에 따른 관련 정보 및 첨부 목록.
  */
@@ -115,13 +115,13 @@ export function NoticeDetail({
   notice: Notice;
   orderPlanNumber?: string;
   links: {
-    contractPath: (key: { number: string; revision: string }) => string;
-    contractRequestPath: (key: { number: string; revision: string }) => string;
-    openingResultPath: (key: { number: string; revision: string }) => string;
-    orderPlanPath: (number: string) => string;
-    priorSpecPath: (number: string) => string;
+    contractPath: (key: { number: string; revision: string }) => string | undefined;
+    contractRequestPath: (key: { number: string; revision: string }) => string | undefined;
+    openingResultPath: (key: { number: string; revision: string }) => string | undefined;
+    orderPlanPath: (number: string) => string | undefined;
+    priorSpecPath: (number: string) => string | undefined;
   };
-  renderActions: (input: { number: string; revision: string; methodCode: string }) => ReactNode;
+  renderActions?: (input: { number: string; revision: string; methodCode: string }) => ReactNode;
 }) {
   const contractLinks = [
     {
@@ -184,7 +184,7 @@ export function NoticeDetail({
         subtitle={`${number} / ${revision}`}
         business={resolveG2bBusiness(detail?.prcmBsneSeCd, detail?.prcmBsneSeNm)}
         originalHref={originalHref}
-        actions={renderActions({ number, revision, methodCode })}
+        actions={renderActions?.({ number, revision, methodCode })}
       />
       {notice.documents?.unavailable?.map((kind) => (
         <p key={kind} className="text-sm text-muted-foreground">
@@ -214,54 +214,53 @@ export function NoticeDetail({
           return "fields" in section ? (
             <DetailAccordionSection key={title} title={title}>
               <dl className="grid gap-4 text-sm">
-                {section.fields.map(({ label, value, ...rest }, index) => (
-                  <div
-                    key={`${index}-${label ?? ""}`}
-                    className={
-                      label
-                        ? "grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]"
-                        : "min-w-0"
-                    }
-                  >
-                    {label && (
-                      <dt className="text-muted-foreground">{label}</dt>
-                    )}
-                    <dd>
-                      {label === "발주계획번호" && orderPlanNumber === value ? (
-                        <Link
-                          href={links.orderPlanPath(value)}
-                          className="text-primary underline underline-offset-2"
-                        >
-                          {value}
-                        </Link>
-                      ) : label === "사전규격등록번호" && g2bNumber(value) ? (
-                        <Link
-                          href={links.priorSpecPath(value.trim())}
-                          className="text-primary underline underline-offset-2"
-                        >
-                          {value}
-                        </Link>
-                      ) : (
-                        <>
-                          {"items" in rest && Array.isArray(rest.items) ? (
-                            <ul className="list-disc pl-5">
-                              {rest.items.map((item, index) => (
-                                <li key={index}>{item}</li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <NoticeValue value={value} />
-                          )}
-                          {label === "발주계획번호" && (
-                            <p className="text-muted-foreground">
-                              아직 수집된 발주계획이 없습니다.
-                            </p>
-                          )}
-                        </>
+                {section.fields.map(({ label, value, ...rest }, index) => {
+                  const priorSpecNumber = label === "사전규격등록번호" ? g2bNumber(value) : undefined;
+                  const href = label === "발주계획번호" && orderPlanNumber === value
+                    ? links.orderPlanPath(value)
+                    : priorSpecNumber && links.priorSpecPath(priorSpecNumber);
+                  return (
+                    <div
+                      key={`${index}-${label ?? ""}`}
+                      className={
+                        label
+                          ? "grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]"
+                          : "min-w-0"
+                      }
+                    >
+                      {label && (
+                        <dt className="text-muted-foreground">{label}</dt>
                       )}
-                    </dd>
-                  </div>
-                ))}
+                      <dd>
+                        {href ? (
+                          <Link
+                            href={href}
+                            className="text-primary underline underline-offset-2"
+                          >
+                            {value}
+                          </Link>
+                        ) : (
+                          <>
+                            {"items" in rest && Array.isArray(rest.items) ? (
+                              <ul className="list-disc pl-5">
+                                {rest.items.map((item, index) => (
+                                  <li key={index}>{item}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <NoticeValue value={value} />
+                            )}
+                            {label === "발주계획번호" && (
+                              <p className="text-muted-foreground">
+                                아직 수집된 발주계획이 없습니다.
+                              </p>
+                            )}
+                          </>
+                        )}
+                      </dd>
+                    </div>
+                  );
+                })}
                 {title === relatedNoticeSectionTitle &&
                   contractLinks.map(({ label, links }) => (
                     <div
@@ -271,14 +270,13 @@ export function NoticeDetail({
                       <dt className="text-muted-foreground">{label}</dt>
                       <dd>
                         <ul className="grid gap-1">
-                          {links.map(({ number, revision, href }) => (
-                            <li key={href}>
-                              <Link
-                                href={href}
-                                className="text-primary underline underline-offset-2"
-                              >
-                                {number} / {revision}
-                              </Link>
+                          {links.map(({ number, revision, href }, index) => (
+                            <li key={`${number}/${revision}/${index}`}>
+                              {href ? (
+                                <Link href={href} className="text-primary underline underline-offset-2">
+                                  {number} / {revision}
+                                </Link>
+                              ) : `${number} / ${revision}`}
                             </li>
                           ))}
                         </ul>

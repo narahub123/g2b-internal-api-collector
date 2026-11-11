@@ -550,14 +550,25 @@ function selectedFields(
     .map(({ key, label }) => ({ key, label, value: source[key] }));
 }
 
+/** 개찰 원본에 연결된 공고의 번호와 차수를 구한다. 원본에 값이 없으면 조회 식별자를 사용한다. */
+export function openingResultNoticeKey(query: OpeningResultQuery, detail: Data) {
+  const bidInfo = isData(detail.bidInfo) ? detail.bidInfo : undefined;
+  if (!bidInfo) return undefined;
+  const number = typeof bidInfo.bidPbancNo === "string" && bidInfo.bidPbancNo
+    ? bidInfo.bidPbancNo
+    : query.number;
+  const revision = String(bidInfo.bidPbancOrd ?? query.revision);
+  return number && revision ? { number, revision: revision.padStart(3, "0") } : undefined;
+}
+
 /**
  * 원본 응답의 섹션과 필드를 표시 모델로 변환한다. 원본에 없는 안내문은 만들지 않는다.
- * @param noticePath 연결 공고 주소를 만드는 함수.
+ * @param noticePath 연결 공고의 주소를 만든다. 주소가 없으면 원본 필드값만 표시한다.
  */
 export function getOpeningResultDisplay(
   query: OpeningResultQuery,
   detail: Data,
-  noticePath: (key: { number: string; revision: string }) => string,
+  noticePath: (key: { number: string; revision: string }) => string | undefined,
 ): OpeningResultDisplay {
   const endpoint = resolveOpeningResultEndpoint(query);
   const status = query.status ?? "유찰"; // 구형 저장 JSON 호환
@@ -603,19 +614,12 @@ export function getOpeningResultDisplay(
         });
       }
       // 원본의 공고번호 링크를 프로젝트 내부 상세로 연결한다.
-      const number =
-        typeof bidInfo.bidPbancNo === "string" && bidInfo.bidPbancNo
-          ? bidInfo.bidPbancNo
-          : query.number;
-      const revision = String(bidInfo.bidPbancOrd ?? query.revision);
+      const key = openingResultNoticeKey(query, detail);
       const noticeNumber = fields.find(
         ({ key }) => key === "bidPbancNoPbancOrd",
       );
-      if (noticeNumber && number && revision) {
-        noticeNumber.href = noticePath({
-          number,
-          revision: revision.padStart(3, "0"),
-        });
+      if (noticeNumber && key) {
+        noticeNumber.href = noticePath(key);
       }
       if (fields.length)
         sections.push({ kind: "fields", title: "공고정보", fields });

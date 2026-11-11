@@ -329,14 +329,14 @@ export function getNoticeProposalFiles(
  * 저장한 응답에서 공고 상세 화면에 표시할 항목을 구성한다.
  * @param payload 공고 상세 API의 원본 응답.
  * @param documents 문서 API의 원본 응답. 이전에 저장한 공고에는 없을 수 있다.
- * @param openingResultPath 연결된 개찰결과의 화면 주소를 만드는 함수.
+ * @param openingResultPath 연결된 개찰결과의 주소를 만든다. 주소가 없으면 표에는 원래 값만 표시한다.
  * @param hasContractLinks 연결된 계약요청 또는 계약현황이 있으면 관련 공고 정보 섹션을 표시한다.
  * @returns 원본 화면 순서대로 배열한 필드 및 표 섹션.
  */
 export function getNoticeDisplay(
   payload: RecordValue,
   documents: Notice["documents"],
-  openingResultPath: (key: { number: string; revision: string }) => string,
+  openingResultPath: (key: { number: string; revision: string }) => string | undefined,
   hasContractLinks = false,
 ) {
   // 공고 기본정보·안내정보·평가정보를 각각 원본 응답에서 분리한다.

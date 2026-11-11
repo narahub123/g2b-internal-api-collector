@@ -7,6 +7,7 @@ import { formatCollectionIdentifier, type CollectionSearchParams } from "@/share
 import { CollectionListItem } from "@/shared/ui/g2b/CollectionListItem";
 import { CollectionListLabel } from "@/shared/ui/g2b/CollectionListLabel";
 import { CollectionQueryView } from "@/shared/ui/g2b/CollectionQueryView";
+import { userDetailPath } from "../config/routes";
 
 // 저장 건수와 무관하게 목록 조회가 구현된 단계만 공통 업무 순서대로 노출한다.
 const availableSections = {
@@ -32,6 +33,11 @@ export async function G2bHomePage({ searchParams }: { searchParams: Promise<Coll
   const params = await searchParams;
   const section = isAvailableSection(params.section) ? params.section : "notices";
   const { query, result, businesses, ...list } = loadCollectionList(section, params, "collected");
+  const listQuery = { ...query, status: "total", page: result.page } as const;
+  // URL 원본 대신 검증된 조건과 저장소에서 보정한 페이지를 복귀 주소에 담는다.
+  const from = new URLSearchParams(list.href("/", listQuery).split("?")[1]);
+  from.set("section", section);
+  const detailQuery = new URLSearchParams({ from: `/?${from}` });
 
   return (
     <main className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-8 sm:px-6">
@@ -58,7 +64,7 @@ export async function G2bHomePage({ searchParams }: { searchParams: Promise<Coll
           key={section}
           path="/"
           persistentParams={{ section }}
-          query={{ ...query, status: "total", page: result.page }}
+          query={listQuery}
           totalPages={result.totalPages}
           businesses={businesses}
           {...(list.section === "notices"
@@ -68,7 +74,10 @@ export async function G2bHomePage({ searchParams }: { searchParams: Promise<Coll
           {result.rows.length ? (
             <ul className="grid gap-2">
               {result.rows.map((row) => (
-                <CollectionListItem key={JSON.stringify([row.number, row.revision, row.openingRevision])}>
+                <CollectionListItem
+                  key={JSON.stringify([row.number, row.revision, row.openingRevision])}
+                  href={`${userDetailPath(section, row)}?${detailQuery}`}
+                >
                   <CollectionListLabel
                     identifier={formatCollectionIdentifier(row)}
                     title={row.title}

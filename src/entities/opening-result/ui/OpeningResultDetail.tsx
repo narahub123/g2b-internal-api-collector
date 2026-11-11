@@ -150,7 +150,7 @@ function ResultTable({ table }: { table: DisplayTable }) {
  * @param results 개찰차수별 조회 결과.
  * @param title 화면 제목. 생략하면 기본 제목을 사용한다.
  * @param business 연결 공고나 저장된 조회 조건에서 결정한 업무구분.
- * @param noticePath 연결 공고 주소를 만드는 함수.
+ * @param noticePath 연결 공고 주소를 만든다. 주소가 없으면 공고번호를 텍스트로 표시한다.
  * @param actions 상세 제목 영역에 표시할 동작.
  */
 export function OpeningResultDetail({
@@ -167,7 +167,7 @@ export function OpeningResultDetail({
   title?: string;
   business?: G2bBusiness;
   originalHref?: string;
-  noticePath: (key: NoticeKey) => string;
+  noticePath: (key: NoticeKey) => string | undefined;
   actions?: ReactNode;
 }) {
   // 개찰차수와 분류는 데이터 그룹 키일 뿐, 원본 화면에 없는 제목으로 출력하지 않는다.
