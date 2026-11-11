@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { useId, useState, type ComponentProps, type ReactNode } from "react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/ui/accordion";
 import { Button } from "@/shared/ui/button";
 import { ListFilters } from "./ListFilters";
@@ -10,7 +10,7 @@ import { ListSort } from "./ListSort";
 
 type ListViewProps = {
   search?: ComponentProps<typeof ListSearch>;
-  filters?: ComponentProps<typeof ListFilters>;
+  filters?: Omit<ComponentProps<typeof ListFilters>, "formId">;
   sort?: ComponentProps<typeof ListSort>;
   pagination?: ComponentProps<typeof ListPagination>;
   controlsLabel?: string;
@@ -28,6 +28,7 @@ type ListViewProps = {
  */
 export function ListView({ search, filters, sort, pagination, controlsLabel, onReset, children }: ListViewProps) {
   const [resetVersion, setResetVersion] = useState(0);
+  const filterFormId = useId();
   const showSearch = search && search.fields.length > 0;
   const showSort = sort && sort.options.length > 0;
   const showFilters = filters && filters.filters.length > 0;
@@ -40,27 +41,48 @@ export function ListView({ search, filters, sort, pagination, controlsLabel, onR
           {showSort && <div className="ml-auto"><ListSort {...sort} /></div>}
         </div>
       )}
-      {showFilters && <ListFilters key={resetVersion} {...filters} resetLabel={onReset ? "필터 초기화" : filters.resetLabel} />}
-      {onReset && (
-        <Button type="button" variant="outline" className="justify-self-end" onClick={() => {
-          // URL이 이미 기본 상태인 경우에도 검색·필터의 미적용 입력을 폐기한다.
-          setResetVersion((version) => version + 1);
-          onReset();
-        }}>전체 초기화</Button>
+      {showFilters && <ListFilters key={resetVersion} {...filters} formId={filterFormId} />}
+      {(showFilters || onReset) && (
+        <div className="flex flex-wrap justify-end gap-2">
+          {showFilters && (
+            <>
+              <Button type="submit" form={filterFormId}>적용</Button>
+              <Button type="reset" variant="outline" form={filterFormId}>
+                {filters.resetLabel ?? (onReset ? "필터 초기화" : "초기화")}
+              </Button>
+            </>
+          )}
+          {onReset && (
+            <Button type="button" variant="outline" onClick={() => {
+              // URL이 이미 기본 상태인 경우에도 검색·필터의 미적용 입력을 폐기한다.
+              setResetVersion((version) => version + 1);
+              onReset();
+            }}>전체 초기화</Button>
+          )}
+        </div>
       )}
     </div>
   );
 
   return (
     <div className="grid min-w-0 gap-4">
-      {controls && (controlsLabel ? (
-        <Accordion type="single" collapsible className="min-w-0 rounded-xl border bg-card px-4">
-          <AccordionItem value="controls">
-            <AccordionTrigger heading="h2">{controlsLabel}</AccordionTrigger>
-            <AccordionContent>{controls}</AccordionContent>
-          </AccordionItem>
-        </Accordion>
-      ) : controls)}
+      {controls &&
+        (controlsLabel ? (
+          <Accordion
+            type="single"
+            collapsible
+            className="min-w-0 rounded-xl border bg-card px-4"
+          >
+            <AccordionItem value="controls">
+              <AccordionTrigger heading="h2" className="hover:no-underline cursor-pointer">
+                {controlsLabel}
+              </AccordionTrigger>
+              <AccordionContent>{controls}</AccordionContent>
+            </AccordionItem>
+          </Accordion>
+        ) : (
+          controls
+        ))}
       <div className="min-w-0">{children}</div>
       {pagination && <ListPagination {...pagination} />}
     </div>

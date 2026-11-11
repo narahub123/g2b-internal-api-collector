@@ -18,12 +18,12 @@ function PageControl({ href, label, current, children }: {
   return (
     <PaginationItem>
       {href === undefined ? (
-        <Button type="button" variant={variant} size="sm" className={className} aria-label={label} disabled>
+        <Button type="button" variant={variant} size="sm" className={className} title={label} aria-label={label} disabled>
           {children}
         </Button>
       ) : (
         <Button asChild variant={variant} size="sm" className={className}>
-          <Link href={href} prefetch={false} aria-label={label} aria-current={current ? "page" : undefined}>
+          <Link href={href} prefetch={false} title={label} aria-label={label} aria-current={current ? "page" : undefined}>
             {children}
           </Link>
         </Button>
@@ -53,11 +53,9 @@ export function ListPagination({ page, totalPages, hrefForPage }: {
       <PaginationContent>
         <PageControl href={canGoBack ? hrefForPage(1) : undefined} label="처음으로">
           <ChevronsLeft aria-hidden="true" />
-          <span className="hidden sm:inline">처음으로</span>
         </PageControl>
         <PageControl href={canGoBack ? hrefForPage(current - 1) : undefined} label="이전">
           <ChevronLeft aria-hidden="true" />
-          <span className="hidden sm:inline">이전</span>
         </PageControl>
         {getPageNumbers(current, totalPages).map((number) => (
           <PageControl key={number} href={hrefForPage(number)} label={`${number} 페이지`} current={number === current}>
@@ -65,11 +63,9 @@ export function ListPagination({ page, totalPages, hrefForPage }: {
           </PageControl>
         ))}
         <PageControl href={canGoForward ? hrefForPage(current + 1) : undefined} label="다음">
-          <span className="hidden sm:inline">다음</span>
           <ChevronRight aria-hidden="true" />
         </PageControl>
         <PageControl href={canGoForward ? hrefForPage(totalPages) : undefined} label="마지막으로">
-          <span className="hidden sm:inline">마지막으로</span>
           <ChevronsRight aria-hidden="true" />
         </PageControl>
       </PaginationContent>

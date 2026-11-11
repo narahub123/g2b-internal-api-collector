@@ -16,6 +16,7 @@ type ListFiltersProps = {
   value?: ListFilterValues;
   onApply: (value: ListFilterValues) => void;
   resetLabel?: string;
+  formId?: string;
 };
 
 const emptyValues: ListFilterValues = {};
@@ -24,16 +25,17 @@ const emptyValues: ListFilterValues = {};
  * 설정에 따라 날짜 범위, 숫자 범위와 다중 선택을 구성한다.
  * @param props.filters 각 필터의 고유 ID와 라벨, 다중 선택 옵션 또는 숫자 단위를 지정한다.
  * @param props.onApply 적용 시 검증된 조건을 전달한다. 초기화 시에는 빈 객체를 전달한다.
+ * @param props.formId 외부 버튼에서 적용·초기화를 실행할 때 연결할 폼 ID. 지정하면 내부 버튼을 생략한다.
  */
-export function ListFilters({ filters, value = emptyValues, onApply, resetLabel = "초기화" }: ListFiltersProps) {
+export function ListFilters({ filters, value = emptyValues, onApply, resetLabel = "초기화", formId }: ListFiltersProps) {
   if (!filters.length) return null;
 
   // 적용값이 바뀌면 이전 화면에서 편집 중이던 조건과 오류를 함께 초기화한다.
-  return <FilterForm key={JSON.stringify(value)} filters={filters} value={value} onApply={onApply} resetLabel={resetLabel} />;
+  return <FilterForm key={JSON.stringify(value)} filters={filters} value={value} onApply={onApply} resetLabel={resetLabel} formId={formId} />;
 }
 
 /** 적용 전 필터 입력을 보관하고, 검증 오류가 없을 때만 목록에 적용할 값을 전달한다. */
-function FilterForm({ filters, value, onApply, resetLabel }: Required<ListFiltersProps>) {
+function FilterForm({ filters, value, onApply, resetLabel, formId }: Omit<Required<ListFiltersProps>, "formId"> & Pick<ListFiltersProps, "formId">) {
   const id = useId();
   const [draft, setDraft] = useState<Parameters<typeof validateFilters>[1]>(value);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -50,8 +52,15 @@ function FilterForm({ filters, value, onApply, resetLabel }: Required<ListFilter
 
   return (
     <form
+      id={formId}
       aria-label="목록 필터"
-      className="flex flex-wrap items-start gap-3"
+      className="grid min-w-0 gap-3"
+      onReset={(event) => {
+        event.preventDefault();
+        setDraft({});
+        setErrors({});
+        onApply({});
+      }}
       onSubmit={(event) => {
         event.preventDefault();
         const result = validateFilters(filters, draft);
@@ -59,42 +68,42 @@ function FilterForm({ filters, value, onApply, resetLabel }: Required<ListFilter
         if (!Object.keys(result.errors).length) onApply(result.values);
       }}
     >
-      {filters.map((filter, index) => {
-        const fieldId = `${id}-${index}`;
-        const error = Object.hasOwn(errors, filter.id) ? errors[filter.id] : undefined;
-        const errorId = error ? `${fieldId}-error` : undefined;
-        const value = Object.hasOwn(draft, filter.id) ? draft[filter.id] : undefined;
-        const range = value && !("length" in value) ? value : {};
+      <div className="flex min-w-0 flex-wrap items-start gap-3">
+        {filters.map((filter, index) => {
+          const fieldId = `${id}-${index}`;
+          const error = Object.hasOwn(errors, filter.id) ? errors[filter.id] : undefined;
+          const errorId = error ? `${fieldId}-error` : undefined;
+          const value = Object.hasOwn(draft, filter.id) ? draft[filter.id] : undefined;
+          const range = value && !("length" in value) ? value : {};
 
-        return (
-          <fieldset key={filter.id} className="grid min-w-0 gap-1.5" aria-describedby={errorId}>
-            <legend className="mb-1.5 text-sm font-medium">{filter.label}</legend>
-            {filter.type === "multi-select" ? (
-              <MultiSelectFilter filter={filter} selected={Array.isArray(value) ? value : []} onChange={(next) => update(filter.id, next)} />
-            ) : filter.type === "date-range" ? (
-              <div className="flex flex-wrap gap-2">
-                <DateBoundary label={`${filter.label} 시작일`} placeholder="시작일" value={String(range.from ?? "")} errorId={errorId} onChange={(from) => update(filter.id, { ...range, from })} />
-                <DateBoundary label={`${filter.label} 종료일`} placeholder="종료일" value={String(range.to ?? "")} errorId={errorId} onChange={(to) => update(filter.id, { ...range, to })} />
-              </div>
-            ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                <Input type="text" inputMode="decimal" className="w-24" placeholder="최솟값" aria-label={`${filter.label} 최솟값`} aria-invalid={error ? true : undefined} aria-describedby={errorId} value={range.from ?? ""} onChange={(event) => update(filter.id, { ...range, from: event.target.value })} />
-                <Input type="text" inputMode="decimal" className="w-24" placeholder="최댓값" aria-label={`${filter.label} 최댓값`} aria-invalid={error ? true : undefined} aria-describedby={errorId} value={range.to ?? ""} onChange={(event) => update(filter.id, { ...range, to: event.target.value })} />
-                {filter.unit && <span className="text-sm text-muted-foreground">{filter.unit}</span>}
-              </div>
-            )}
-            {error && <p id={errorId} role="alert" className="text-sm text-destructive">{error}</p>}
-          </fieldset>
-        );
-      })}
-      <div className="flex gap-2 self-end">
-        <Button type="submit">적용</Button>
-        <Button type="button" variant="outline" onClick={() => {
-          setDraft({});
-          setErrors({});
-          onApply({});
-        }}>{resetLabel}</Button>
+          return (
+            <fieldset key={filter.id} className="grid min-w-0 gap-1.5" aria-describedby={errorId}>
+              <legend className="mb-1.5 text-sm font-medium">{filter.label}</legend>
+              {filter.type === "multi-select" ? (
+                <MultiSelectFilter filter={filter} selected={Array.isArray(value) ? value : []} onChange={(next) => update(filter.id, next)} />
+              ) : filter.type === "date-range" ? (
+                <div className="flex flex-wrap gap-2">
+                  <DateBoundary label={`${filter.label} 시작일`} placeholder="시작일" value={String(range.from ?? "")} errorId={errorId} onChange={(from) => update(filter.id, { ...range, from })} />
+                  <DateBoundary label={`${filter.label} 종료일`} placeholder="종료일" value={String(range.to ?? "")} errorId={errorId} onChange={(to) => update(filter.id, { ...range, to })} />
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input type="text" inputMode="decimal" className="w-24" placeholder="최솟값" aria-label={`${filter.label} 최솟값`} aria-invalid={error ? true : undefined} aria-describedby={errorId} value={range.from ?? ""} onChange={(event) => update(filter.id, { ...range, from: event.target.value })} />
+                  <Input type="text" inputMode="decimal" className="w-24" placeholder="최댓값" aria-label={`${filter.label} 최댓값`} aria-invalid={error ? true : undefined} aria-describedby={errorId} value={range.to ?? ""} onChange={(event) => update(filter.id, { ...range, to: event.target.value })} />
+                  {filter.unit && <span className="text-sm text-muted-foreground">{filter.unit}</span>}
+                </div>
+              )}
+              {error && <p id={errorId} role="alert" className="text-sm text-destructive">{error}</p>}
+            </fieldset>
+          );
+        })}
       </div>
+      {!formId && (
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button type="submit">적용</Button>
+          <Button type="reset" variant="outline">{resetLabel}</Button>
+        </div>
+      )}
     </form>
   );
 }
