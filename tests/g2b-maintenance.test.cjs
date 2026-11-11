@@ -27,6 +27,8 @@ const aliasHook = registerHooks({
 const { G2bMaintenanceError, assertNotMaintenance, findMaintenance, maintenanceResponse } = require('../src/shared/api/g2b/g2b-maintenance');
 const { collectContractRequest, collectOrderPlan, collectPriorSpec } = require('../src/features/collect-g2b/server');
 const { getG2bRepository } = require('../src/server/g2b/repository');
+const { openCollectionAttempts } = require('../src/server/g2b/repository/collection-attempts');
+const { noticeListHref, parseNoticeListQuery } = require('../src/entities/notice/model/notice-list-query');
 const { POST: postNotice } = require('../app/api/notices/route');
 const { POST: postOpeningResults } = require('../app/api/opening-results/[number]/[revision]/route');
 const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]/attachments/[seq]/route');
@@ -482,4 +484,63 @@ test('세션 발급과 다운로드 메타데이터의 점검을 감지한다', 
   assert.equal(response.status, 503);
   assert.equal((await response.json()).code, 'g2b_maintenance');
   assert.equal(calls.mock.callCount(), 2);
+});
+
+test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일정과 숨겨진 지역을 제외한다', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`
+      CREATE TABLE notices (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE order_plans (number TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE prior_specs (number TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE contract_requests (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE contracts (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE opening_results (number TEXT, revision TEXT, opening_revision TEXT, collected_at TEXT, data TEXT);
+    `);
+    const attempts = openCollectionAttempts(db);
+    const insert = db.prepare("INSERT INTO notices VALUES (?, '000', '2026-11-01', ?)");
+    for (let index = 1; index <= 23; index++) {
+      const number = 'N' + String(index).padStart(2, '0');
+      insert.run(number, JSON.stringify({
+        title: index === 1 ? '공고 &#38; 검증' : number,
+        payload: {
+          dmItemMap: {
+            dmstUntyGrpNm: index === 1 ? '테스트 수요기관' : '다른 기관',
+            pbancPstgDt: '2026/11/01 09:00:00',
+            alotBgtAmt: index,
+            rgnLmtYn: index === 1 ? 'Y' : 'N',
+            rgnLmtCn: index === 1 ? '[서울특별시][경기도]' : '[숨겨진 지역]',
+          },
+          dmItemList1: [
+            { startDtNm: 'BIDPBANC_SLPRRCPTBGNGDT', startDt: '2026/11/02 09:00:00', endDtNm: 'PBANCJINTSYDD_JSAGRSBMSNDDLNDT' },
+            { startDt: '202611051030', endDt: '2026/11/06 11:00:00', endDtNm: 'BIDPBANC_SLPRRCPTDDLNDT' },
+          ],
+        },
+      }));
+    }
+    const failed = attempts.start({ section: 'notices', number: 'MISSING', revision: '000', methodCode: '' });
+    attempts.finish(failed, 'failed', '테스트 실패');
+    const regions = attempts.noticeList.regions();
+    assert.deepEqual(regions, ['경기도', '서울특별시']);
+    const page = (params) => attempts.noticeList.page(parseNoticeListQuery(params, regions));
+    const numbers = (params) => page(params).rows.map((row) => row.number);
+    assert.deepEqual(numbers({ field: 'agency', q: '수요기관', region: ['경기도', '서울특별시'], postedTo: '2026-11-01', submissionFrom: '2026-11-05', budgetTo: '1' }), ['N01']);
+    assert.deepEqual(numbers({ q: '& 검증' }), ['N01']);
+    assert.deepEqual(numbers({ field: 'number', q: 'missing', status: 'uncollected' }), ['MISSING']);
+    assert.deepEqual(numbers({ field: 'number', q: 'N01 - 000' }), ['N01']);
+    assert.deepEqual(numbers({ submissionTo: '2026-11-02' }), []);
+    assert.deepEqual(numbers({ sort: 'budget-desc', page: '2' }), ['N03', 'N02', 'N01', 'MISSING']);
+    assert.equal(page({ page: '999' }).page, 2);
+    for (const sort of ['posted-asc', 'submission-asc', 'deadline-desc', 'title-asc', 'budget-asc']) {
+      assert.equal(page({ sort }).rows.length, 20);
+    }
+    const query = parseNoticeListQuery({ field: 'agency', q: '기관', region: regions, page: '2', sort: 'deadline-asc' }, regions);
+    const href = new URL(noticeListHref('/notices', query), 'http://localhost');
+    assert.equal(href.searchParams.get('page'), '2');
+    assert.equal(href.searchParams.get('sort'), 'deadline-asc');
+    assert.deepEqual(href.searchParams.getAll('region'), regions);
+  } finally {
+    databases.delete(db);
+    db.close();
+  }
 });

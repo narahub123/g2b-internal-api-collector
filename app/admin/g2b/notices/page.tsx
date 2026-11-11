@@ -1,6 +1,7 @@
 import { CollectionListPage } from "@/_pages/admin/g2b/ui/CollectionListPage";
+import type { NoticeSearchParams } from "@/entities/notice/model/notice-list-query";
 
-/** 업무 목록에서 저장 현황과 선택된 수집 상태 목록을 표시한다. */
-export default function Page({ searchParams }: { searchParams: Promise<{ status?: string | string[] }> }) {
+/** 입찰공고의 수집 현황과 URL 조회 조건이 적용된 목록을 표시한다. */
+export default function Page({ searchParams }: { searchParams: Promise<NoticeSearchParams> }) {
   return <CollectionListPage section="notices" searchParams={searchParams} />;
 }

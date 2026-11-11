@@ -1,5 +1,7 @@
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import { noticeListHref, parseNoticeListQuery } from "@/entities/notice/model/notice-list-query";
+import type { NoticeSearchParams } from "@/entities/notice/model/notice-list-query";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type {
@@ -10,6 +12,7 @@ import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { ADMIN_G2B_PATH, collectionDetailPaths } from "../../config/routes";
+import { NoticeListView } from "../notices/ui/NoticeListView";
 import { CollectionForm } from "./CollectionForm";
 import {
   collectionCountFormat,
@@ -45,9 +48,28 @@ function targetLabel({ number, revision, openingRevision }: TargetKey) {
     .join("/");
 }
 
+type DisplayRow = {
+  item: TargetKey;
+  savedItem?: Pick<CollectionOverview["saved"][number], "title" | "businessCode" | "businessLabel">;
+  failure?: Pick<CollectionOverview["failures"][number], "id" | "startedAt" | "status" | "error">;
+};
+
+function loadOverview(section: CollectionSection, selected: "total" | "collected" | "uncollected") {
+  const { counts, saved, failures } = getG2bRepository().collectionAttempts.overview(section);
+  const failureByKey = new Map(failures.map((failure) => [targetKey(failure), failure]));
+  // 저장 자료가 있는 재수집 실패는 기존 항목에 표시해 목록과 집계에서 중복되지 않게 한다.
+  const savedRows = selected === "uncollected" ? [] : saved.map((item) => ({
+    item, savedItem: item, failure: failureByKey.get(targetKey(item)),
+  }));
+  const missingRows = selected === "collected" ? [] : failures
+    .filter(({ hasData }) => !hasData)
+    .map((failure) => ({ item: failure, savedItem: undefined, failure }));
+  return { counts, rows: [...savedRows, ...missingRows] };
+}
+
 /**
  * URL에서 선택된 필터에 맞춰 저장 자료와 최신 실패 상태를 대상별 한 행으로 표시한다.
- * @param props.searchParams status에 collected 또는 uncollected를 지정하면 해당 목록을 연다.
+ * @param props.searchParams 수집 상태와 입찰공고에서 지원하는 검색·필터·정렬·페이지 조건.
  * @throws SQLite에서 업무 목록과 수집 이력을 읽지 못한 경우.
  */
 export async function CollectionListPage({
@@ -55,39 +77,29 @@ export async function CollectionListPage({
   searchParams,
 }: {
   section: CollectionSection;
-  searchParams: Promise<{ status?: string | string[] }>;
+  searchParams: Promise<NoticeSearchParams>;
 }) {
-  const { status } = await searchParams;
+  const params = await searchParams;
+  const { status } = params;
   const selected =
     status === "collected" || status === "uncollected" ? status : "total";
-  const repository = getG2bRepository();
-  const { counts, saved, failures } =
-    repository.collectionAttempts.overview(section);
-  const failureByKey = new Map(
-    failures.map((failure) => [targetKey(failure), failure]),
-  );
-
-  // 저장 자료가 있는 재수집 실패는 기존 항목에 표시해 목록과 집계에서 중복되지 않게 한다.
-  const savedRows =
-    selected === "uncollected"
-      ? []
-      : saved.map((item) => ({
-          item,
-          savedItem: item,
-          failure: failureByKey.get(targetKey(item)),
-        }));
-  const missingRows =
-    selected === "collected"
-      ? []
-      : failures
-          .filter(({ hasData }) => !hasData)
-          .map((failure) => ({
-            item: failure,
-            savedItem: undefined,
-            failure,
-          }));
-  const rows = [...savedRows, ...missingRows];
+  const attempts = getG2bRepository().collectionAttempts;
+  const notice = section === "notices" ? (() => {
+    const regions = attempts.noticeList.regions();
+    const query = parseNoticeListQuery(params, regions);
+    const result = attempts.noticeList.page(query);
+    const rows: DisplayRow[] = result.rows.map((row) => ({
+      item: row,
+      savedItem: row.collectedAt !== null ? row : undefined,
+      failure: row.id !== null && row.startedAt && row.status && row.status !== "succeeded"
+        ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error }
+        : undefined,
+    }));
+    return { query: { ...query, page: result.page }, regions, totalPages: result.totalPages, rows, counts: attempts.counts(section) };
+  })() : undefined;
+  const { counts, rows } = notice ?? loadOverview(section, selected);
   const href = `${ADMIN_G2B_PATH}/${section}`;
+  const items = <CollectionRows section={section} rows={rows} />;
 
   return (
     <section className="grid min-w-0 gap-6">
@@ -108,7 +120,8 @@ export async function CollectionListPage({
         {collectionCountLabels.map(([key, label]) => (
           <Link
             key={key}
-            href={key === "total" ? href : `${href}?status=${key}`}
+            href={notice ? noticeListHref(href, { ...notice.query, status: key, page: 1 })
+              : key === "total" ? href : `${href}?status=${key}`}
             aria-current={selected === key ? "page" : undefined}
             className={cn(
               "flex min-w-0 flex-wrap items-center justify-between gap-x-2 border-b-2 border-transparent px-3 py-4 hover:bg-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:px-5",
@@ -130,56 +143,65 @@ export async function CollectionListPage({
           </Link>
         ))}
       </nav>
-      {rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          해당하는 자료가 없습니다.
-        </p>
-      ) : (
-        <ul className="grid gap-2">
-          {rows.map(({ item, savedItem, failure }) => {
-            const key = targetKey(item);
-            return (
-              <CollectionListItem
-                key={key}
-                href={savedItem ? collectionDetailPaths[section](item) : undefined}
-                action={
-                  failure && (
-                    <RecollectButton
-                      endpoint={`/api/g2b/collection-attempts/${failure.id}/retry`}
-                      refreshOnError
-                    />
-                  )
-                }
-                status={
-                  failure && (
-                    <>
-                      <p className="text-xs text-muted-foreground">
-                        <time dateTime={failure.startedAt}>
-                          {dateFormat.format(new Date(failure.startedAt))}
-                        </time>
-                        {" · "}
-                        {failureLabels[failure.status]}
-                      </p>
-                      {failure.error && (
-                        <p className="wrap-anywhere text-destructive">
-                          {failure.error}
-                        </p>
-                      )}
-                    </>
-                  )
-                }
-              >
-                <CollectionListLabel
-                  identifier={targetLabel(item)}
-                  title={savedItem?.title}
-                  businessCode={savedItem?.businessCode}
-                  businessLabel={savedItem?.businessLabel}
-                />
-              </CollectionListItem>
-            );
-          })}
-        </ul>
-      )}
+      {notice ? (
+        <NoticeListView path={href} query={notice.query} regions={notice.regions} totalPages={notice.totalPages}>
+          {items}
+        </NoticeListView>
+      ) : items}
     </section>
+  );
+}
+
+/** 저장 여부에 따라 상세 링크를 표시하고 최신 실패나 보류가 있으면 재수집을 제공한다. */
+function CollectionRows({ section, rows }: { section: CollectionSection; rows: DisplayRow[] }) {
+  return rows.length === 0 ? (
+    <p className="text-sm text-muted-foreground">
+      해당하는 자료가 없습니다.
+    </p>
+  ) : (
+    <ul className="grid gap-2">
+      {rows.map(({ item, savedItem, failure }) => {
+        const key = targetKey(item);
+        return (
+          <CollectionListItem
+            key={key}
+            href={savedItem ? collectionDetailPaths[section](item) : undefined}
+            action={
+              failure && (
+                <RecollectButton
+                  endpoint={`/api/g2b/collection-attempts/${failure.id}/retry`}
+                  refreshOnError
+                />
+              )
+            }
+            status={
+              failure && (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    <time dateTime={failure.startedAt}>
+                      {dateFormat.format(new Date(failure.startedAt))}
+                    </time>
+                    {" · "}
+                    {failureLabels[failure.status]}
+                  </p>
+                  {failure.error && (
+                    <p className="wrap-anywhere text-destructive">
+                      {failure.error}
+                    </p>
+                  )}
+                </>
+              )
+            }
+          >
+            <CollectionListLabel
+              identifier={targetLabel(item)}
+              title={savedItem?.title}
+              businessCode={savedItem?.businessCode}
+              businessLabel={savedItem?.businessLabel}
+            />
+          </CollectionListItem>
+        );
+      })}
+    </ul>
   );
 }

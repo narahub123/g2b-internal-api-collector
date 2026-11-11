@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { OpeningResultQuery } from "@/entities/opening-result/model/opening-result";
 import type { G2bCollectionCounts } from "./types";
+import { openNoticeList } from "./notice-list";
 
 export type CollectionSection = keyof G2bCollectionCounts;
 
@@ -42,7 +43,7 @@ export type CollectionOverview = {
   failures: FailedAttempt[];
 };
 
-type OverviewRow = TargetKey & ListMetadata & {
+export type CollectionListRow = TargetKey & ListMetadata & {
   collectedAt: string | null;
   id: number | null;
   startedAt: string | null;
@@ -72,7 +73,8 @@ const savedQueries: Record<CollectionSection, string> = {
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.title') AS title,
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd') AS businessCode,
-      json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel
+      json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel,
+      data
     FROM notices`,
   "contract-requests": `
     SELECT number, revision, '' AS opening_revision, collected_at,
@@ -174,10 +176,11 @@ export function openCollectionAttempts(db: DatabaseSync) {
       LEFT JOIN g2b_collection_attempts attempt ON attempt.id = latest.id
       ORDER BY saved.collected_at DESC, targets.number, targets.revision, targets.opening_revision
     `);
-    return [section, { counts, overview }] as const;
+    return [section, { counts, overview, targets }] as const;
   }));
 
   return {
+    noticeList: openNoticeList(db, summaries.get("notices")!.targets),
     /**
      * 외부 조회 직전에 입력과 시작 시각을 기록한다.
      * @returns 종료 결과를 기록하거나 재시도할 때 쓰는 시도 ID.
@@ -228,7 +231,7 @@ export function openCollectionAttempts(db: DatabaseSync) {
      * @throws SQLite가 목록을 조회하지 못한 경우.
      */
     overview(section: CollectionSection): CollectionOverview {
-      const rows = summaries.get(section)!.overview.all(section) as OverviewRow[];
+      const rows = summaries.get(section)!.overview.all(section) as CollectionListRow[];
       const saved: SavedTarget[] = [];
       const failures: FailedAttempt[] = [];
       for (const { number, revision, openingRevision, collectedAt, title, businessCode, businessLabel, id, startedAt, status, error } of rows) {
