@@ -21,7 +21,13 @@ type TargetKey = {
   openingRevision: string;
 };
 
-type SavedTarget = TargetKey & { collectedAt: string };
+type ListMetadata = {
+  title: string | null;
+  businessCode: string | null;
+  businessLabel: string | null;
+};
+
+type SavedTarget = TargetKey & ListMetadata & { collectedAt: string };
 type FailedAttempt = TargetKey & {
   id: number;
   startedAt: string;
@@ -36,7 +42,7 @@ export type CollectionOverview = {
   failures: FailedAttempt[];
 };
 
-type OverviewRow = TargetKey & {
+type OverviewRow = TargetKey & ListMetadata & {
   collectedAt: string | null;
   id: number | null;
   startedAt: string | null;
@@ -46,14 +52,59 @@ type OverviewRow = TargetKey & {
 
 type RetryRow = { input: string; status: AttemptStatus; latestId: number };
 
-// 테이블과 컬럼은 업무 상수로만 선택한다. 빈 문자열은 해당 업무에 없는 차수를 뜻한다.
+// 상세 화면과 같은 원본 필드에서 목록 제목과 업무구분을 읽는다.
+// 빈 문자열은 해당 업무에 없는 차수를 뜻한다.
 const savedQueries: Record<CollectionSection, string> = {
-  "order-plans": "SELECT number, '' AS revision, '' AS opening_revision, collected_at FROM order_plans",
-  "prior-specs": "SELECT number, '' AS revision, '' AS opening_revision, collected_at FROM prior_specs",
-  notices: "SELECT number, revision, '' AS opening_revision, collected_at FROM notices",
-  "contract-requests": "SELECT number, revision, '' AS opening_revision, collected_at FROM contract_requests",
-  contracts: "SELECT number, revision, '' AS opening_revision, collected_at FROM contracts",
-  "opening-results": "SELECT number, revision, opening_revision, collected_at FROM opening_results",
+  "order-plans": `
+    SELECT number, '' AS revision, '' AS opening_revision, collected_at,
+      COALESCE(NULLIF(TRIM(json_extract(data, '$.payload.dlOderPlanM.bizNm')), ''),
+        json_extract(data, '$.payload.dlOderPlanM.itemNm')) AS title,
+      json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCd') AS businessCode,
+      json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCdNm') AS businessLabel
+    FROM order_plans`,
+  "prior-specs": `
+    SELECT number, '' AS revision, '' AS opening_revision, collected_at,
+      json_extract(data, '$.payload.dlBfSpecM.bfSpecNm') AS title,
+      json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCd') AS businessCode,
+      json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCdNm') AS businessLabel
+    FROM prior_specs`,
+  notices: `
+    SELECT number, revision, '' AS opening_revision, collected_at,
+      json_extract(data, '$.title') AS title,
+      json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd') AS businessCode,
+      json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel
+    FROM notices`,
+  "contract-requests": `
+    SELECT number, revision, '' AS opening_revision, collected_at,
+      json_extract(data, '$.detail.bizNm') AS title,
+      NULL AS businessCode,
+      json_extract(data, '$.detail.prcmBsneAreaNm') AS businessLabel
+    FROM contract_requests`,
+  contracts: `
+    SELECT number, revision, '' AS opening_revision, collected_at,
+      json_extract(data, '$.detail.ctrtNm') AS title,
+      json_extract(data, '$.detail.prcmBsneSeCd') AS businessCode,
+      json_extract(data, '$.detail.prcmBsneSeNm') AS businessLabel
+    FROM contracts`,
+  "opening-results": `
+    SELECT result.number, result.revision, result.opening_revision, result.collected_at,
+      COALESCE(NULLIF(TRIM(json_extract(notice.data, '$.title')), ''),
+        NULLIF(TRIM(json_extract(result.data, '$.price.pbancInfo.bidPbancNm')), ''),
+        (SELECT COALESCE(
+          NULLIF(TRIM(json_extract(entry.value, '$.detail.bidPbancNm')), ''),
+          NULLIF(TRIM(json_extract(entry.value, '$.detail.bidPrgrs.bidPbancNm')), ''),
+          NULLIF(TRIM(json_extract(entry.value, '$.detail.bidInfo.bidPbancNm')), '')
+        ) AS name FROM json_each(result.data, '$.results') AS entry
+        WHERE name IS NOT NULL LIMIT 1)
+      ) AS title,
+      COALESCE(NULLIF(TRIM(json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeCd')), ''),
+        (SELECT MIN(json_extract(entry.value, '$.query.businessCode'))
+          FROM json_each(result.data, '$.results') AS entry
+          HAVING COUNT(DISTINCT json_extract(entry.value, '$.query.businessCode')) = 1)
+      ) AS businessCode,
+      json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel
+    FROM opening_results AS result
+    LEFT JOIN notices AS notice ON notice.number = result.number AND notice.revision = result.revision`,
 };
 
 /**
@@ -94,9 +145,9 @@ export function openCollectionAttempts(db: DatabaseSync) {
     ) AS latestId
     FROM g2b_collection_attempts attempt WHERE attempt.id = ?
   `);
-  const overviews = new Map(Object.entries(savedQueries).map(([section, savedQuery]) => [
-    section,
-    db.prepare(`
+  const summaries = new Map(Object.entries(savedQueries).map(([section, savedQuery]) => {
+    // 두 화면에서 저장 자료와 시도 이력의 합집합을 동일한 기준으로 집계한다.
+    const targets = `
       WITH saved AS (${savedQuery}),
       latest AS (
         SELECT MAX(id) AS id, number, revision, opening_revision FROM g2b_collection_attempts
@@ -105,17 +156,26 @@ export function openCollectionAttempts(db: DatabaseSync) {
       targets AS (
         SELECT number, revision, opening_revision FROM saved
         UNION SELECT number, revision, opening_revision FROM latest
-      )
+      )`;
+    const counts = db.prepare(`${targets}
+      SELECT COUNT(*) AS total, (SELECT COUNT(*) FROM saved) AS collected,
+        COUNT(*) - (SELECT COUNT(*) FROM saved) AS uncollected
+      FROM targets
+    `);
+    const overview = db.prepare(`${targets}
       SELECT targets.number, targets.revision, targets.opening_revision AS openingRevision,
-        saved.collected_at AS collectedAt, attempt.id, attempt.started_at AS startedAt,
+        saved.collected_at AS collectedAt, saved.title,
+        CAST(saved.businessCode AS TEXT) AS businessCode, saved.businessLabel,
+        attempt.id, attempt.started_at AS startedAt,
         attempt.status, attempt.error
       FROM targets
       LEFT JOIN saved USING (number, revision, opening_revision)
       LEFT JOIN latest USING (number, revision, opening_revision)
       LEFT JOIN g2b_collection_attempts attempt ON attempt.id = latest.id
       ORDER BY saved.collected_at DESC, targets.number, targets.revision, targets.opening_revision
-    `),
-  ]));
+    `);
+    return [section, { counts, overview }] as const;
+  }));
 
   return {
     /**
@@ -155,16 +215,25 @@ export function openCollectionAttempts(db: DatabaseSync) {
     },
 
     /**
+     * 목록 본문을 읽지 않고 랜딩 카드의 전체·수집·미수집 건수를 조회한다.
+     * @throws SQLite가 수집 건수를 집계하지 못한 경우.
+     */
+    counts(section: CollectionSection): CollectionOverview["counts"] {
+      const { total, collected, uncollected } = summaries.get(section)!.counts.get(section) as CollectionOverview["counts"];
+      return { total, collected, uncollected };
+    },
+
+    /**
      * 저장 키와 시도 키의 합집합으로 집계하고 최신 실패와 미확인 시도를 함께 반환한다.
      * @throws SQLite가 목록을 조회하지 못한 경우.
      */
     overview(section: CollectionSection): CollectionOverview {
-      const rows = overviews.get(section)!.all(section) as OverviewRow[];
+      const rows = summaries.get(section)!.overview.all(section) as OverviewRow[];
       const saved: SavedTarget[] = [];
       const failures: FailedAttempt[] = [];
-      for (const { number, revision, openingRevision, collectedAt, id, startedAt, status, error } of rows) {
+      for (const { number, revision, openingRevision, collectedAt, title, businessCode, businessLabel, id, startedAt, status, error } of rows) {
         const key = { number, revision, openingRevision };
-        if (collectedAt !== null) saved.push({ ...key, collectedAt });
+        if (collectedAt !== null) saved.push({ ...key, collectedAt, title, businessCode, businessLabel });
         if (id !== null && startedAt !== null && status && status !== "succeeded") {
           failures.push({ ...key, id, startedAt, status, error, hasData: collectedAt !== null });
         }

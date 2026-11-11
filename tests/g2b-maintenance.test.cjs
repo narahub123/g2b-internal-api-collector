@@ -83,6 +83,7 @@ test('수집 이력은 기존 자료와 시도 대상을 합쳐 집계하고 늦
   history.finish(older, 'succeeded');
   const { counts, failures } = history.overview('contracts');
   assert.deepEqual(counts, { total: 2, collected: 1, uncollected: 1 });
+  assert.deepEqual(history.counts('contracts'), counts);
   assert.equal(failures[0].id, latest);
   assert.equal(failures[0].hasData, false);
   repository.saveContract({ number: target.number, revision: target.revision, collectedAt });
@@ -144,6 +145,7 @@ test('여섯 업무의 미저장 실패를 기록하고 이력의 입력으로 �
     const response = await retry(request, context);
     assert.equal(response.status, 204, response.status === 204 ? section : await response.text());
     const updated = history.overview(section);
+    assert.deepEqual(history.counts(section), updated.counts, section);
     assert.ok(updated.saved.some((row) => row.number === number), section);
     assert.ok(!updated.failures.some((row) => row.number === number), section);
     const count = calls.mock.callCount();

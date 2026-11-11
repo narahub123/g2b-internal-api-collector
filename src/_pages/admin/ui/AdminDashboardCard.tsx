@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/shared/ui/card
 type AdminDashboardCardProps = {
   href: string;
   title: string;
-  description: string;
+  description?: string;
   icon: ReactNode;
   children?: ReactNode;
 };
@@ -41,7 +41,7 @@ export function AdminDashboardCard({
               {title}
             </h2>
           </div>
-          <CardDescription>{description}</CardDescription>
+          {description && <CardDescription>{description}</CardDescription>}
         </CardHeader>
         {children == null ? null : <CardContent>{children}</CardContent>}
       </Card>
