@@ -73,6 +73,9 @@ function noticeFields(raw: unknown) {
       agencies.push(...payload[key].map((item) => item?.dmstUntyGrpNm));
     }
   }
+  // 공고서참조와 누락은 별도 제한 가능성이 있으므로 제한 없음으로 해석하지 않는다.
+  const unrestrictedRegion =
+    detail.rgnLmtYn === "N" && cleanText(detail.rgnLmtYnNm) === "해당없음";
   return JSON.stringify({
     posted: sortDate(detail.pbancPstgDt),
     submission: sortDate(submission?.startDt),
@@ -81,6 +84,7 @@ function noticeFields(raw: unknown) {
     agencies: [...new Set(agencies.map(cleanText).filter(Boolean))],
     budget: Number.isFinite(amount) ? amount : null,
     regions: detail.rgnLmtYn === "Y" ? regionsFrom(detail.rgnLmtCn) : [],
+    unrestrictedRegion,
   });
 }
 
@@ -114,7 +118,7 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
     },
 
     /**
-     * 조건을 적용한 전체 건수와 현재 페이지의 행만 조회한다.
+     * 검색·필터에 일치하는 수집 상태별 건수와 선택된 상태의 현재 페이지를 함께 조회한다.
      * @returns 범위를 벗어난 페이지는 마지막 페이지로 보정하며, 값 없는 행은 정렬 방향에 관계없이 뒤에 둔다.
      * @throws SQLite에서 검색 또는 집계에 실패한 경우.
      */
@@ -123,10 +127,10 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
       const values: SQLInputValue[] = ["notices"];
       const status =
         query.status === "collected"
-          ? "WHERE saved.collected_at IS NOT NULL"
+          ? "collectedAt IS NOT NULL"
           : query.status === "uncollected"
-            ? "WHERE saved.collected_at IS NULL"
-            : "";
+            ? "collectedAt IS NULL"
+            : "TRUE";
       // 상세 화면의 하이픈과 목록의 슬래시 모두 같은 공고번호·차수로 검색한다.
       const search =
         query.search.field === "number"
@@ -159,7 +163,7 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
       const selected = query.filters.region;
       if (Array.isArray(selected) && selected.length) {
         where.push(
-          "EXISTS (SELECT 1 FROM json_each(fields, '$.regions') WHERE value IN (SELECT value FROM json_each(?)))",
+          "(json_extract(fields, '$.unrestrictedRegion') = 1 OR EXISTS (SELECT 1 FROM json_each(fields, '$.regions') WHERE value IN (SELECT value FROM json_each(?))))",
         );
         values.push(JSON.stringify(selected));
       }
@@ -176,7 +180,6 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
           LEFT JOIN saved USING (number, revision, opening_revision)
           LEFT JOIN latest USING (number, revision, opening_revision)
           LEFT JOIN g2b_collection_attempts attempt ON attempt.id = latest.id
-          ${status}
         ),
         matches AS MATERIALIZED (
           SELECT *,
@@ -186,25 +189,35 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
           FROM projected
           ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
         ),
-        totals AS (SELECT COUNT(*) AS count FROM matches),
+        totals AS (
+          SELECT COUNT(*) AS total, COUNT(collectedAt) AS collected,
+            COUNT(*) FILTER (WHERE ${status}) AS selectedCount
+          FROM matches
+        ),
         paged AS (
           SELECT number, revision, openingRevision, collectedAt, title, businessCode, businessLabel,
             id, startedAt, status, error, ${order} AS sortValue
           FROM matches
+          WHERE ${status}
           ORDER BY sortValue ${direction === "asc" ? "ASC" : "DESC"} NULLS LAST, number, revision
           LIMIT ${pageSize} OFFSET (
-            SELECT (max(1, min(?, (count + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
+            SELECT (max(1, min(?, (selectedCount + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
           )
         )
-        SELECT paged.*, totals.count AS totalCount FROM totals LEFT JOIN paged ON TRUE
+        SELECT paged.*, totals.total, totals.collected, totals.selectedCount
+        FROM totals LEFT JOIN paged ON TRUE
         ORDER BY sortValue ${direction === "asc" ? "ASC" : "DESC"} NULLS LAST, number, revision`;
       const rows = db
         .prepare(sql)
         .all(...values, query.page) as (CollectionListRow & {
-        totalCount: number;
+        total: number;
+        collected: number;
+        selectedCount: number;
       })[];
-      const totalPages = Math.ceil((rows[0]?.totalCount ?? 0) / pageSize);
+      const { total, collected, selectedCount } = rows[0];
+      const totalPages = Math.ceil(selectedCount / pageSize);
       return {
+        counts: { total, collected, uncollected: total - collected },
         page: Math.max(1, Math.min(query.page, totalPages)),
         totalPages,
         rows: rows.filter((row) => row.number !== null),

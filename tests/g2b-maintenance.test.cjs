@@ -508,8 +508,9 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
             dmstUntyGrpNm: index === 1 ? '테스트 수요기관' : '다른 기관',
             pbancPstgDt: '2026/11/01 09:00:00',
             alotBgtAmt: index,
-            rgnLmtYn: index === 1 ? 'Y' : 'N',
-            rgnLmtCn: index === 1 ? '[서울특별시][경기도]' : '[숨겨진 지역]',
+            rgnLmtYn: [1, 4, 5].includes(index) ? 'Y' : index === 3 ? null : 'N',
+            rgnLmtYnNm: index === 2 ? '해당없음' : '공고서참조',
+            rgnLmtCn: index === 1 ? '[서울특별시][경기도]' : index === 4 ? '[부산광역시]' : index === 5 ? null : '[숨겨진 지역]',
           },
           dmItemList1: [
             { startDtNm: 'BIDPBANC_SLPRRCPTBGNGDT', startDt: '2026/11/02 09:00:00', endDtNm: 'PBANCJINTSYDD_JSAGRSBMSNDDLNDT' },
@@ -521,18 +522,28 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
     const failed = attempts.start({ section: 'notices', number: 'MISSING', revision: '000', methodCode: '' });
     attempts.finish(failed, 'failed', '테스트 실패');
     const regions = attempts.noticeList.regions();
-    assert.deepEqual(regions, ['경기도', '서울특별시']);
+    assert.deepEqual(regions, ['경기도', '부산광역시', '서울특별시']);
     const page = (params) => attempts.noticeList.page(parseNoticeListQuery(params, regions));
     const numbers = (params) => page(params).rows.map((row) => row.number);
     assert.deepEqual(numbers({ field: 'agency', q: '수요기관', region: ['경기도', '서울특별시'], postedTo: '2026-11-01', submissionFrom: '2026-11-05', budgetTo: '1' }), ['N01']);
     assert.deepEqual(numbers({ q: '& 검증' }), ['N01']);
     assert.deepEqual(numbers({ field: 'number', q: 'missing', status: 'uncollected' }), ['MISSING']);
     assert.deepEqual(numbers({ field: 'number', q: 'N01 - 000' }), ['N01']);
+    const regionQuery = { region: ['경기도', '부산광역시'], sort: 'budget-asc' };
+    assert.deepEqual(numbers(regionQuery), ['N01', 'N02', 'N04']);
+    const noUncollected = page({ ...regionQuery, status: 'uncollected', page: '2' });
+    assert.deepEqual(noUncollected.counts, { total: 3, collected: 3, uncollected: 0 });
+    assert.deepEqual(noUncollected.rows, []);
+    assert.equal(noUncollected.totalPages, 0);
+    for (const status of ['total', 'collected', 'uncollected']) {
+      assert.deepEqual(page({ status, field: 'number', q: '000' }).counts, { total: 24, collected: 23, uncollected: 1 });
+      assert.deepEqual(page({ status, field: 'number', q: '존재하지 않음' }).counts, { total: 0, collected: 0, uncollected: 0 });
+    }
     assert.deepEqual(numbers({ submissionTo: '2026-11-02' }), []);
-    assert.deepEqual(numbers({ sort: 'budget-desc', page: '2' }), ['N03', 'N02', 'N01', 'MISSING']);
+    assert.deepEqual(numbers({ sort: 'budget-desc', page: '2' }), ['N08', 'N07', 'N06', 'N05', 'N04', 'N03', 'N02', 'N01', 'MISSING']);
     assert.equal(page({ page: '999' }).page, 2);
     for (const sort of ['posted-asc', 'submission-asc', 'deadline-desc', 'title-asc', 'budget-asc']) {
-      assert.equal(page({ sort }).rows.length, 20);
+      assert.equal(page({ sort }).rows.length, 15);
     }
     const query = parseNoticeListQuery({ field: 'agency', q: '기관', region: regions, page: '2', sort: 'deadline-asc' }, regions);
     const href = new URL(noticeListHref('/notices', query), 'http://localhost');

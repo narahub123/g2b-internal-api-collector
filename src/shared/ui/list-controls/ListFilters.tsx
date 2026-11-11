@@ -15,6 +15,7 @@ type ListFiltersProps = {
   filters: readonly ListFilter[];
   value?: ListFilterValues;
   onApply: (value: ListFilterValues) => void;
+  resetLabel?: string;
 };
 
 const emptyValues: ListFilterValues = {};
@@ -24,15 +25,15 @@ const emptyValues: ListFilterValues = {};
  * @param props.filters 각 필터의 고유 ID와 라벨, 다중 선택 옵션 또는 숫자 단위를 지정한다.
  * @param props.onApply 적용 시 검증된 조건을 전달한다. 초기화 시에는 빈 객체를 전달한다.
  */
-export function ListFilters({ filters, value = emptyValues, onApply }: ListFiltersProps) {
+export function ListFilters({ filters, value = emptyValues, onApply, resetLabel = "초기화" }: ListFiltersProps) {
   if (!filters.length) return null;
 
   // 적용값이 바뀌면 이전 화면에서 편집 중이던 조건과 오류를 함께 초기화한다.
-  return <FilterForm key={JSON.stringify(value)} filters={filters} value={value} onApply={onApply} />;
+  return <FilterForm key={JSON.stringify(value)} filters={filters} value={value} onApply={onApply} resetLabel={resetLabel} />;
 }
 
 /** 적용 전 필터 입력을 보관하고, 검증 오류가 없을 때만 목록에 적용할 값을 전달한다. */
-function FilterForm({ filters, value, onApply }: Required<ListFiltersProps>) {
+function FilterForm({ filters, value, onApply, resetLabel }: Required<ListFiltersProps>) {
   const id = useId();
   const [draft, setDraft] = useState<Parameters<typeof validateFilters>[1]>(value);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -92,7 +93,7 @@ function FilterForm({ filters, value, onApply }: Required<ListFiltersProps>) {
           setDraft({});
           setErrors({});
           onApply({});
-        }}>초기화</Button>
+        }}>{resetLabel}</Button>
       </div>
     </form>
   );
@@ -157,7 +158,7 @@ function MultiSelectFilter({ filter, selected, onChange }: {
           <ChevronDown aria-hidden="true" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent aria-label={filter.label} className="max-h-64 overflow-y-auto p-2">
+      <PopoverContent aria-label={filter.label} className="max-h-[min(16rem,var(--radix-popover-content-available-height))] p-2">
         {filter.options.map(({ value, label }) => (
           <label key={value} className="flex cursor-pointer items-center gap-2 rounded-md p-2 text-sm hover:bg-accent">
             <Checkbox
@@ -166,7 +167,7 @@ function MultiSelectFilter({ filter, selected, onChange }: {
                 ? [...selected, value]
                 : selected.filter((item) => item !== value))}
             />
-            {label}
+            <span className="min-w-0 wrap-anywhere">{label}</span>
           </label>
         ))}
       </PopoverContent>

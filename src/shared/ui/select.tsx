@@ -36,7 +36,8 @@ export function SelectContent({ children, className, ...props }: ComponentProps<
         data-slot="select-content"
         position="popper"
         sideOffset={4}
-        className={cn("z-50 max-h-(--radix-select-content-available-height) min-w-(--radix-select-trigger-width) overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md", className)}
+        collisionPadding={8}
+        className={cn("z-50 max-h-(--radix-select-content-available-height) w-max max-w-(--radix-select-content-available-width) min-w-[min(var(--radix-select-trigger-width),var(--radix-select-content-available-width))] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md", className)}
         {...props}
       >
         <SelectPrimitive.ScrollUpButton className="flex justify-center py-1"><ChevronUp className="size-4" /></SelectPrimitive.ScrollUpButton>
@@ -55,7 +56,7 @@ export function SelectItem({ children, className, ...props }: ComponentProps<typ
       className={cn("relative flex cursor-default items-center rounded-sm py-1.5 pr-8 pl-2 text-sm outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50", className)}
       {...props}
     >
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      <SelectPrimitive.ItemText className="min-w-0 wrap-anywhere">{children}</SelectPrimitive.ItemText>
       <SelectPrimitive.ItemIndicator className="absolute right-2 flex items-center">
         <Check className="size-4" aria-hidden="true" />
       </SelectPrimitive.ItemIndicator>

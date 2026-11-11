@@ -95,7 +95,7 @@ export async function CollectionListPage({
         ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error }
         : undefined,
     }));
-    return { query: { ...query, page: result.page }, regions, totalPages: result.totalPages, rows, counts: attempts.counts(section) };
+    return { query: { ...query, page: result.page }, regions, totalPages: result.totalPages, rows, counts: result.counts };
   })() : undefined;
   const { counts, rows } = notice ?? loadOverview(section, selected);
   const href = `${ADMIN_G2B_PATH}/${section}`;

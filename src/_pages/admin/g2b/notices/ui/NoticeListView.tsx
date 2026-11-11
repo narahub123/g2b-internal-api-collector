@@ -26,6 +26,8 @@ export function NoticeListView({ path, query, totalPages, regions, children }: {
 
   return (
     <ListView
+      controlsLabel="검색·필터·정렬"
+      onReset={() => router.push(path)}
       search={{ fields: noticeSearchFields, defaultField: "title", value: query.search, onSubmit: (search) => apply({ search }) }}
       filters={{ filters: noticeFilterDefinitions(regions), value: query.filters, onApply: (filters) => apply({ filters }) }}
       sort={{ options: noticeSortOptions, value: query.sort, onChange: (sort) => apply({ sort }) }}
