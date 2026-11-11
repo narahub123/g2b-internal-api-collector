@@ -8,15 +8,16 @@ import { collectNotice } from "./notices";
 
 /**
  * 공고와 관련 자료를 조회하고 이전 자료로 보완한 뒤 저장한다.
- * 동일한 공고와 낙찰방법의 동시 요청은 조회부터 저장까지 공유한다.
+ * 동일한 공고의 동시 요청은 먼저 시작한 요청의 낙찰방법으로 조회부터 저장까지 공유한다.
  * @param input 검증을 통과한 공고번호, 공고차수와 낙찰방법 코드.
+ * @returns 공고 저장이 끝난 뒤 해당 요청에서 처리한 개찰차수별 결과.
  * @throws 점검, 공고 조회 또는 저장에 실패한 경우.
  */
 export async function collectAndSaveNotice(input: CollectNoticeInput) {
   const { number, revision, methodCode } = input;
-  return collectOnce(JSON.stringify(["notice", number, revision, methodCode]), true, () =>
+  return collectOnce(JSON.stringify(["notice", number, revision]), true, () =>
     trackCollectionAttempt({ section: "notices", ...input }, async () => {
-      const notice = await collectNotice({ number, revision }, methodCode);
+      const { notice, openingReport } = await collectNotice({ number, revision }, methodCode);
       const repository = getG2bRepository();
       const documents = notice.documents;
       if (documents?.unavailable?.length || notice.contractRequests === undefined || notice.contracts === undefined ||
@@ -47,6 +48,7 @@ export async function collectAndSaveNotice(input: CollectNoticeInput) {
         }
       }
       await repository.save(notice);
+      return openingReport;
     }),
   );
 }

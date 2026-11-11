@@ -9,13 +9,14 @@ const activeAttempts = new Set<number>();
  * @param collect 저장이 끝난 뒤 완료되며 오류나 점검 상태를 호출자에게 전달하는 수집 작업.
  * @throws 수집 작업의 원래 오류 또는 수집 이력을 기록하지 못한 경우.
  */
-export async function trackCollectionAttempt(target: CollectionTarget, collect: () => Promise<void>) {
+export async function trackCollectionAttempt<Result>(target: CollectionTarget, collect: () => Promise<Result>) {
   const history = getG2bRepository().collectionAttempts;
   const id = history.start(target);
   activeAttempts.add(id);
   try {
+    let result: Result;
     try {
-      await collect();
+      result = await collect();
     } catch (error) {
       const maintenance = findMaintenance(error);
       // 파싱 오류에는 원본 응답 일부가 섞일 수 있으므로 사용자용 문구로 대체한다.
@@ -26,6 +27,7 @@ export async function trackCollectionAttempt(target: CollectionTarget, collect: 
       throw error;
     }
     history.finish(id, "succeeded");
+    return result;
   } finally {
     activeAttempts.delete(id);
   }

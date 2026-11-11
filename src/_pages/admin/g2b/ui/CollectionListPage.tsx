@@ -9,16 +9,8 @@ import type {
 import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
-import {
-  ADMIN_G2B_PATH,
-  contractPath,
-  contractRequestPath,
-  noticePath,
-  openingResultPath,
-  orderPlanPath,
-  priorSpecPath,
-} from "../../config/routes";
-import { NoticeCollectionForm } from "../notices/ui/NoticeCollectionForm";
+import { ADMIN_G2B_PATH, collectionDetailPaths } from "../../config/routes";
+import { CollectionForm } from "./CollectionForm";
 import {
   collectionCountFormat,
   collectionCountLabels,
@@ -42,15 +34,6 @@ type TargetKey = Pick<
   CollectionOverview["saved"][number],
   "number" | "revision" | "openingRevision"
 >;
-
-const detailPaths = {
-  "order-plans": ({ number }) => orderPlanPath(number),
-  "contract-requests": contractRequestPath,
-  "prior-specs": ({ number }) => priorSpecPath(number),
-  notices: noticePath,
-  "opening-results": openingResultPath,
-  contracts: contractPath,
-} satisfies Record<CollectionSection, (key: TargetKey) => string>;
 
 function targetKey({ number, revision, openingRevision }: TargetKey) {
   return JSON.stringify([number, revision, openingRevision]);
@@ -117,7 +100,7 @@ export async function CollectionListPage({
           </Link>
         </Button>
       </header>
-      {section === "notices" && <NoticeCollectionForm />}
+      <CollectionForm section={section} />
       <nav
         aria-label="수집 상태로 필터링"
         className="grid grid-cols-3 overflow-hidden rounded-xl border bg-card"
@@ -158,7 +141,7 @@ export async function CollectionListPage({
             return (
               <CollectionListItem
                 key={key}
-                href={savedItem ? detailPaths[section](item) : undefined}
+                href={savedItem ? collectionDetailPaths[section](item) : undefined}
                 action={
                   failure && (
                     <RecollectButton

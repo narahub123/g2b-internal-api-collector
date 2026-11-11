@@ -237,31 +237,43 @@ export async function collectOpeningResult(
   );
 }
 
+// 성공과 실패를 보존해 입찰공고와 개찰결과 API가 같은 조회 결과를 사용할 수 있게 한다.
+export type OpeningCollectionReport = {
+  targetRevisions: string[];
+  succeededRevisions: string[];
+  failures: { revision: string; error: unknown }[];
+};
+
 /**
- * 공고 응답에서 개찰차수별 조회 조건을 구성하고 차수별 수집을 실행한다.
- * 모든 차수의 결과를 확인한 뒤 실패한 차수의 오류를 묶어 전달한다.
- *
- * @param payload 공고 상세 API 원본 응답.
- * @throws 개찰차수 중 하나 이상 수집에 실패한 경우 AggregateError.
+ * 개찰차수별 작업을 병렬 실행하고 성공과 실패를 차수 단위로 반환한다.
+ * @param force true이면 저장된 결과도 다시 조회한다.
  */
-export async function collectNoticeOpeningResults(payload: Record<string, unknown>) {
-  const groups = groupOpeningResultQueries(openingResultQueries(payload));
+export async function collectOpeningGroups(
+  groups: Map<string, OpeningResultQuery[]>,
+  force = false,
+): Promise<OpeningCollectionReport> {
+  const entries = [...groups];
   const settled = await Promise.allSettled(
-    [...groups.values()].map(([first, ...rest]) => {
-      const { number, revision, openingRevision } = first;
-      return collectOpeningResult({ number, revision, openingRevision }, [
-        first,
-        ...rest,
-      ]);
+    entries.map(([openingRevision, queries]) => {
+      const { number, revision } = queries[0];
+      return collectOpeningResult({ number, revision, openingRevision }, queries, force);
     }),
   );
-  const failures = settled.filter(
-    (result): result is PromiseRejectedResult => result.status === "rejected",
-  );
-  if (failures.length) {
-    throw new AggregateError(
-      failures.map(({ reason }) => reason),
-      `개찰결과 ${failures.length}/${groups.size}개 개찰차수 수집 실패`,
-    );
-  }
+  const targetRevisions = entries.map(([revision]) => revision);
+  const succeededRevisions: string[] = [];
+  const failures: OpeningCollectionReport["failures"] = [];
+  settled.forEach((result, index) => {
+    const revision = targetRevisions[index];
+    if (result.status === "fulfilled") succeededRevisions.push(revision);
+    else failures.push({ revision, error: result.reason });
+  });
+  return { targetRevisions, succeededRevisions, failures };
+}
+
+/**
+ * 공고 원본에서 개찰 조회 조건을 생성하고 아직 필요한 결과를 수집한다.
+ * @returns 개찰차수별 결과. 공고 저장 여부는 호출자가 결정한다.
+ */
+export function collectNoticeOpeningResults(payload: Record<string, unknown>) {
+  return collectOpeningGroups(groupOpeningResultQueries(openingResultQueries(payload)));
 }

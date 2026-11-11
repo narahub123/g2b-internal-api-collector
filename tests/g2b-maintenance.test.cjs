@@ -355,6 +355,7 @@ test('개찰차수의 점검은 부분 저장을 보류하고 일반 오류는 �
 
 test('연기공고의 HTTP 200 점검 HTML은 다른 공지 오류보다 우선하며 개찰차수를 보존한다', async (t) => {
   const noticeKey = { number: 'R26BK00002', revision: '000' };
+  await repository.save({ ...noticeKey, title: '저장된 공고', collectedAt, payload: {} });
   const openingKey = { ...noticeKey, openingRevision: '001' };
   const query = { ...openingKey, classification: '1', businessCode: '업130020' };
   const previous = {
@@ -392,6 +393,75 @@ test('연기공고의 HTTP 200 점검 HTML은 다른 공지 오류보다 우선�
   assert.deepEqual(result.failedRevisions, ['001']);
   assert.equal(postponementCalls, 1);
   assert.deepEqual(repository.findOpeningResult(openingKey), previous);
+});
+
+test('미저장 공고의 전체 수집 결과를 개찰 요청에 공유하고 차수별 성공과 실패를 반환한다', async (t) => {
+  const fetchedNotices = [];
+  const fetchedOpenings = [];
+  let failSecond = true;
+  t.mock.method(console, 'error', () => {});
+  mockFetch(t, async (path, options) => {
+    if (path === '/') return session();
+    const input = JSON.parse(options.body);
+    if (path.endsWith('/selectItemAnncMngV.do')) {
+      const { bidPbancNo, bidPbancOrd, scsbdMthdCd } = input.dmItemMap;
+      fetchedNotices.push({ bidPbancNo, scsbdMthdCd });
+      await new Promise(setImmediate);
+      return success({
+        dmItemMap: { bidPbancNo, bidPbancOrd, bidPbancNm: '새 공고', prcmBsneSeCd: '03' },
+        dlBidBasePgstL: bidPbancNo === 'OPEN-NONE' ? [] : ['001', '002'].map((bidPrgrsOrd) => ({
+          bidPbancNo, bidPbancOrd, bidPrgrsOrd, bidClsfNo: '1', bidPgstCd: '입160005',
+        })),
+      });
+    }
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+    if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
+    if (path.endsWith('/selectRsvePrceInfo.do')) {
+      return success({ pbancInfo: input.dlSrchPbancInfoInM, rsvePrceList: [] });
+    }
+    assert.ok(path.endsWith('/selectOnbsRsltFbid.do'), path);
+    const detail = input.dlSrchOnbsRsltBidInM;
+    fetchedOpenings.push(detail.bidPrgrsOrd);
+    if (detail.bidPbancNo === 'OPEN-DEFER' && detail.bidPrgrsOrd === '002') return maintenancePage();
+    if (failSecond && detail.bidPrgrsOrd === '002') return new Response(null, { status: 500 });
+    return success({ result: { bidPrgrs: detail } });
+  });
+  const requestOpening = (number, body) => postOpeningResults(
+    new Request('http://localhost', { method: 'POST', body }),
+    { params: Promise.resolve({ number, revision: '000' }) },
+  );
+  const body = JSON.stringify({ methodCode: 'METHOD' });
+  const responses = await Promise.all([requestOpening('OPEN-PARTIAL', body), requestOpening('OPEN-PARTIAL', body)]);
+  for (const response of responses) {
+    assert.equal(response.status, 502);
+    const result = await response.json();
+    assert.equal(result.noticeSaved, true);
+    assert.deepEqual(result.targetRevisions, ['001', '002']);
+    assert.deepEqual(result.succeededRevisions, ['001']);
+    assert.deepEqual(result.failedRevisions, ['002']);
+  }
+  assert.deepEqual(fetchedNotices, [{ bidPbancNo: 'OPEN-PARTIAL', scsbdMthdCd: 'METHOD' }]);
+  assert.deepEqual(fetchedOpenings.sort(), ['001', '002']);
+  assert.ok(await repository.find({ number: 'OPEN-PARTIAL', revision: '000' }));
+
+  failSecond = false;
+  assert.equal((await requestOpening('OPEN-PARTIAL')).status, 200);
+  assert.equal(fetchedNotices.length, 1);
+  assert.deepEqual(fetchedOpenings.slice(2).sort(), ['001', '002']);
+  assert.equal((await requestOpening('OPEN-SUCCESS')).status, 200);
+
+  const absent = await requestOpening('OPEN-NONE');
+  assert.equal(absent.status, 404);
+  assert.equal((await absent.json()).noticeSaved, true);
+  const deferred = await requestOpening('OPEN-DEFER');
+  assert.equal(deferred.status, 503);
+  const result = await deferred.json();
+  assert.equal(result.noticeSaved, false);
+  assert.deepEqual(result.succeededRevisions, ['001']);
+  assert.deepEqual(result.failedRevisions, ['002']);
+  assert.equal(await repository.find({ number: 'OPEN-DEFER', revision: '000' }), null);
+  assert.equal((await requestOpening('OPEN-BAD', '{"methodCode":2}')).status, 400);
+  assert.ok(!fetchedNotices.some(({ bidPbancNo }) => bidPbancNo === 'OPEN-BAD'));
 });
 
 test('세션 발급과 다운로드 메타데이터의 점검을 감지한다', async (t) => {
