@@ -1,6 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { OpeningResultQuery } from "@/entities/opening-result/model/opening-result";
 import type { G2bCollectionCounts } from "./types";
+import { openNoticeList } from "./notice-list";
+import { openOrderPlanList } from "./order-plan-list";
+import { openContractRequestList } from "./contract-request-list";
+import { openPriorSpecList } from "./prior-spec-list";
+import { openOpeningResultList } from "./opening-result-list";
+import { openContractList } from "./contract-list";
+import { cleanText } from "./collection-list-query";
 
 export type CollectionSection = keyof G2bCollectionCounts;
 
@@ -42,7 +49,7 @@ export type CollectionOverview = {
   failures: FailedAttempt[];
 };
 
-type OverviewRow = TargetKey & ListMetadata & {
+export type CollectionListRow = TargetKey & ListMetadata & {
   collectedAt: string | null;
   id: number | null;
   startedAt: string | null;
@@ -60,31 +67,36 @@ const savedQueries: Record<CollectionSection, string> = {
       COALESCE(NULLIF(TRIM(json_extract(data, '$.payload.dlOderPlanM.bizNm')), ''),
         json_extract(data, '$.payload.dlOderPlanM.itemNm')) AS title,
       json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCd') AS businessCode,
-      json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCdNm') AS businessLabel
+      json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCdNm') AS businessLabel,
+      data
     FROM order_plans`,
   "prior-specs": `
     SELECT number, '' AS revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.payload.dlBfSpecM.bfSpecNm') AS title,
       json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCd') AS businessCode,
-      json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCdNm') AS businessLabel
+      json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCdNm') AS businessLabel,
+      data
     FROM prior_specs`,
   notices: `
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.title') AS title,
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd') AS businessCode,
-      json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel
+      json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel,
+      data
     FROM notices`,
   "contract-requests": `
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.detail.bizNm') AS title,
       NULL AS businessCode,
-      json_extract(data, '$.detail.prcmBsneAreaNm') AS businessLabel
+      json_extract(data, '$.detail.prcmBsneAreaNm') AS businessLabel,
+      data
     FROM contract_requests`,
   contracts: `
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.detail.ctrtNm') AS title,
       json_extract(data, '$.detail.prcmBsneSeCd') AS businessCode,
-      json_extract(data, '$.detail.prcmBsneSeNm') AS businessLabel
+      json_extract(data, '$.detail.prcmBsneSeNm') AS businessLabel,
+      data
     FROM contracts`,
   "opening-results": `
     SELECT result.number, result.revision, result.opening_revision, result.collected_at,
@@ -102,7 +114,9 @@ const savedQueries: Record<CollectionSection, string> = {
           FROM json_each(result.data, '$.results') AS entry
           HAVING COUNT(DISTINCT json_extract(entry.value, '$.query.businessCode')) = 1)
       ) AS businessCode,
-      json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel
+      json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel,
+      result.data,
+      json_extract(notice.data, '$.payload.dmItemMap.dmstUntyGrpNm') AS linkedAgency
     FROM opening_results AS result
     LEFT JOIN notices AS notice ON notice.number = result.number AND notice.revision = result.revision`,
 };
@@ -174,10 +188,17 @@ export function openCollectionAttempts(db: DatabaseSync) {
       LEFT JOIN g2b_collection_attempts attempt ON attempt.id = latest.id
       ORDER BY saved.collected_at DESC, targets.number, targets.revision, targets.opening_revision
     `);
-    return [section, { counts, overview }] as const;
+    return [section, { counts, overview, targets }] as const;
   }));
 
+  db.function("collection_search_text", { deterministic: true }, (value) => cleanText(value).toLowerCase());
   return {
+    noticeList: openNoticeList(db, summaries.get("notices")!.targets),
+    orderPlanList: openOrderPlanList(db, summaries.get("order-plans")!.targets),
+    contractRequestList: openContractRequestList(db, summaries.get("contract-requests")!.targets),
+    priorSpecList: openPriorSpecList(db, summaries.get("prior-specs")!.targets),
+    openingResultList: openOpeningResultList(db, summaries.get("opening-results")!.targets),
+    contractList: openContractList(db, summaries.get("contracts")!.targets),
     /**
      * 외부 조회 직전에 입력과 시작 시각을 기록한다.
      * @returns 종료 결과를 기록하거나 재시도할 때 쓰는 시도 ID.
@@ -228,7 +249,7 @@ export function openCollectionAttempts(db: DatabaseSync) {
      * @throws SQLite가 목록을 조회하지 못한 경우.
      */
     overview(section: CollectionSection): CollectionOverview {
-      const rows = summaries.get(section)!.overview.all(section) as OverviewRow[];
+      const rows = summaries.get(section)!.overview.all(section) as CollectionListRow[];
       const saved: SavedTarget[] = [];
       const failures: FailedAttempt[] = [];
       for (const { number, revision, openingRevision, collectedAt, title, businessCode, businessLabel, id, startedAt, status, error } of rows) {

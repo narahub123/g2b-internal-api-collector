@@ -1,6 +1,7 @@
 import { CollectionListPage } from "@/_pages/admin/g2b/ui/CollectionListPage";
+import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 
-/** 업무 목록에서 저장 현황과 선택된 수집 상태 목록을 표시한다. */
-export default function Page({ searchParams }: { searchParams: Promise<{ status?: string | string[] }> }) {
+/** 발주계획의 수집 현황과 URL 조회 조건이 적용된 목록을 표시한다. */
+export default function Page({ searchParams }: { searchParams: Promise<CollectionSearchParams> }) {
   return <CollectionListPage section="order-plans" searchParams={searchParams} />;
 }

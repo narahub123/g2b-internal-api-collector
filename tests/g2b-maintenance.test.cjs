@@ -27,6 +27,13 @@ const aliasHook = registerHooks({
 const { G2bMaintenanceError, assertNotMaintenance, findMaintenance, maintenanceResponse } = require('../src/shared/api/g2b/g2b-maintenance');
 const { collectContractRequest, collectOrderPlan, collectPriorSpec } = require('../src/features/collect-g2b/server');
 const { getG2bRepository } = require('../src/server/g2b/repository');
+const { openCollectionAttempts } = require('../src/server/g2b/repository/collection-attempts');
+const { noticeListHref, parseNoticeListQuery } = require('../src/entities/notice/model/notice-list-query');
+const { orderPlanListHref, parseOrderPlanListQuery } = require('../src/entities/order-plan/model/order-plan-list-query');
+const { parseContractRequestListQuery } = require('../src/entities/contract-request/model/contract-request-list-query');
+const { parsePriorSpecListQuery } = require('../src/entities/prior-spec/model/prior-spec-list-query');
+const { parseOpeningResultListQuery } = require('../src/entities/opening-result/model/opening-result-list-query');
+const { parseContractListQuery } = require('../src/entities/contract/model/contract-list-query');
 const { POST: postNotice } = require('../app/api/notices/route');
 const { POST: postOpeningResults } = require('../app/api/opening-results/[number]/[revision]/route');
 const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]/attachments/[seq]/route');
@@ -482,4 +489,188 @@ test('세션 발급과 다운로드 메타데이터의 점검을 감지한다', 
   assert.equal(response.status, 503);
   assert.equal((await response.json()).code, 'g2b_maintenance');
   assert.equal(calls.mock.callCount(), 2);
+});
+
+test('사전규격·개찰결과·계약현황은 원본 통화와 업무별 날짜를 사용한다', () => {
+  const attempts = repository.collectionAttempts;
+  const lists = {
+    'prior-specs': [attempts.priorSpecList, parsePriorSpecListQuery],
+    'opening-results': [attempts.openingResultList, parseOpeningResultListQuery],
+    contracts: [attempts.contractList, parseContractListQuery],
+  };
+  const page = (section, params) => {
+    const [list, parse] = lists[section];
+    return list.page(parse(params, list.businesses()));
+  };
+  for (const [number, code] of [['TESTSPECWON', '01'], ['TESTSPECUSD', '02']]) {
+    repository.savePriorSpec({ number, collectedAt, payload: { dlBfSpecM: {
+      bfSpecRegNo: number, bfSpecNm: '검증 사전규격', prcmBsneSeCd: code, dmstUntyGrpNm: '검증기관',
+      specRlsDt: '2026/11/06 09:00', alotBgtPrspAmt: 500,
+    } } });
+  }
+  const specQuery = { field: 'agency', q: '검증기관', dateTo: '2026-11-06' };
+  assert.deepEqual(page('prior-specs', { ...specQuery, budgetFrom: '0' }).rows.map(({ number }) => number), ['TESTSPECWON']);
+  assert.deepEqual(page('prior-specs', { ...specQuery, budgetUsdTo: '500' }).rows.map(({ number }) => number), ['TESTSPECUSD']);
+  assert.equal(page('prior-specs', { ...specQuery, budgetFrom: '0', budgetUsdTo: '500' }).counts.total, 2);
+
+  const number = 'TESTOPENING';
+  const revision = '000';
+  for (const openingRevision of ['001', '002']) {
+    const query = { number, revision, openingRevision, businessCode: '03', classification: '001' };
+    repository.saveOpeningResult({ number, revision, openingRevision, collectedAt, results: [
+      { query, detail: { bidInfo: { bidPbancNm: '검증 개찰', dmstNm: '검증기관', realOnbsDt: '2026/11/03 10:00' } } },
+      { query: { ...query, classification: '002' }, detail: openingRevision === '001'
+        ? { bidInfo: { dmstNm: '검증기관', realOnbsDt: '2026/11/05 10:00' } }
+        : { onbsPrnmntDt: '2026/11/09 10:00' } },
+    ] });
+  }
+  const openingQuery = { field: 'number', q: number, business: '03' };
+  assert.deepEqual(page('opening-results', { ...openingQuery, dateFrom: '2026-11-05' }).rows.map(({ openingRevision }) => openingRevision), ['001']);
+  assert.deepEqual(page('opening-results', { ...openingQuery, dateFrom: '2026-11-06' }).rows, []);
+  assert.equal(page('opening-results', { field: 'agency', q: '검증기관' }).counts.total, 2);
+
+  for (const [number, date] of [['TESTCTRT1', '20261109'], ['TESTCTRT2', '20261108']]) {
+    repository.saveContract({ number, revision: '00', collectedAt, companies: [], services: [], items: [],
+      detail: { ctrtNm: '검증 계약', ctrtView: number, dmstUntyGrpNm: '검증기관', prcmBsneSeCd: '05', frstCtrtDt: date },
+    });
+  }
+  const contractQuery = { field: 'agency', q: '검증기관', business: '05', dateTo: '2026-11-09', sort: 'date-asc' };
+  assert.deepEqual(page('contracts', contractQuery).rows.map(({ number }) => number), ['TESTCTRT2', 'TESTCTRT1']);
+  assert.deepEqual(page('contracts', { ...contractQuery, status: 'uncollected' }).counts, { total: 2, collected: 2, uncollected: 0 });
+});
+
+test('계약요청 세부품명은 표시되는 모든 물품 행에서 검색한 뒤 요청 단위로 페이지를 나눈다', () => {
+  const list = repository.collectionAttempts.contractRequestList;
+  for (let index = 1; index <= 17; index++) {
+    repository.saveContractRequest({
+      number: 'TESTREQ' + String(index).padStart(2, '0'), revision: '000', collectedAt,
+      detail: {
+        bizNm: '검증 요청 ' + index, bizNo: 'RECEIPT' + index, dmstUntyGrpNm: '계약요청 검증기관',
+        inptDt: index === 16 ? '2026-11-02 12:00:00' : '2026-11-01 09:00:00',
+        prcmBsneAreaCd: index === 17 ? '조070003' : '조070002',
+        prcmBsneAreaNm: index === 17 ? '기술용역' : '일반용역',
+      },
+      items: [{ dtlsPrnm: '다른 물품' }, { dtlsPrnm: '검증 &amp; 물품' }, { dtlsPrnm: '검증 &amp; 물품 추가' }],
+    });
+  }
+  const page = (params) => list.page(parseContractRequestListQuery(params, list.businesses()));
+  const item = { field: 'item', q: '검증 & 물품' };
+  const first = page(item);
+  assert.deepEqual(first.counts, { total: 16, collected: 16, uncollected: 0 });
+  assert.equal(first.rows.length, 15);
+  assert.equal(first.rows[0].number, 'TESTREQ16');
+  assert.deepEqual(page({ ...item, page: '2' }).rows.map(({ number }) => number), ['TESTREQ15']);
+  assert.equal(page({ ...item, writtenTo: '2026-11-01', business: '일반용역' }).counts.total, 15);
+  assert.equal(page({ ...item, business: '기술용역' }).counts.total, 0);
+  assert.equal(page({ field: 'agency', q: '계약요청 검증기관' }).counts.total, 17);
+  assert.deepEqual(page({ field: 'number', q: 'RECEIPT16' }).rows.map(({ number }) => number), ['TESTREQ16']);
+  assert.deepEqual(page({ field: 'number', q: 'TESTREQ16 / 000' }).rows.map(({ number }) => number), ['TESTREQ16']);
+  assert.equal(page({ q: '검증 요청 17', sort: 'title-desc' }).rows[0].number, 'TESTREQ17');
+});
+
+test('발주계획은 업무별 원화 예산과 검색 조건을 전체 결과에 적용한 뒤 페이지를 조회한다', () => {
+  const { collectionAttempts: attempts } = repository;
+  const plans = attempts.orderPlanList;
+  const agency = '발주계획 검증기관';
+  const save = (number, detail) => repository.saveOrderPlan({
+    number, collectedAt, payload: { dlOderPlanM: { oderInstNm: agency, ...detail } },
+  });
+  for (let index = 1; index <= 16; index++) {
+    save('TESTPLAN' + String(index).padStart(2, '0'), {
+      bizNm: '물품 검증', prcmBsneSeCd: '01', prchsPrnmntAmt: 100,
+      srvBgtAmt: 0, releaseDt: '2026/11/01 09:00',
+    });
+  }
+  save('TESTPLANSERVICE', { bizNm: '용역 검증', prcmBsneSeCd: '03', prchsPrnmntAmt: 0, srvBgtAmt: 150, releaseDt: '202611011000' });
+  save('TESTPLANFOREIGN', { itemNm: '외자 &amp; 품명', prcmBsneSeCd: '02', prchsPrnmntAmt: 100, frncCvrsPrchsPrnmntAmt: 110 });
+  save('TESTPLANCONSTRUCTION', { bizNm: '공사 검증', prcmBsneSeCd: '07', newLotmSeCd: '신120002', oderSumAmt: 0, tlbkpngAmt: 120, releaseDt: '2026/11/01 08:00' });
+  const failed = attempts.start({ section: 'order-plans', number: 'TESTPLANMISSING' });
+  attempts.finish(failed, 'failed', '테스트 실패');
+  const businesses = plans.businesses();
+  const query = parseOrderPlanListQuery({ field: 'agency', q: agency, business: ['01', '03', '07'], releasedFrom: '2026-11-01', releasedTo: '2026-11-01', budgetFrom: '100', budgetTo: '150' }, businesses);
+  const first = plans.page(query);
+  assert.deepEqual(first.counts, { total: 18, collected: 18, uncollected: 0 });
+  assert.equal(first.totalPages, 2);
+  assert.equal(first.rows[0].number, 'TESTPLANSERVICE');
+  assert.equal(first.rows.length, 15);
+  assert.deepEqual(plans.page({ ...query, page: 2 }).rows.map((row) => row.number), ['TESTPLAN15', 'TESTPLAN16', 'TESTPLANCONSTRUCTION']);
+  assert.deepEqual(plans.page({ ...query, status: 'uncollected' }).counts, first.counts);
+  const missing = plans.page(parseOrderPlanListQuery({ field: 'number', q: 'testplanmissing', status: 'uncollected' }, businesses));
+  assert.deepEqual(missing.rows.map((row) => row.number), ['TESTPLANMISSING']);
+  const title = parseOrderPlanListQuery({ q: '외자 & 품명', sort: 'title-asc' }, businesses);
+  assert.deepEqual(plans.page(title).rows.map((row) => row.number), ['TESTPLANFOREIGN']);
+  assert.deepEqual(plans.page({ ...title, filters: { budget: { from: 0 } } }).rows, []);
+  const href = new URL(orderPlanListHref('/order-plans', { ...query, page: 2 }), 'http://localhost');
+  assert.equal(href.searchParams.get('page'), '2');
+  assert.deepEqual(new Set(href.searchParams.getAll('business')), new Set(['01', '03', '07']));
+});
+
+test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일정과 숨겨진 지역을 제외한다', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`
+      CREATE TABLE notices (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE order_plans (number TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE prior_specs (number TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE contract_requests (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE contracts (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE opening_results (number TEXT, revision TEXT, opening_revision TEXT, collected_at TEXT, data TEXT);
+    `);
+    const attempts = openCollectionAttempts(db);
+    const insert = db.prepare("INSERT INTO notices VALUES (?, '000', '2026-11-01', ?)");
+    for (let index = 1; index <= 23; index++) {
+      const number = 'N' + String(index).padStart(2, '0');
+      insert.run(number, JSON.stringify({
+        title: index === 1 ? '공고 &#38; 검증' : number,
+        payload: {
+          dmItemMap: {
+            dmstUntyGrpNm: index === 1 ? '테스트 수요기관' : '다른 기관',
+            pbancPstgDt: '2026/11/01 09:00:00',
+            alotBgtAmt: index,
+            rgnLmtYn: [1, 4, 5].includes(index) ? 'Y' : index === 3 ? null : 'N',
+            rgnLmtYnNm: index === 2 ? '해당없음' : '공고서참조',
+            rgnLmtCn: index === 1 ? '[서울특별시][경기도]' : index === 4 ? '[부산광역시]' : index === 5 ? null : '[숨겨진 지역]',
+          },
+          dmItemList1: [
+            { startDtNm: 'BIDPBANC_SLPRRCPTBGNGDT', startDt: '2026/11/02 09:00:00', endDtNm: 'PBANCJINTSYDD_JSAGRSBMSNDDLNDT' },
+            { startDt: '202611051030', endDt: '2026/11/06 11:00:00', endDtNm: 'BIDPBANC_SLPRRCPTDDLNDT' },
+          ],
+        },
+      }));
+    }
+    const failed = attempts.start({ section: 'notices', number: 'MISSING', revision: '000', methodCode: '' });
+    attempts.finish(failed, 'failed', '테스트 실패');
+    const regions = attempts.noticeList.regions();
+    assert.deepEqual(regions, ['경기도', '부산광역시', '서울특별시']);
+    const page = (params) => attempts.noticeList.page(parseNoticeListQuery(params, regions));
+    const numbers = (params) => page(params).rows.map((row) => row.number);
+    assert.deepEqual(numbers({ field: 'agency', q: '수요기관', region: ['경기도', '서울특별시'], postedTo: '2026-11-01', submissionFrom: '2026-11-05', budgetTo: '1' }), ['N01']);
+    assert.deepEqual(numbers({ q: '& 검증' }), ['N01']);
+    assert.deepEqual(numbers({ field: 'number', q: 'missing', status: 'uncollected' }), ['MISSING']);
+    assert.deepEqual(numbers({ field: 'number', q: 'N01 - 000' }), ['N01']);
+    const regionQuery = { region: ['경기도', '부산광역시'], sort: 'budget-asc' };
+    assert.deepEqual(numbers(regionQuery), ['N01', 'N02', 'N04']);
+    const noUncollected = page({ ...regionQuery, status: 'uncollected', page: '2' });
+    assert.deepEqual(noUncollected.counts, { total: 3, collected: 3, uncollected: 0 });
+    assert.deepEqual(noUncollected.rows, []);
+    assert.equal(noUncollected.totalPages, 0);
+    for (const status of ['total', 'collected', 'uncollected']) {
+      assert.deepEqual(page({ status, field: 'number', q: '000' }).counts, { total: 24, collected: 23, uncollected: 1 });
+      assert.deepEqual(page({ status, field: 'number', q: '존재하지 않음' }).counts, { total: 0, collected: 0, uncollected: 0 });
+    }
+    assert.deepEqual(numbers({ submissionTo: '2026-11-02' }), []);
+    assert.deepEqual(numbers({ sort: 'budget-desc', page: '2' }), ['N08', 'N07', 'N06', 'N05', 'N04', 'N03', 'N02', 'N01', 'MISSING']);
+    assert.equal(page({ page: '999' }).page, 2);
+    for (const sort of ['posted-asc', 'submission-asc', 'deadline-desc', 'title-asc', 'budget-asc']) {
+      assert.equal(page({ sort }).rows.length, 15);
+    }
+    const query = parseNoticeListQuery({ field: 'agency', q: '기관', region: regions, page: '2', sort: 'deadline-asc' }, regions);
+    const href = new URL(noticeListHref('/notices', query), 'http://localhost');
+    assert.equal(href.searchParams.get('page'), '2');
+    assert.equal(href.searchParams.get('sort'), 'deadline-asc');
+    assert.deepEqual(href.searchParams.getAll('region'), regions);
+  } finally {
+    databases.delete(db);
+    db.close();
+  }
 });

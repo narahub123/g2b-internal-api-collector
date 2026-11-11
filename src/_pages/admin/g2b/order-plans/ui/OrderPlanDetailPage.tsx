@@ -5,6 +5,7 @@ import { getG2bRepository } from "@/server/g2b/repository";
 import { OrderPlanDetail } from "@/entities/order-plan/ui/OrderPlanDetail";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
+import { UncollectedBadge } from "@/shared/ui/g2b/UncollectedBadge";
 
 /**
  * 저장된 발주계획과 연결된 업무를 표시하고, 미수집 계획에는 최초 수집 동작을 제공한다.
@@ -34,7 +35,7 @@ export async function OrderPlanDetailPage({
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-xl border bg-card p-5">
           <p className="wrap-anywhere">
-            발주계획 {number}의 상세를 아직 수집하지 않았습니다.
+            발주계획 <UncollectedBadge /> {number}의 상세를 아직 수집하지 않았습니다.
           </p>
           <RecollectButton
             endpoint={`/api/order-plans/${encodeURIComponent(number)}`}

@@ -12,6 +12,8 @@ import { OpeningResultDetail } from "@/entities/opening-result/ui/OpeningResultD
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
+import { BusinessBadge } from "@/shared/ui/g2b/BusinessBadge";
+import { UncollectedBadge } from "@/shared/ui/g2b/UncollectedBadge";
 
 /**
  * 저장된 공고 원본 진행현황과 개찰결과의 식별자를 대조해 원본 페이지 링크를 생성한다.
@@ -106,7 +108,8 @@ export async function OpeningResultDetailPage({ params }: { params: Promise<Noti
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-xl border bg-card p-5">
           <p className="wrap-anywhere">
-            이 공고의 유찰 상세를 아직 수집하지 않았습니다.
+            개찰결과 <BusinessBadge business={business} />{" "}
+            <UncollectedBadge /> 이 공고의 유찰 상세를 아직 수집하지 않았습니다.
           </p>
           <RecollectButton endpoint={openingResultApiPath(key)} initial />
         </div>
