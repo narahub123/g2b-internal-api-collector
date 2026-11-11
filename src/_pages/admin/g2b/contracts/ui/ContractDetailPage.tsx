@@ -9,6 +9,7 @@ import { ContractDetail } from "@/entities/contract/ui/ContractDetail";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
+import { UncollectedBadge } from "@/shared/ui/g2b/UncollectedBadge";
 
 /**
  * 저장된 계약현황을 표시하고, 미수집 계약에는 최초 수집 동작을 제공한다.
@@ -39,7 +40,7 @@ export async function ContractDetailPage({
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-xl border bg-card p-5">
           <p className="wrap-anywhere">
-            계약현황 {key.number} / {key.revision}의 상세를 아직 수집하지
+            계약현황 <UncollectedBadge /> {key.number} / {key.revision}의 상세를 아직 수집하지
             않았습니다.
           </p>
           <RecollectButton endpoint={contractApiPath(key)} initial />

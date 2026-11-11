@@ -198,6 +198,7 @@ function CollectionRows({ section, rows }: { section: CollectionSection; rows: D
               title={savedItem?.title}
               businessCode={savedItem?.businessCode}
               businessLabel={savedItem?.businessLabel}
+              uncollected={!savedItem}
             />
           </CollectionListItem>
         );
