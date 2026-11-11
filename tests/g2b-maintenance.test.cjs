@@ -255,6 +255,91 @@ test('일반 API 오류는 기존 502로 처리하고 정상 공고는 저장한
   assert.notEqual(saved.collectedAt, collectedAt);
 });
 
+function mockNoticeContracts(t, rows, respondToContract) {
+  const requested = [];
+  mockFetch(t, (path, options) => {
+    if (path.endsWith('/selectItemAnncMngV.do')) return noticeDetail();
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: rows });
+    if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
+    if (path.endsWith('/srchCtrtDtl.do')) {
+      const { ctrtNo, ctrtChgOrd } = JSON.parse(options.body).dlSrchParamM;
+      requested.push({ number: ctrtNo, revision: ctrtChgOrd });
+      return respondToContract(ctrtNo, ctrtChgOrd);
+    }
+    assert.fail(path);
+  });
+  return requested;
+}
+
+function linkedContract(number, revision = key.revision) {
+  return { bidPbancNo: key.number, bidPbancOrd: revision, ctrtNo: number, ctrtChgOrd: 0 };
+}
+
+function contractDetail(number, revision) {
+  return success({
+    dlCtrtMngLstM: { ctrtNo: number, ctrtChgOrd: revision },
+    dlCtrtEtpsLstL: [], dlCtrtEtpsSvsLstL: [], dlCtrtItemLstL: [],
+  });
+}
+
+test('공고 수집은 연결된 계약 상세를 한 번 저장하고 재수집에서 재사용한다', async (t) => {
+  const contract = { number: 'NOTICE-CONTRACT-1', revision: '00' };
+  const rows = [linkedContract(contract.number), linkedContract(contract.number)];
+  const requested = mockNoticeContracts(t, rows, contractDetail);
+
+  assert.equal((await postNotice(noticeRequest())).status, 200);
+  assert.deepEqual((await repository.find(key)).contracts, [contract]);
+  assert.deepEqual(repository.findContract(contract)?.detail, {
+    ctrtNo: contract.number, ctrtChgOrd: contract.revision,
+  });
+  assert.equal((await postNotice(noticeRequest())).status, 200);
+  assert.deepEqual(requested, [contract]);
+});
+
+test('일치하는 계약이 없으면 공고 수집에서 계약 상세를 조회하지 않는다', async (t) => {
+  const rows = [];
+  const requested = mockNoticeContracts(t, rows, contractDetail);
+  for (const additionalRows of [[], [linkedContract('OTHER-REVISION', '001')]]) {
+    rows.push(...additionalRows);
+    assert.equal((await postNotice(noticeRequest())).status, 200);
+    assert.deepEqual((await repository.find(key)).contracts, []);
+  }
+  assert.deepEqual(requested, []);
+});
+
+test('계약 한 건의 조회 실패에도 공고와 정상 계약을 저장하고 실패 이력을 남긴다', async (t) => {
+  const failed = { number: 'NOTICE-CONTRACT-FAIL', revision: '00' };
+  const saved = { number: 'NOTICE-CONTRACT-OK', revision: '00' };
+  mockNoticeContracts(t, [linkedContract(failed.number), linkedContract(saved.number)], (number, revision) =>
+    number === failed.number ? new Response(null, { status: 500 }) : contractDetail(number, revision),
+  );
+
+  assert.equal((await postNotice(noticeRequest())).status, 200);
+  assert.deepEqual((await repository.find(key)).contracts, [failed, saved]);
+  assert.equal(repository.findContract(failed), null);
+  assert.equal(repository.findContract(saved)?.detail.ctrtNo, saved.number);
+  const attempt = repository.collectionAttempts.overview('contracts').failures
+    .find(({ number }) => number === failed.number);
+  assert.equal(attempt?.status, 'failed');
+});
+
+test('연결된 계약 상세의 점검 응답은 공고 저장을 보류한다', async (t) => {
+  await repository.save({ ...key, collectedAt, title: '기존 공고', payload: {} });
+  // 저장소는 더 최근에 수집한 공고를 보존하므로 점검 직전의 실제 행을 기준으로 비교한다.
+  const previous = await repository.find(key);
+  assert.ok(previous);
+  const number = 'NOTICE-CONTRACT-DEFER';
+  mockNoticeContracts(t, [linkedContract(number)], maintenancePage);
+
+  const response = await postNotice(noticeRequest());
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).code, 'g2b_maintenance');
+  assert.deepEqual(await repository.find(key), previous);
+  const attempt = repository.collectionAttempts.overview('contracts').failures
+    .find((row) => row.number === number);
+  assert.equal(attempt?.status, 'deferred');
+});
+
 test('계약요청 상세 점검 이후에는 다음 품목 페이지를 조회하지 않는다', async (t) => {
   const contractKey = { number: 'REQ1', revision: '000' };
   const previous = { ...contractKey, collectedAt, detail: {}, items: [] };

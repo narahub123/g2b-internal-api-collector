@@ -12,6 +12,7 @@ import { collectDocumentList, collectAttachments } from "./attachments";
 import { fetchWorkProgress } from "./work-progress";
 import { collectNoticeOpeningResults, type OpeningCollectionReport } from "./opening-results";
 import { collectContractRequest } from "./contract-requests";
+import { collectContract } from "./contracts";
 import { collectOrderPlan } from "./order-plans";
 import { collectPriorSpec } from "./prior-specs";
 
@@ -43,22 +44,23 @@ async function collectProposal(
 }
 
 /**
- * 공고 업무 진행 내역에서 계약요청·계약 연결을 추출한다.
- * 계약요청 상세의 일반 조회 실패가 있어도 확인된 연결 관계는 반환한다.
+ * 공고 업무 진행 내역에서 연결된 미수집 계약요청·계약 상세를 수집한다.
+ * 일반 조회 실패가 있어도 확인된 연결을 반환해 개별 재수집에 사용할 수 있게 한다.
  *
  * @param key 공고번호와 공고차수.
  * @returns 계약요청 및 계약 식별자 목록.
- * @throws 업무 진행 내역을 조회할 수 없거나 연결된 계약요청 수집에서 점검을 확인한 경우.
+ * @throws 업무 진행 내역을 조회할 수 없거나 연결된 상세 수집에서 점검을 확인한 경우.
  */
 async function collectNoticeContractLinks(key: NoticeKey) {
   const rows = await fetchWorkProgress(key);
   const requests = contractRequestKeys(rows, key);
-  // 일반 조회 오류에서는 확인된 연결을 남겨 계약요청 페이지에서 다시 수집할 수 있게 한다.
-  const outcomes = await Promise.allSettled(
-    requests.map((request) => collectContractRequest(request)),
-  );
+  const contracts = contractKeys(rows, key);
+  const outcomes = await Promise.allSettled([
+    ...requests.map((request) => collectContractRequest(request)),
+    ...contracts.map((contract) => collectContract(contract)),
+  ]);
   throwIfMaintenance(...outcomes);
-  return { contractRequests: requests, contracts: contractKeys(rows, key) };
+  return { contractRequests: requests, contracts };
 }
 
 /**
@@ -124,7 +126,7 @@ async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["p
 }
 
 /**
- * 공고 상세, 문서 목록과 공지사항을 수집하고, 연결된 미수집 발주계획, 사전규격, 계약요청과 개찰결과를 저장한다.
+ * 공고 상세, 문서 목록과 공지사항을 수집하고, 연결된 미수집 발주계획, 사전규격, 계약요청, 계약현황과 개찰결과를 저장한다.
  * 일반 부가 조회 오류는 허용하며, 점검을 확인하면 공고 행을 저장할 호출자에게 오류를 전달한다.
  * 독립적으로 완료된 관련 자료는 저장될 수 있다.
  * @param key 공고번호와 차수.
