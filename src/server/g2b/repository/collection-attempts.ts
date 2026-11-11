@@ -3,6 +3,7 @@ import type { OpeningResultQuery } from "@/entities/opening-result/model/opening
 import type { G2bCollectionCounts } from "./types";
 import { openNoticeList } from "./notice-list";
 import { openOrderPlanList } from "./order-plan-list";
+import { openContractRequestList } from "./contract-request-list";
 import { cleanText } from "./collection-list-query";
 
 export type CollectionSection = keyof G2bCollectionCounts;
@@ -83,7 +84,8 @@ const savedQueries: Record<CollectionSection, string> = {
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.detail.bizNm') AS title,
       NULL AS businessCode,
-      json_extract(data, '$.detail.prcmBsneAreaNm') AS businessLabel
+      json_extract(data, '$.detail.prcmBsneAreaNm') AS businessLabel,
+      data
     FROM contract_requests`,
   contracts: `
     SELECT number, revision, '' AS opening_revision, collected_at,
@@ -186,6 +188,7 @@ export function openCollectionAttempts(db: DatabaseSync) {
   return {
     noticeList: openNoticeList(db, summaries.get("notices")!.targets),
     orderPlanList: openOrderPlanList(db, summaries.get("order-plans")!.targets),
+    contractRequestList: openContractRequestList(db, summaries.get("contract-requests")!.targets),
     /**
      * 외부 조회 직전에 입력과 시작 시각을 기록한다.
      * @returns 종료 결과를 기록하거나 재시도할 때 쓰는 시도 ID.

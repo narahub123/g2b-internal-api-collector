@@ -30,6 +30,7 @@ const { getG2bRepository } = require('../src/server/g2b/repository');
 const { openCollectionAttempts } = require('../src/server/g2b/repository/collection-attempts');
 const { noticeListHref, parseNoticeListQuery } = require('../src/entities/notice/model/notice-list-query');
 const { orderPlanListHref, parseOrderPlanListQuery } = require('../src/entities/order-plan/model/order-plan-list-query');
+const { parseContractRequestListQuery } = require('../src/entities/contract-request/model/contract-request-list-query');
 const { POST: postNotice } = require('../app/api/notices/route');
 const { POST: postOpeningResults } = require('../app/api/opening-results/[number]/[revision]/route');
 const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]/attachments/[seq]/route');
@@ -485,6 +486,35 @@ test('세션 발급과 다운로드 메타데이터의 점검을 감지한다', 
   assert.equal(response.status, 503);
   assert.equal((await response.json()).code, 'g2b_maintenance');
   assert.equal(calls.mock.callCount(), 2);
+});
+
+test('계약요청 세부품명은 표시되는 모든 물품 행에서 검색한 뒤 요청 단위로 페이지를 나눈다', () => {
+  const list = repository.collectionAttempts.contractRequestList;
+  for (let index = 1; index <= 17; index++) {
+    repository.saveContractRequest({
+      number: 'TESTREQ' + String(index).padStart(2, '0'), revision: '000', collectedAt,
+      detail: {
+        bizNm: '검증 요청 ' + index, bizNo: 'RECEIPT' + index, dmstUntyGrpNm: '계약요청 검증기관',
+        inptDt: index === 16 ? '2026-11-02 12:00:00' : '2026-11-01 09:00:00',
+        prcmBsneAreaCd: index === 17 ? '조070003' : '조070002',
+        prcmBsneAreaNm: index === 17 ? '기술용역' : '일반용역',
+      },
+      items: [{ dtlsPrnm: '다른 물품' }, { dtlsPrnm: '검증 &amp; 물품' }, { dtlsPrnm: '검증 &amp; 물품 추가' }],
+    });
+  }
+  const page = (params) => list.page(parseContractRequestListQuery(params, list.businesses()));
+  const item = { field: 'item', q: '검증 & 물품' };
+  const first = page(item);
+  assert.deepEqual(first.counts, { total: 16, collected: 16, uncollected: 0 });
+  assert.equal(first.rows.length, 15);
+  assert.equal(first.rows[0].number, 'TESTREQ16');
+  assert.deepEqual(page({ ...item, page: '2' }).rows.map(({ number }) => number), ['TESTREQ15']);
+  assert.equal(page({ ...item, writtenTo: '2026-11-01', business: '일반용역' }).counts.total, 15);
+  assert.equal(page({ ...item, business: '기술용역' }).counts.total, 0);
+  assert.equal(page({ field: 'agency', q: '계약요청 검증기관' }).counts.total, 17);
+  assert.deepEqual(page({ field: 'number', q: 'RECEIPT16' }).rows.map(({ number }) => number), ['TESTREQ16']);
+  assert.deepEqual(page({ field: 'number', q: 'TESTREQ16 / 000' }).rows.map(({ number }) => number), ['TESTREQ16']);
+  assert.equal(page({ q: '검증 요청 17', sort: 'title-desc' }).rows[0].number, 'TESTREQ17');
 });
 
 test('발주계획은 업무별 원화 예산과 검색 조건을 전체 결과에 적용한 뒤 페이지를 조회한다', () => {

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { noticeListHref, parseNoticeListQuery } from "@/entities/notice/model/notice-list-query";
 import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 import { orderPlanListHref, parseOrderPlanListQuery } from "@/entities/order-plan/model/order-plan-list-query";
+import { contractRequestListHref, parseContractRequestListQuery } from "@/entities/contract-request/model/contract-request-list-query";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type {
@@ -86,6 +87,11 @@ export async function CollectionListPage({
     status === "collected" || status === "uncollected" ? status : "total";
   const attempts = getG2bRepository().collectionAttempts;
   const paginated = (() => {
+    if (section === "contract-requests") {
+      const businesses = attempts.contractRequestList.businesses();
+      const query = parseContractRequestListQuery(params, businesses);
+      return { section, businesses, query, result: attempts.contractRequestList.page(query), href: contractRequestListHref } as const;
+    }
     if (section === "order-plans") {
       const businesses = attempts.orderPlanList.businesses();
       const query = parseOrderPlanListQuery(params, businesses);

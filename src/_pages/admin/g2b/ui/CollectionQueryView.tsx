@@ -3,6 +3,12 @@
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import type { ListOption } from "@/shared/ui/list-controls/model";
+import {
+  contractRequestFilters,
+  contractRequestListHref,
+  contractRequestSearchFields,
+  contractRequestSortOptions,
+} from "@/entities/contract-request/model/contract-request-list-query";
 import { orderPlanFilters, orderPlanListHref, orderPlanSearchFields, orderPlanSortOptions } from "@/entities/order-plan/model/order-plan-list-query";
 import {
   noticeFilterDefinitions,
@@ -19,11 +25,13 @@ export function CollectionQueryView({ path, query, totalPages, children, ...opti
   query: CollectionListQuery;
   totalPages: number;
   children: ReactNode;
-} & ({ section: "notices"; regions: string[] } | { section: "order-plans"; businesses: ListOption[] })) {
+} & ({ section: "notices"; regions: string[] } | { section: "order-plans" | "contract-requests"; businesses: ListOption[] })) {
   const router = useRouter();
   const config = options.section === "notices"
     ? { href: noticeListHref, fields: noticeSearchFields, sort: noticeSortOptions, filters: noticeFilterDefinitions(options.regions) }
-    : { href: orderPlanListHref, fields: orderPlanSearchFields, sort: orderPlanSortOptions, filters: orderPlanFilters(options.businesses) };
+    : options.section === "contract-requests"
+      ? { href: contractRequestListHref, fields: contractRequestSearchFields, sort: contractRequestSortOptions, filters: contractRequestFilters(options.businesses) }
+      : { href: orderPlanListHref, fields: orderPlanSearchFields, sort: orderPlanSortOptions, filters: orderPlanFilters(options.businesses) };
   const apply = (changes: Partial<CollectionListQuery>) => {
     router.push(config.href(path, { ...query, ...changes, page: 1 }));
   };
