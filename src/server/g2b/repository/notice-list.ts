@@ -1,5 +1,6 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query";
+import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { cleanText, queryCollectionPage, sortDate } from "./collection-list-query";
 const sortColumns = new Map([
   ["posted", "posted"],
@@ -29,6 +30,7 @@ function noticeFields(raw: unknown) {
   const { payload = {}, title } =
     typeof raw === "string" ? JSON.parse(raw) : {};
   const detail = payload?.dmItemMap ?? {};
+  const business = resolveG2bBusiness(detail.prcmBsneSeCd, detail.prcmBsneSeNm);
   // 같은 시작 코드가 공동수급협정서에도 있으므로 입찰서 제출 종료 코드로 행을 구분한다.
   const schedule = Array.isArray(payload?.dmItemList1)
     ? payload.dmItemList1
@@ -60,6 +62,7 @@ function noticeFields(raw: unknown) {
     sortTitle: cleanText(title || detail.bidPbancNm) || null,
     agencies: [...new Set(agencies.map(cleanText).filter(Boolean))],
     budget: Number.isFinite(amount) ? amount : null,
+    business: business?.code ?? business?.label ?? null,
     regions: detail.rgnLmtYn === "Y" ? regionsFrom(detail.rgnLmtCn) : [],
     unrestrictedRegion,
   });
@@ -81,8 +84,26 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
     WHERE json_extract(data, '$.payload.dmItemMap.rgnLmtYn') = 'Y'
     ORDER BY label
   `);
+  const businesses = db.prepare(`
+    SELECT DISTINCT json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd') AS code,
+      json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS label
+    FROM notices
+  `);
 
   return {
+    /**
+     * 저장된 공고의 업무구분을 목록 배지와 같은 이름으로 반환한다.
+     * @throws SQLite에서 업무구분을 읽지 못한 경우.
+     */
+    businesses() {
+      const options = new Map<string, string>();
+      for (const { code, label } of businesses.all()) {
+        const business = resolveG2bBusiness(code, label);
+        if (business) options.set(business.code ?? business.label, business.label);
+      }
+      return [...options].map(([value, label]) => ({ value, label }))
+        .sort((a, b) => a.label.localeCompare(b.label, "ko"));
+    },
     /**
      * 수집 상태에 관계없이 저장된 공고에서 명시적으로 표시되는 참가 가능 지역을 조회한다.
      * @throws SQLite에서 공고 자료를 읽지 못한 경우.
@@ -134,6 +155,11 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
           "(json_extract(fields, '$.unrestrictedRegion') = 1 OR EXISTS (SELECT 1 FROM json_each(fields, '$.regions') WHERE value IN (SELECT value FROM json_each(?))))",
         );
         values.push(JSON.stringify(selected));
+      }
+      const business = query.filters.business;
+      if (Array.isArray(business) && business.length) {
+        where.push("json_extract(fields, '$.business') IN (SELECT value FROM json_each(?))");
+        values.push(JSON.stringify(business));
       }
       const [field, direction] = query.sort.split("-");
       const order = sortColumns.get(field) ?? "posted";

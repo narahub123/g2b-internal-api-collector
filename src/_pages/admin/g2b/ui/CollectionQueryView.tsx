@@ -35,10 +35,10 @@ export function CollectionQueryView({ path, query, totalPages, children, ...opti
   query: CollectionListQuery;
   totalPages: number;
   children: ReactNode;
-} & ({ section: "notices"; regions: string[] } | { section: "order-plans" | "contract-requests" | keyof typeof listControls; businesses: ListOption[] })) {
+} & ({ section: "notices"; regions: string[] } | { section: "order-plans" | "contract-requests" | keyof typeof listControls }) & { businesses: ListOption[] }) {
   const router = useRouter();
   const config = options.section === "notices"
-    ? { href: noticeListHref, fields: noticeSearchFields, sort: noticeSortOptions, filters: noticeFilterDefinitions(options.regions) }
+    ? { href: noticeListHref, fields: noticeSearchFields, sort: noticeSortOptions, filters: noticeFilterDefinitions(options.regions, options.businesses) }
     : options.section === "contract-requests"
       ? { href: contractRequestListHref, fields: contractRequestSearchFields, sort: contractRequestSortOptions, filters: contractRequestFilters(options.businesses) }
       : options.section === "order-plans"
