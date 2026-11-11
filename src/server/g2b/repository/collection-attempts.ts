@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { OpeningResultQuery } from "@/entities/opening-result/model/opening-result";
 import type { G2bCollectionCounts } from "./types";
 import { openNoticeList } from "./notice-list";
+import { openOrderPlanList } from "./order-plan-list";
+import { cleanText } from "./collection-list-query";
 
 export type CollectionSection = keyof G2bCollectionCounts;
 
@@ -61,7 +63,8 @@ const savedQueries: Record<CollectionSection, string> = {
       COALESCE(NULLIF(TRIM(json_extract(data, '$.payload.dlOderPlanM.bizNm')), ''),
         json_extract(data, '$.payload.dlOderPlanM.itemNm')) AS title,
       json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCd') AS businessCode,
-      json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCdNm') AS businessLabel
+      json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCdNm') AS businessLabel,
+      data
     FROM order_plans`,
   "prior-specs": `
     SELECT number, '' AS revision, '' AS opening_revision, collected_at,
@@ -179,8 +182,10 @@ export function openCollectionAttempts(db: DatabaseSync) {
     return [section, { counts, overview, targets }] as const;
   }));
 
+  db.function("collection_search_text", { deterministic: true }, (value) => cleanText(value).toLowerCase());
   return {
     noticeList: openNoticeList(db, summaries.get("notices")!.targets),
+    orderPlanList: openOrderPlanList(db, summaries.get("order-plans")!.targets),
     /**
      * 외부 조회 직전에 입력과 시작 시각을 기록한다.
      * @returns 종료 결과를 기록하거나 재시도할 때 쓰는 시도 ID.

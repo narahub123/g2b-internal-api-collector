@@ -1,8 +1,8 @@
 import { validateFilters } from "@/shared/ui/list-controls/model";
-import type { ListFilter, ListFilterValues, ListSearchValue } from "@/shared/ui/list-controls/model";
+import type { ListFilter } from "@/shared/ui/list-controls/model";
+import type { CollectionListQuery, CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 
-export type NoticeSearchParams = Record<string, string | string[] | undefined>;
-export type NoticeStatus = "total" | "collected" | "uncollected";
+export type NoticeSearchParams = CollectionSearchParams;
 
 export const noticeSearchFields = [
   { value: "title", label: "공고명" },
@@ -23,13 +23,7 @@ export const noticeSortOptions = sortFields.flatMap(([field, label, desc, asc]) 
   { value: `${field}-asc`, label: `${label} ${asc}` },
 ]);
 
-export type NoticeListQuery = {
-  status: NoticeStatus;
-  search: ListSearchValue;
-  filters: ListFilterValues;
-  sort: string;
-  page: number;
-};
+export type NoticeListQuery = CollectionListQuery;
 
 /** 저장된 공고에 표시된 지역만 옵션으로 제공하고, 날짜와 금액의 입력 단위를 지정한다. */
 export function noticeFilterDefinitions(regions: readonly string[]): ListFilter[] {

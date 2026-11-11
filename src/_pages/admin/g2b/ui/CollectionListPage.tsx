@@ -1,7 +1,8 @@
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { noticeListHref, parseNoticeListQuery } from "@/entities/notice/model/notice-list-query";
-import type { NoticeSearchParams } from "@/entities/notice/model/notice-list-query";
+import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
+import { orderPlanListHref, parseOrderPlanListQuery } from "@/entities/order-plan/model/order-plan-list-query";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type {
@@ -12,7 +13,7 @@ import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { ADMIN_G2B_PATH, collectionDetailPaths } from "../../config/routes";
-import { NoticeListView } from "../notices/ui/NoticeListView";
+import { CollectionQueryView } from "./CollectionQueryView";
 import { CollectionForm } from "./CollectionForm";
 import {
   collectionCountFormat,
@@ -69,7 +70,7 @@ function loadOverview(section: CollectionSection, selected: "total" | "collected
 
 /**
  * URL에서 선택된 필터에 맞춰 저장 자료와 최신 실패 상태를 대상별 한 행으로 표시한다.
- * @param props.searchParams 수집 상태와 입찰공고에서 지원하는 검색·필터·정렬·페이지 조건.
+ * @param props.searchParams 수집 상태와 업무 목록에서 지원하는 검색·필터·정렬·페이지 조건.
  * @throws SQLite에서 업무 목록과 수집 이력을 읽지 못한 경우.
  */
 export async function CollectionListPage({
@@ -77,27 +78,34 @@ export async function CollectionListPage({
   searchParams,
 }: {
   section: CollectionSection;
-  searchParams: Promise<NoticeSearchParams>;
+  searchParams: Promise<CollectionSearchParams>;
 }) {
   const params = await searchParams;
   const { status } = params;
   const selected =
     status === "collected" || status === "uncollected" ? status : "total";
   const attempts = getG2bRepository().collectionAttempts;
-  const notice = section === "notices" ? (() => {
+  const paginated = (() => {
+    if (section === "order-plans") {
+      const businesses = attempts.orderPlanList.businesses();
+      const query = parseOrderPlanListQuery(params, businesses);
+      return { section, businesses, query, result: attempts.orderPlanList.page(query), href: orderPlanListHref } as const;
+    }
+    if (section !== "notices") return undefined;
     const regions = attempts.noticeList.regions();
     const query = parseNoticeListQuery(params, regions);
-    const result = attempts.noticeList.page(query);
-    const rows: DisplayRow[] = result.rows.map((row) => ({
+    return { section, regions, query, result: attempts.noticeList.page(query), href: noticeListHref } as const;
+  })();
+  const { counts, rows } = paginated ? {
+    counts: paginated.result.counts,
+    rows: paginated.result.rows.map((row): DisplayRow => ({
       item: row,
       savedItem: row.collectedAt !== null ? row : undefined,
       failure: row.id !== null && row.startedAt && row.status && row.status !== "succeeded"
         ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error }
         : undefined,
-    }));
-    return { query: { ...query, page: result.page }, regions, totalPages: result.totalPages, rows, counts: result.counts };
-  })() : undefined;
-  const { counts, rows } = notice ?? loadOverview(section, selected);
+    })),
+  } : loadOverview(section, selected);
   const href = `${ADMIN_G2B_PATH}/${section}`;
   const items = <CollectionRows section={section} rows={rows} />;
 
@@ -120,7 +128,7 @@ export async function CollectionListPage({
         {collectionCountLabels.map(([key, label]) => (
           <Link
             key={key}
-            href={notice ? noticeListHref(href, { ...notice.query, status: key, page: 1 })
+            href={paginated ? paginated.href(href, { ...paginated.query, status: key, page: 1 })
               : key === "total" ? href : `${href}?status=${key}`}
             aria-current={selected === key ? "page" : undefined}
             className={cn(
@@ -143,10 +151,17 @@ export async function CollectionListPage({
           </Link>
         ))}
       </nav>
-      {notice ? (
-        <NoticeListView path={href} query={notice.query} regions={notice.regions} totalPages={notice.totalPages}>
+      {paginated ? (
+        <CollectionQueryView
+          path={href}
+          query={{ ...paginated.query, page: paginated.result.page }}
+          totalPages={paginated.result.totalPages}
+          {...(paginated.section === "notices"
+            ? { section: paginated.section, regions: paginated.regions }
+            : { section: paginated.section, businesses: paginated.businesses })}
+        >
           {items}
-        </NoticeListView>
+        </CollectionQueryView>
       ) : items}
     </section>
   );

@@ -29,6 +29,7 @@ const { collectContractRequest, collectOrderPlan, collectPriorSpec } = require('
 const { getG2bRepository } = require('../src/server/g2b/repository');
 const { openCollectionAttempts } = require('../src/server/g2b/repository/collection-attempts');
 const { noticeListHref, parseNoticeListQuery } = require('../src/entities/notice/model/notice-list-query');
+const { orderPlanListHref, parseOrderPlanListQuery } = require('../src/entities/order-plan/model/order-plan-list-query');
 const { POST: postNotice } = require('../app/api/notices/route');
 const { POST: postOpeningResults } = require('../app/api/opening-results/[number]/[revision]/route');
 const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]/attachments/[seq]/route');
@@ -484,6 +485,43 @@ test('세션 발급과 다운로드 메타데이터의 점검을 감지한다', 
   assert.equal(response.status, 503);
   assert.equal((await response.json()).code, 'g2b_maintenance');
   assert.equal(calls.mock.callCount(), 2);
+});
+
+test('발주계획은 업무별 원화 예산과 검색 조건을 전체 결과에 적용한 뒤 페이지를 조회한다', () => {
+  const { collectionAttempts: attempts } = repository;
+  const plans = attempts.orderPlanList;
+  const agency = '발주계획 검증기관';
+  const save = (number, detail) => repository.saveOrderPlan({
+    number, collectedAt, payload: { dlOderPlanM: { oderInstNm: agency, ...detail } },
+  });
+  for (let index = 1; index <= 16; index++) {
+    save('TESTPLAN' + String(index).padStart(2, '0'), {
+      bizNm: '물품 검증', prcmBsneSeCd: '01', prchsPrnmntAmt: 100,
+      srvBgtAmt: 0, releaseDt: '2026/11/01 09:00',
+    });
+  }
+  save('TESTPLANSERVICE', { bizNm: '용역 검증', prcmBsneSeCd: '03', prchsPrnmntAmt: 0, srvBgtAmt: 150, releaseDt: '202611011000' });
+  save('TESTPLANFOREIGN', { itemNm: '외자 &amp; 품명', prcmBsneSeCd: '02', prchsPrnmntAmt: 100, frncCvrsPrchsPrnmntAmt: 110 });
+  save('TESTPLANCONSTRUCTION', { bizNm: '공사 검증', prcmBsneSeCd: '07', newLotmSeCd: '신120002', oderSumAmt: 0, tlbkpngAmt: 120, releaseDt: '2026/11/01 08:00' });
+  const failed = attempts.start({ section: 'order-plans', number: 'TESTPLANMISSING' });
+  attempts.finish(failed, 'failed', '테스트 실패');
+  const businesses = plans.businesses();
+  const query = parseOrderPlanListQuery({ field: 'agency', q: agency, business: ['01', '03', '07'], releasedFrom: '2026-11-01', releasedTo: '2026-11-01', budgetFrom: '100', budgetTo: '150' }, businesses);
+  const first = plans.page(query);
+  assert.deepEqual(first.counts, { total: 18, collected: 18, uncollected: 0 });
+  assert.equal(first.totalPages, 2);
+  assert.equal(first.rows[0].number, 'TESTPLANSERVICE');
+  assert.equal(first.rows.length, 15);
+  assert.deepEqual(plans.page({ ...query, page: 2 }).rows.map((row) => row.number), ['TESTPLAN15', 'TESTPLAN16', 'TESTPLANCONSTRUCTION']);
+  assert.deepEqual(plans.page({ ...query, status: 'uncollected' }).counts, first.counts);
+  const missing = plans.page(parseOrderPlanListQuery({ field: 'number', q: 'testplanmissing', status: 'uncollected' }, businesses));
+  assert.deepEqual(missing.rows.map((row) => row.number), ['TESTPLANMISSING']);
+  const title = parseOrderPlanListQuery({ q: '외자 & 품명', sort: 'title-asc' }, businesses);
+  assert.deepEqual(plans.page(title).rows.map((row) => row.number), ['TESTPLANFOREIGN']);
+  assert.deepEqual(plans.page({ ...title, filters: { budget: { from: 0 } } }).rows, []);
+  const href = new URL(orderPlanListHref('/order-plans', { ...query, page: 2 }), 'http://localhost');
+  assert.equal(href.searchParams.get('page'), '2');
+  assert.deepEqual(new Set(href.searchParams.getAll('business')), new Set(['01', '03', '07']));
 });
 
 test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일정과 숨겨진 지역을 제외한다', () => {
