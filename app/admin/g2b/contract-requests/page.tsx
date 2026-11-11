@@ -1,5 +1,8 @@
 import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 
+/**
+ * 공통 관리자 본문에 계약요청 화면의 제목을 표시한다.
+ */
 export default function Page() {
-  return <h1 className="p-6 text-2xl font-semibold">{G2B_SECTIONS["contract-requests"]}</h1>;
+  return <h1 className="text-2xl font-semibold">{G2B_SECTIONS["contract-requests"]}</h1>;
 }

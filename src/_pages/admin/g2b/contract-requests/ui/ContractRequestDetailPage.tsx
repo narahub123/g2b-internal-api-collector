@@ -12,6 +12,10 @@ import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { Button } from "@/shared/ui/button";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 
+/**
+ * 저장된 계약요청과 품목을 표시하고, 미수집 요청에는 최초 수집 동작을 제공한다.
+ * @throws 계약요청접수번호와 차수가 정규화된 형식과 일치하지 않으면 404 처리한다. 저장소 조회 오류는 호출자에 전달한다.
+ */
 export async function ContractRequestDetailPage({
   params,
 }: {
@@ -26,7 +30,7 @@ export async function ContractRequestDetailPage({
   const contractRequest = getG2bRepository().findContractRequest(key);
 
   return (
-    <main className="mx-auto grid max-w-5xl gap-6 px-4 py-8 sm:px-6">
+    <div className="grid min-w-0 grid-cols-1 gap-6">
       <Button asChild variant="outline" className="w-fit">
         <Link href={NOTICE_LIST_PATH}>목록으로 돌아가기</Link>
       </Button>
@@ -45,6 +49,6 @@ export async function ContractRequestDetailPage({
           <RecollectButton endpoint={contractRequestApiPath(key)} initial />
         </div>
       )}
-    </main>
+    </div>
   );
 }

@@ -61,6 +61,10 @@ function openingResultOriginalHref(
   return `https://www.g2b.go.kr/link/PBOC007_01/single/?${params}`;
 }
 
+/**
+ * 공고와 차수별 개찰결과를 조회해 상세 및 연결된 공고로 돌아가는 링크를 구성한다.
+ * @throws 공고번호나 차수가 유효하지 않거나, 저장 결과와 조회 가능한 공고가 모두 없으면 404 처리한다. 저장소 조회 오류는 호출자에 전달한다.
+ */
 export async function OpeningResultDetailPage({ params }: { params: Promise<NoticeKey> }) {
   const key = await params;
   if (g2bNumber(key.number) !== key.number || !/^\d{3}$/.test(key.revision))
@@ -87,7 +91,7 @@ export async function OpeningResultDetailPage({ params }: { params: Promise<Noti
       : undefined);
 
   return (
-    <main className="mx-auto grid max-w-5xl gap-6 px-4 py-8 sm:px-6">
+    <div className="grid min-w-0 grid-cols-1 gap-6">
       <Button asChild variant="outline" className="w-fit">
         <Link href={notice ? noticePath(key) : NOTICE_LIST_PATH}>
           {notice ? "입찰공고로 돌아가기" : "목록으로 돌아가기"}
@@ -112,6 +116,6 @@ export async function OpeningResultDetailPage({ params }: { params: Promise<Noti
           <RecollectButton endpoint={openingResultApiPath(key)} initial />
         </div>
       )}
-    </main>
+    </div>
   );
 }

@@ -29,7 +29,7 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
   const orderPlanNumber =
     number && repository.findOrderPlan(number) ? number : undefined;
   return (
-    <main className="mx-auto grid max-w-5xl gap-6 px-4 py-8 sm:px-6">
+    <div className="grid min-w-0 grid-cols-1 gap-6">
       <Button asChild variant="outline" className="w-fit">
         <Link href={NOTICE_LIST_PATH}>목록으로 돌아가기</Link>
       </Button>
@@ -39,6 +39,6 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
         links={{ contractPath, contractRequestPath, openingResultPath, orderPlanPath, priorSpecPath }}
         renderActions={(input) => <RecollectButton endpoint="/api/notices" requestBody={input} compact />}
       />
-    </main>
+    </div>
   );
 }
