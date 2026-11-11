@@ -2,6 +2,7 @@ import { contractSearchBody, parseContractResponse, type ContractKey } from "@/e
 import { getG2bRepository } from "@/server/g2b/repository";
 import { postG2b } from "./request";
 import { collectOnce } from "./collect-once";
+import { trackCollectionAttempt } from "./collection-attempt";
 import { unifiedSearchPath } from "./work-progress";
 
 /**
@@ -18,16 +19,18 @@ export async function collectContract(key: ContractKey, force = false) {
     force,
     async () => {
       if (!force && repository.findContract(key)) return;
-      const collectedAt = new Date().toISOString();
-      const result = await postG2b(
-        `${unifiedSearchPath}/srchCtrtDtl.do`,
-        "FIUA027_01_wframe_popupCnts_ctrtWfrm_srchDtl",
-        contractSearchBody(key),
-      );
-      const contract = parseContractResponse(key, result);
-      if (!contract)
-        throw new Error("요청한 계약현황의 상세 응답을 받지 못했습니다.");
-      repository.saveContract({ ...key, collectedAt, ...contract });
+      return trackCollectionAttempt({ section: "contracts", ...key }, async () => {
+        const collectedAt = new Date().toISOString();
+        const result = await postG2b(
+          `${unifiedSearchPath}/srchCtrtDtl.do`,
+          "FIUA027_01_wframe_popupCnts_ctrtWfrm_srchDtl",
+          contractSearchBody(key),
+        );
+        const contract = parseContractResponse(key, result);
+        if (!contract)
+          throw new Error("요청한 계약현황의 상세 응답을 받지 못했습니다.");
+        repository.saveContract({ ...key, collectedAt, ...contract });
+      });
     },
   );
 }

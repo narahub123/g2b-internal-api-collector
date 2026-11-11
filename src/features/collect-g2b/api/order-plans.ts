@@ -5,6 +5,7 @@ import { findMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 import { postG2b } from "./request";
 import { collectAttachments } from "./attachments";
 import { collectOnce } from "./collect-once";
+import { trackCollectionAttempt } from "./collection-attempt";
 
 /**
  * 발주계획 본문과 첨부 목록을 수집한다. 일반 수집은 저장된 본문을 재사용하고 누락된 첨부만 보충한다.
@@ -21,35 +22,37 @@ export async function collectOrderPlan(number: string, force = false) {
     const needsDetail = !plan;
     // 저장된 본문이 있고 첨부 수집이 끝났거나 첨부 그룹이 없으면 중복 요청을 피한다.
     if (plan && (plan.attachments || !orderPlanAttachmentGroup(plan))) return;
-    const request = await createG2bSession();
-    if (!plan) {
-      const collectedAt = new Date().toISOString();
-      const payload = await postG2b(
-        "/pr/prp/prpa/OderPlan/selectOderPlan.do",
-        "FIUA027_01_wframe_popupCnts_orderPlanWfrm_sbmSrch",
-        { dlParamM: { oderPlanNo: number, resultCnt: "" } },
-        request,
-      );
-      if (payload?.dlOderPlanM?.oderPlanNo !== number) {
-        throw new Error("요청한 발주계획의 상세 응답을 받지 못했습니다.");
+    return trackCollectionAttempt({ section: "order-plans", number }, async () => {
+      const request = await createG2bSession();
+      if (!plan) {
+        const collectedAt = new Date().toISOString();
+        const payload = await postG2b(
+          "/pr/prp/prpa/OderPlan/selectOderPlan.do",
+          "FIUA027_01_wframe_popupCnts_orderPlanWfrm_sbmSrch",
+          { dlParamM: { oderPlanNo: number, resultCnt: "" } },
+          request,
+        );
+        if (payload?.dlOderPlanM?.oderPlanNo !== number) {
+          throw new Error("요청한 발주계획의 상세 응답을 받지 못했습니다.");
+        }
+        plan = { number, collectedAt, payload };
       }
-      plan = { number, collectedAt, payload };
-    }
-    const group = orderPlanAttachmentGroup(plan);
-    const attachments = group
-      ? await collectAttachments(group, "order-plan", request).catch((error: unknown) => {
-          // 일반 오류일 때만 새 본문을 남겨 다음 수집에서 첨부 조회를 이어간다.
-          if (!findMaintenance(error) && !force && needsDetail) repository.saveOrderPlan(plan);
-          throw error;
-        })
-      : undefined;
-    if (force) repository.replaceOrderPlan({ ...plan, attachments });
-    else if (needsDetail) repository.saveOrderPlan({ ...plan, attachments });
-    else if (attachments)
-      repository.saveOrderPlanAttachments(
-        number,
-        plan.collectedAt,
-        attachments,
-      );
+      const group = orderPlanAttachmentGroup(plan);
+      const attachments = group
+        ? await collectAttachments(group, "order-plan", request).catch((error: unknown) => {
+            // 일반 오류일 때만 새 본문을 남겨 다음 수집에서 첨부 조회를 이어간다.
+            if (!findMaintenance(error) && !force && needsDetail) repository.saveOrderPlan(plan);
+            throw error;
+          })
+        : undefined;
+      if (force) repository.replaceOrderPlan({ ...plan, attachments });
+      else if (needsDetail) repository.saveOrderPlan({ ...plan, attachments });
+      else if (attachments)
+        repository.saveOrderPlanAttachments(
+          number,
+          plan.collectedAt,
+          attachments,
+        );
+    });
   });
 }

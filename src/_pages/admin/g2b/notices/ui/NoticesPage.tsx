@@ -15,7 +15,6 @@ export function NoticesPage() {
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <h1 className="text-2xl font-semibold">나라장터 공고 수집</h1>
       <CollectNoticeForm onCollected={(key) => router.push(noticePath(key))} />
       <section aria-labelledby="saved-notices" className="grid gap-3">
         <h2 id="saved-notices" className="text-lg font-semibold">저장된 공고</h2>

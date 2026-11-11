@@ -19,6 +19,7 @@ import { createG2bSession } from "@/shared/api/g2b/g2b-session";
 import { throwIfMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 import { postG2b, type G2bRequest } from "./request";
 import { collectOnce } from "./collect-once";
+import { trackCollectionAttempt } from "./collection-attempt";
 
 const openingResultMenu =
   '{"menuNo":"01523","menuCangVal":"PBOC007_01","bsneClsfCd":"%EC%97%85130028","scrnNo":"02128"}';
@@ -136,101 +137,102 @@ export async function collectOpeningResult(
       const needsPrice =
         Boolean(priceQuery) && (force || saved?.price === undefined);
       if (!missing.length && !needsNotice && !needsPrice) return;
-
-      const request = await createG2bSession();
-      const [resultOutcome, noticeOutcome, priceOutcome] = await Promise.all([
-        Promise.allSettled(
-          missing.map(async (query) => {
-            const config = openingResultRequest(key, query);
-            const payload = await postG2b(
-              config.path,
-              config.submission,
-              config.input,
-              request,
-              openingResultMenu,
-            );
-            return {
-              query,
-              detail: openingResultDetail(config.endpoint, payload, key, query),
-            };
-          }),
-        ),
-        needsNotice
-          ? collectOpeningNotice(key, queries, request).then(
-              (value) => ({ status: "fulfilled" as const, value }),
-              (reason: unknown) => ({ status: "rejected" as const, reason }),
-            )
-          : Promise.resolve({ status: "skipped" as const }),
-        needsPrice && priceQuery
-          ? (async () => {
-              const config = openingResultPriceRequest(key, priceQuery);
+      return trackCollectionAttempt({ section: "opening-results", ...key, queries }, async () => {
+        const request = await createG2bSession();
+        const [resultOutcome, noticeOutcome, priceOutcome] = await Promise.all([
+          Promise.allSettled(
+            missing.map(async (query) => {
+              const config = openingResultRequest(key, query);
               const payload = await postG2b(
                 config.path,
                 config.submission,
                 config.input,
                 request,
-                openingResultPriceMenu,
+                openingResultMenu,
               );
-              return openingResultPriceFromResponse(payload, key, priceQuery);
-            })().then(
-              (value) => ({ status: "fulfilled" as const, value }),
-              (reason: unknown) => ({ status: "rejected" as const, reason }),
-            )
-          : Promise.resolve({ status: "skipped" as const }),
-      ]);
-      // 점검 중 일부 조회가 성공해도 해당 개찰차수의 기존 자료를 유지한다.
-      throwIfMaintenance(...resultOutcome, noticeOutcome, priceOutcome);
-      const successes = resultOutcome.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
-      // 성공한 분류만 새 결과로 교체하고 실패하거나 요청하지 않은 기존 분류는 유지한다.
-      const updated = [
-        ...previous.filter(
-          (entry) =>
-            !successes.some(
-              ({ query }) =>
-                query.classification === entry.query.classification,
-            ),
-        ),
-        ...successes,
-      ];
-      // 세 종류 중 하나라도 성공했을 때만 저장하며 실패한 부가 자료는 기존 값을 유지한다.
-      if (
-        successes.length ||
-        noticeOutcome.status === "fulfilled" ||
-        priceOutcome.status === "fulfilled"
-      ) {
-        repository.saveOpeningResult({
-          ...key,
-          collectedAt: new Date().toISOString(),
-          results: updated,
-          ...(noticeOutcome.status === "fulfilled"
-            ? { notice: noticeOutcome.value }
-            : saved?.notice !== undefined
-              ? { notice: saved.notice }
-              : {}),
-          ...(priceOutcome.status === "fulfilled"
-            ? { price: priceOutcome.value }
-            : saved?.price !== undefined
-              ? { price: saved.price }
-              : {}),
-        });
-      }
-      // 일반 조회 오류는 성공 자료를 저장한 뒤 모아서 전달해 부분 실패를 알린다.
-      const failures = resultOutcome.filter(
-        (result): result is PromiseRejectedResult =>
-          result.status === "rejected",
-      );
-      const reasons = failures.map(({ reason }) => reason);
-      if (noticeOutcome.status === "rejected")
-        reasons.push(noticeOutcome.reason);
-      if (priceOutcome.status === "rejected") reasons.push(priceOutcome.reason);
-      if (reasons.length) {
-        throw new AggregateError(
-          reasons,
-          `개찰결과 ${failures.length}/${missing.length}개 분류, 공지사항 또는 예정가격 수집 실패 (성공 결과는 저장됨)`,
+              return {
+                query,
+                detail: openingResultDetail(config.endpoint, payload, key, query),
+              };
+            }),
+          ),
+          needsNotice
+            ? collectOpeningNotice(key, queries, request).then(
+                (value) => ({ status: "fulfilled" as const, value }),
+                (reason: unknown) => ({ status: "rejected" as const, reason }),
+              )
+            : Promise.resolve({ status: "skipped" as const }),
+          needsPrice && priceQuery
+            ? (async () => {
+                const config = openingResultPriceRequest(key, priceQuery);
+                const payload = await postG2b(
+                  config.path,
+                  config.submission,
+                  config.input,
+                  request,
+                  openingResultPriceMenu,
+                );
+                return openingResultPriceFromResponse(payload, key, priceQuery);
+              })().then(
+                (value) => ({ status: "fulfilled" as const, value }),
+                (reason: unknown) => ({ status: "rejected" as const, reason }),
+              )
+            : Promise.resolve({ status: "skipped" as const }),
+        ]);
+        // 점검 중 일부 조회가 성공해도 해당 개찰차수의 기존 자료를 유지한다.
+        throwIfMaintenance(...resultOutcome, noticeOutcome, priceOutcome);
+        const successes = resultOutcome.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
         );
-      }
+        // 성공한 분류만 새 결과로 교체하고 실패하거나 요청하지 않은 기존 분류는 유지한다.
+        const updated = [
+          ...previous.filter(
+            (entry) =>
+              !successes.some(
+                ({ query }) =>
+                  query.classification === entry.query.classification,
+              ),
+          ),
+          ...successes,
+        ];
+        // 세 종류 중 하나라도 성공했을 때만 저장하며 실패한 부가 자료는 기존 값을 유지한다.
+        if (
+          successes.length ||
+          noticeOutcome.status === "fulfilled" ||
+          priceOutcome.status === "fulfilled"
+        ) {
+          repository.saveOpeningResult({
+            ...key,
+            collectedAt: new Date().toISOString(),
+            results: updated,
+            ...(noticeOutcome.status === "fulfilled"
+              ? { notice: noticeOutcome.value }
+              : saved?.notice !== undefined
+                ? { notice: saved.notice }
+                : {}),
+            ...(priceOutcome.status === "fulfilled"
+              ? { price: priceOutcome.value }
+              : saved?.price !== undefined
+                ? { price: saved.price }
+                : {}),
+          });
+        }
+        // 일반 조회 오류는 성공 자료를 저장한 뒤 모아서 전달해 부분 실패를 알린다.
+        const failures = resultOutcome.filter(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        );
+        const reasons = failures.map(({ reason }) => reason);
+        if (noticeOutcome.status === "rejected")
+          reasons.push(noticeOutcome.reason);
+        if (priceOutcome.status === "rejected") reasons.push(priceOutcome.reason);
+        if (reasons.length) {
+          throw new AggregateError(
+            reasons,
+            `개찰결과 ${failures.length}/${missing.length}개 분류, 공지사항 또는 예정가격 수집 실패 (성공 결과는 저장됨)`,
+          );
+        }
+      });
     },
   );
 }

@@ -1,8 +1,6 @@
-import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
+import { CollectionListPage } from "@/_pages/admin/g2b/ui/CollectionListPage";
 
-/**
- * 공통 관리자 본문에 발주계획 화면의 제목을 표시한다.
- */
-export default function Page() {
-  return <h1 className="text-2xl font-semibold">{G2B_SECTIONS["order-plans"]}</h1>;
+/** 업무 목록에서 저장 현황과 선택된 수집 결과 탭을 표시한다. */
+export default function Page({ searchParams }: { searchParams: Promise<{ tab?: string | string[] }> }) {
+  return <CollectionListPage section="order-plans" searchParams={searchParams} />;
 }

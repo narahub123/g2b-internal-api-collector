@@ -8,6 +8,7 @@ import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import type { Notice, NoticeKey, NoticeSummary } from '@/entities/notice/model/types';
 import type { G2bCollectionCounts, G2bRepository } from './types';
+import { openCollectionAttempts } from './collection-attempts';
 
 export function openG2bRepository(): G2bRepository {
   const directory = join(process.cwd(), '.data');
@@ -128,6 +129,7 @@ export function openG2bRepository(): G2bRepository {
   `);
 
   return {
+    collectionAttempts: openCollectionAttempts(db),
     /**
      * 수집 중에도 업무별 건수가 같은 읽기 시점을 기준으로 집계되도록 한 문장으로 조회한다.
      * @throws SQLite가 집계 쿼리 실행에 실패한 경우.
