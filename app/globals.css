@@ -29,13 +29,21 @@
   --animate-accordion-up: accordion-up 0.2s ease-out;
 
   @keyframes accordion-down {
-    from { height: 0; }
-    to { height: var(--radix-accordion-content-height); }
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--radix-accordion-content-height);
+    }
   }
 
   @keyframes accordion-up {
-    from { height: var(--radix-accordion-content-height); }
-    to { height: 0; }
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+    to {
+      height: 0;
+    }
   }
 }
 
@@ -52,9 +60,17 @@
   --ring: oklch(0.55 0 0);
 }
 
+html {
+  scrollbar-gutter: stable both-edges;
+}
+
 @layer base {
-  * { @apply border-border; }
-  body { @apply bg-background text-foreground antialiased; }
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
 }
 
 /* 목록과 상세에서 같은 업무구분 코드는 같은 색을 사용한다. */
@@ -66,15 +82,51 @@
   color: var(--business-fg, var(--foreground));
 }
 
-.business-badge[data-business-code="01"] { --business-bg: #dbeafe; --business-fg: #1e40af; }
-.business-badge[data-business-code="02"] { --business-bg: #ccfbf1; --business-fg: #115e59; }
-.business-badge[data-business-code="03"] { --business-bg: #dcfce7; --business-fg: #166534; }
-.business-badge[data-business-code="04"] { --business-bg: #ecfccb; --business-fg: #3f6212; }
-.business-badge[data-business-code="05"] { --business-bg: #ede9fe; --business-fg: #5b21b6; }
-.business-badge[data-business-code="07"] { --business-bg: #ffedd5; --business-fg: #9a3412; }
-.business-badge[data-business-code="09"] { --business-bg: #e5e7eb; --business-fg: #374151; }
-.business-badge[data-business-code="10"] { --business-bg: #fce7f3; --business-fg: #9d174d; }
-.business-badge[data-business-code="11"] { --business-bg: #fae8ff; --business-fg: #86198f; }
-.business-badge[data-business-code="12"] { --business-bg: #e0e7ff; --business-fg: #312e81; }
-.business-badge[data-business-code="13"] { --business-bg: #e0f2fe; --business-fg: #075985; }
-.business-badge[data-business-code="14"] { --business-bg: #f0e4d8; --business-fg: #713f22; }
+.business-badge[data-business-code="01"] {
+  --business-bg: #dbeafe;
+  --business-fg: #1e40af;
+}
+.business-badge[data-business-code="02"] {
+  --business-bg: #ccfbf1;
+  --business-fg: #115e59;
+}
+.business-badge[data-business-code="03"] {
+  --business-bg: #dcfce7;
+  --business-fg: #166534;
+}
+.business-badge[data-business-code="04"] {
+  --business-bg: #ecfccb;
+  --business-fg: #3f6212;
+}
+.business-badge[data-business-code="05"] {
+  --business-bg: #ede9fe;
+  --business-fg: #5b21b6;
+}
+.business-badge[data-business-code="07"] {
+  --business-bg: #ffedd5;
+  --business-fg: #9a3412;
+}
+.business-badge[data-business-code="09"] {
+  --business-bg: #e5e7eb;
+  --business-fg: #374151;
+}
+.business-badge[data-business-code="10"] {
+  --business-bg: #fce7f3;
+  --business-fg: #9d174d;
+}
+.business-badge[data-business-code="11"] {
+  --business-bg: #fae8ff;
+  --business-fg: #86198f;
+}
+.business-badge[data-business-code="12"] {
+  --business-bg: #e0e7ff;
+  --business-fg: #312e81;
+}
+.business-badge[data-business-code="13"] {
+  --business-bg: #e0f2fe;
+  --business-fg: #075985;
+}
+.business-badge[data-business-code="14"] {
+  --business-bg: #f0e4d8;
+  --business-fg: #713f22;
+}
