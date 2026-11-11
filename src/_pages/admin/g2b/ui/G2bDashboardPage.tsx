@@ -5,6 +5,7 @@ import type { CollectionSection } from "@/server/g2b/repository/collection-attem
 import { ADMIN_NAVIGATION } from "../../config/navigation";
 import { AdminDashboardCard } from "../../ui/AdminDashboardCard";
 import { collectionCountFormat, collectionCountLabels } from "./collection-count-labels";
+import { cn } from "@/shared/lib/utils";
 
 // 카드의 업무 아이콘은 메뉴의 여섯 업무와 일치한다.
 const sectionIcons = {
@@ -32,13 +33,29 @@ export async function G2bDashboardPage() {
           const Icon = sectionIcons[section];
           const counts = history.counts(section);
           return (
-            <AdminDashboardCard key={section} href={href} title={label}
-              icon={<Icon className="size-5" />}>
+            <AdminDashboardCard
+              key={section}
+              href={href}
+              title={label}
+              icon={<Icon className="size-5" />}
+            >
               <dl className="grid grid-cols-3 gap-2">
                 {collectionCountLabels.map(([key, name]) => (
                   <div key={key} className="min-w-0">
-                    <dt className="text-xs text-muted-foreground">{name}</dt>
-                    <dd className="wrap-anywhere text-sm font-semibold tabular-nums">
+                    <dt
+                      className={cn(
+                        "text-xs text-muted-foreground",
+                        key === "uncollected" && "text-destructive",
+                      )}
+                    >
+                      {name}
+                    </dt>
+                    <dd
+                      className={cn(
+                        "wrap-anywhere text-sm font-semibold tabular-nums",
+                        key === "uncollected" && "text-destructive",
+                      )}
+                    >
                       {collectionCountFormat.format(counts[key])}건
                     </dd>
                   </div>
