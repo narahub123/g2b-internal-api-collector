@@ -29,11 +29,15 @@ const listControls = {
   contracts: contractListControls,
 };
 
-/** 업무별 조회 조건을 URL로 이동시키고 공통 목록에 서버에서 조회한 결과를 표시한다. */
-export function CollectionQueryView({ path, query, totalPages, children, ...options }: {
+/**
+ * 업무별 조회 조건을 URL로 이동시키고 공통 목록에 서버에서 조회한 결과를 표시한다.
+ * @param props.persistentParams 탭 선택처럼 조건 변경, 페이지 이동, 전체 초기화에도 유지할 URL 값.
+ */
+export function CollectionQueryView({ path, query, totalPages, persistentParams, children, ...options }: {
   path: string;
   query: CollectionListQuery;
   totalPages: number;
+  persistentParams?: Record<string, string>;
   children: ReactNode;
 } & ({ section: "notices"; regions: string[] } | { section: "order-plans" | "contract-requests" | keyof typeof listControls }) & { businesses: ListOption[] }) {
   const router = useRouter();
@@ -44,18 +48,26 @@ export function CollectionQueryView({ path, query, totalPages, children, ...opti
       : options.section === "order-plans"
         ? { href: orderPlanListHref, fields: orderPlanSearchFields, sort: orderPlanSortOptions, filters: orderPlanFilters(options.businesses) }
         : { href: collectionListHref, ...listControls[options.section](options.businesses) };
+  const href = (nextQuery?: CollectionListQuery) => {
+    const listHref = nextQuery ? config.href(path, nextQuery) : path;
+    if (!persistentParams) return listHref;
+
+    const params = new URLSearchParams(listHref.split("?")[1]);
+    for (const [key, value] of Object.entries(persistentParams)) params.set(key, value);
+    return `${path}?${params}`;
+  };
   const apply = (changes: Partial<CollectionListQuery>) => {
-    router.push(config.href(path, { ...query, ...changes, page: 1 }));
+    router.push(href({ ...query, ...changes, page: 1 }));
   };
 
   return (
     <ListView
       controlsLabel="검색·필터·정렬"
-      onReset={() => router.push(path)}
+      onReset={() => router.push(href())}
       search={{ fields: config.fields, defaultField: "title", value: query.search, onSubmit: (search) => apply({ search }) }}
       filters={{ filters: config.filters, value: query.filters, onApply: (filters) => apply({ filters }) }}
       sort={{ options: config.sort, value: query.sort, onChange: (sort) => apply({ sort }) }}
-      pagination={{ page: query.page, totalPages, hrefForPage: (page) => config.href(path, { ...query, page }) }}
+      pagination={{ page: query.page, totalPages, hrefForPage: (page) => href({ ...query, page }) }}
     >
       {children}
     </ListView>

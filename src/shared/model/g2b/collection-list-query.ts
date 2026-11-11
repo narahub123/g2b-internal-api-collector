@@ -11,6 +11,17 @@ export type CollectionListQuery = {
   page: number;
 };
 
+/** 업무 목록에 공고 차수와 개찰 차수가 있는 경우 식별번호에 함께 표시한다. */
+export function formatCollectionIdentifier({ number, revision, openingRevision }: {
+  number: string;
+  revision: string;
+  openingRevision: string;
+}) {
+  return [number, revision, openingRevision && `개찰 ${openingRevision}차`]
+    .filter(Boolean)
+    .join("/");
+}
+
 /** 지원하는 조건만 URL에서 읽어 검증한다. 날짜 최신순과 1페이지를 기본값으로 사용한다. */
 export function parseCollectionListQuery(params: CollectionSearchParams, config: { fields: readonly ListOption[]; filters: readonly ListFilter[]; sort: readonly ListOption[] }): CollectionListQuery {
   const single = (key: string) => typeof params[key] === "string" ? params[key] : undefined;

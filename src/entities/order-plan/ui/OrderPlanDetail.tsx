@@ -9,6 +9,7 @@ import { orderPlanSections } from "../model/order-plan-display";
 import {
   orderPlanAttachmentGroup,
   orderPlanFiles,
+  orderPlanNoticeReferences,
   type OrderPlan,
 } from "../model/order-plan";
 import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
@@ -28,8 +29,8 @@ export function OrderPlanDetail({
   actions,
 }: {
   plan: OrderPlan;
-  noticePath: (key: { number: string; revision: string }) => string;
-  priorSpecPath: (number: string) => string;
+  noticePath: (key: { number: string; revision: string }) => string | undefined;
+  priorSpecPath: (number: string) => string | undefined;
   actions?: ReactNode;
 }) {
   const detail = plan.payload.dlOderPlanM;
@@ -42,28 +43,7 @@ export function OrderPlanDetail({
         .map((row) => g2bNumber(row?.bfSpecRegNo))
         .filter((number): number is string => number !== undefined)
     : [];
-  const notices = Array.isArray(detail.bidPbancList)
-    ? detail.bidPbancList.flatMap((row) => {
-        const number = g2bNumber(row?.bidPbancNo);
-        const order = row?.bidPbancOrd;
-        if (
-          !number ||
-          (typeof order !== "string" && typeof order !== "number") ||
-          !/^\d{1,3}$/.test(String(order))
-        )
-          return [];
-
-        return [
-          {
-            href: noticePath({
-              number,
-              revision: String(order).padStart(3, "0"),
-            }),
-            label: `${number}-${order}`,
-          },
-        ];
-      })
-    : [];
+  const notices = orderPlanNoticeReferences(plan);
   const files = orderPlanFiles(plan);
   const attachmentsPending = Boolean(
     orderPlanAttachmentGroup(plan) && !plan.attachments,
@@ -119,16 +99,14 @@ export function OrderPlanDetail({
               <dd className="min-h-5">
                 {specifications.length > 0 && (
                   <ul className="grid gap-2">
-                    {specifications.map((number, index) => (
-                      <li key={`${number}-${index}`} className="wrap-anywhere">
-                        <Link
-                          href={priorSpecPath(number)}
-                          className={linkClass}
-                        >
-                          {number}
-                        </Link>
-                      </li>
-                    ))}
+                    {specifications.map((number, index) => {
+                      const href = priorSpecPath(number);
+                      return (
+                        <li key={JSON.stringify([number, index])} className="wrap-anywhere">
+                          {href ? <Link href={href} className={linkClass}>{number}</Link> : number}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </dd>
@@ -138,13 +116,14 @@ export function OrderPlanDetail({
               <dd className="min-h-5">
                 {notices.length > 0 && (
                   <ul className="grid gap-2">
-                    {notices.map(({ href, label }, index) => (
-                      <li key={`${href}-${index}`} className="wrap-anywhere">
-                        <Link href={href} className={linkClass}>
-                          {label}
-                        </Link>
-                      </li>
-                    ))}
+                    {notices.map(({ label, ...key }, index) => {
+                      const href = noticePath(key);
+                      return (
+                        <li key={JSON.stringify([label, index])} className="wrap-anywhere">
+                          {href ? <Link href={href} className={linkClass}>{label}</Link> : label}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </dd>
@@ -155,8 +134,8 @@ export function OrderPlanDetail({
           <DetailAccordionSection title="파일첨부" heading="h3">
             {attachmentsPending ? (
               <p className="text-muted-foreground">
-                첨부 목록이 아직 수집되지 않았습니다. 재수집으로 첨부 목록을
-                조회할 수 있습니다.
+                첨부 목록이 아직 수집되지 않았습니다.
+                {actions && " 재수집으로 첨부 목록을 조회할 수 있습니다."}
               </p>
             ) : (
               <AttachmentTable

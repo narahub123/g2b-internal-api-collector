@@ -1,3 +1,4 @@
+import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import {
   attachmentGroup,
   publicAttachmentFiles,
@@ -44,4 +45,29 @@ export function getNoticeOrderPlanNumber(payload: Record<string, unknown>) {
       return number.trim();
     }
   }
+}
+
+/** 발주계획의 연관 공고를 번호·차수로 정규화하고 원래 표시용 식별자를 함께 반환한다. */
+export function orderPlanNoticeReferences(plan: OrderPlan) {
+  const detail = plan.payload.dlOderPlanM;
+  return Array.isArray(detail.bidPbancList)
+    ? detail.bidPbancList.flatMap((row) => {
+        const number = g2bNumber(row?.bidPbancNo);
+        const order = row?.bidPbancOrd;
+        if (
+          !number ||
+          (typeof order !== "string" && typeof order !== "number") ||
+          !/^\d{1,3}$/.test(String(order))
+        )
+          return [];
+
+        return [
+          {
+            number,
+            revision: String(order).padStart(3, "0"),
+            label: `${number}-${order}`,
+          },
+        ];
+      })
+    : [];
 }

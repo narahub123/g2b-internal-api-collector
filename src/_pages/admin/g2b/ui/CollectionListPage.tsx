@@ -1,14 +1,9 @@
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import { noticeListHref, parseNoticeListQuery } from "@/entities/notice/model/notice-list-query";
-import { collectionListHref, type CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
-import { parsePriorSpecListQuery } from "@/entities/prior-spec/model/prior-spec-list-query";
-import { parseOpeningResultListQuery } from "@/entities/opening-result/model/opening-result-list-query";
-import { parseContractListQuery } from "@/entities/contract/model/contract-list-query";
-import { orderPlanListHref, parseOrderPlanListQuery } from "@/entities/order-plan/model/order-plan-list-query";
-import { contractRequestListHref, parseContractRequestListQuery } from "@/entities/contract-request/model/contract-request-list-query";
+import { formatCollectionIdentifier } from "@/shared/model/g2b/collection-list-query";
+import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
-import { getG2bRepository } from "@/server/g2b/repository";
+import { loadCollectionList } from "@/server/g2b/repository/load-collection-list";
 import type {
   CollectionOverview,
   CollectionSection,
@@ -17,14 +12,14 @@ import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { ADMIN_G2B_PATH, collectionDetailPaths } from "../../config/routes";
-import { CollectionQueryView } from "./CollectionQueryView";
+import { CollectionQueryView } from "@/shared/ui/g2b/CollectionQueryView";
 import { CollectionForm } from "./CollectionForm";
 import {
   collectionCountFormat,
   collectionCountLabels,
 } from "./collection-count-labels";
-import { CollectionListItem } from "./CollectionListItem";
-import { CollectionListLabel } from "./CollectionListLabel";
+import { CollectionListItem } from "@/shared/ui/g2b/CollectionListItem";
+import { CollectionListLabel } from "@/shared/ui/g2b/CollectionListLabel";
 
 const dateFormat = new Intl.DateTimeFormat("ko-KR", {
   dateStyle: "medium",
@@ -47,30 +42,11 @@ function targetKey({ number, revision, openingRevision }: TargetKey) {
   return JSON.stringify([number, revision, openingRevision]);
 }
 
-function targetLabel({ number, revision, openingRevision }: TargetKey) {
-  return [number, revision, openingRevision && `개찰 ${openingRevision}차`]
-    .filter(Boolean)
-    .join("/");
-}
-
 type DisplayRow = {
   item: TargetKey;
   savedItem?: Pick<CollectionOverview["saved"][number], "title" | "businessCode" | "businessLabel">;
   failure?: Pick<CollectionOverview["failures"][number], "id" | "startedAt" | "status" | "error">;
 };
-
-function loadOverview(section: CollectionSection, selected: "total" | "collected" | "uncollected") {
-  const { counts, saved, failures } = getG2bRepository().collectionAttempts.overview(section);
-  const failureByKey = new Map(failures.map((failure) => [targetKey(failure), failure]));
-  // 저장 자료가 있는 재수집 실패는 기존 항목에 표시해 목록과 집계에서 중복되지 않게 한다.
-  const savedRows = selected === "uncollected" ? [] : saved.map((item) => ({
-    item, savedItem: item, failure: failureByKey.get(targetKey(item)),
-  }));
-  const missingRows = selected === "collected" ? [] : failures
-    .filter(({ hasData }) => !hasData)
-    .map((failure) => ({ item: failure, savedItem: undefined, failure }));
-  return { counts, rows: [...savedRows, ...missingRows] };
-}
 
 /**
  * URL에서 선택된 필터에 맞춰 저장 자료와 최신 실패 상태를 대상별 한 행으로 표시한다.
@@ -85,47 +61,16 @@ export async function CollectionListPage({
   searchParams: Promise<CollectionSearchParams>;
 }) {
   const params = await searchParams;
-  const { status } = params;
-  const selected =
-    status === "collected" || status === "uncollected" ? status : "total";
-  const attempts = getG2bRepository().collectionAttempts;
-  const paginated = (() => {
-    if (section === "prior-specs" || section === "opening-results" || section === "contracts") {
-      const [list, parse] = ({
-        "prior-specs": [attempts.priorSpecList, parsePriorSpecListQuery],
-        "opening-results": [attempts.openingResultList, parseOpeningResultListQuery],
-        contracts: [attempts.contractList, parseContractListQuery],
-      } as const)[section];
-      const businesses = list.businesses();
-      const query = parse(params, businesses);
-      return { section, businesses, query, result: list.page(query), href: collectionListHref } as const;
-    }
-    if (section === "contract-requests") {
-      const businesses = attempts.contractRequestList.businesses();
-      const query = parseContractRequestListQuery(params, businesses);
-      return { section, businesses, query, result: attempts.contractRequestList.page(query), href: contractRequestListHref } as const;
-    }
-    if (section === "order-plans") {
-      const businesses = attempts.orderPlanList.businesses();
-      const query = parseOrderPlanListQuery(params, businesses);
-      return { section, businesses, query, result: attempts.orderPlanList.page(query), href: orderPlanListHref } as const;
-    }
-    if (section !== "notices") return undefined;
-    const regions = attempts.noticeList.regions();
-    const businesses = attempts.noticeList.businesses();
-    const query = parseNoticeListQuery(params, regions, businesses);
-    return { section, regions, businesses, query, result: attempts.noticeList.page(query), href: noticeListHref } as const;
-  })();
-  const { counts, rows } = paginated ? {
-    counts: paginated.result.counts,
-    rows: paginated.result.rows.map((row): DisplayRow => ({
-      item: row,
-      savedItem: row.collectedAt !== null ? row : undefined,
-      failure: row.id !== null && row.startedAt && row.status && row.status !== "succeeded"
-        ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error }
-        : undefined,
-    })),
-  } : loadOverview(section, selected);
+  const paginated = loadCollectionList(section, params);
+  const { counts } = paginated.result;
+  const selected = paginated.query.status;
+  const rows = paginated.result.rows.map((row): DisplayRow => ({
+    item: row,
+    savedItem: row.collectedAt !== null ? row : undefined,
+    failure: row.id !== null && row.startedAt && row.status && row.status !== "succeeded"
+      ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error }
+      : undefined,
+  }));
   const href = `${ADMIN_G2B_PATH}/${section}`;
   const items = <CollectionRows section={section} rows={rows} />;
 
@@ -148,8 +93,7 @@ export async function CollectionListPage({
         {collectionCountLabels.map(([key, label]) => (
           <Link
             key={key}
-            href={paginated ? paginated.href(href, { ...paginated.query, status: key, page: 1 })
-              : key === "total" ? href : `${href}?status=${key}`}
+            href={paginated.href(href, { ...paginated.query, status: key, page: 1 })}
             aria-current={selected === key ? "page" : undefined}
             className={cn(
               "flex min-w-0 flex-wrap items-center justify-between gap-x-2 border-b-2 border-transparent px-3 py-4 hover:bg-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:px-5",
@@ -171,19 +115,17 @@ export async function CollectionListPage({
           </Link>
         ))}
       </nav>
-      {paginated ? (
-        <CollectionQueryView
-          path={href}
-          query={{ ...paginated.query, page: paginated.result.page }}
-          totalPages={paginated.result.totalPages}
-          businesses={paginated.businesses}
-          {...(paginated.section === "notices"
-            ? { section: paginated.section, regions: paginated.regions }
-            : { section: paginated.section })}
-        >
-          {items}
-        </CollectionQueryView>
-      ) : items}
+      <CollectionQueryView
+        path={href}
+        query={{ ...paginated.query, page: paginated.result.page }}
+        totalPages={paginated.result.totalPages}
+        businesses={paginated.businesses}
+        {...(paginated.section === "notices"
+          ? { section: paginated.section, regions: paginated.regions }
+          : { section: paginated.section })}
+      >
+        {items}
+      </CollectionQueryView>
     </section>
   );
 }
@@ -230,7 +172,7 @@ function CollectionRows({ section, rows }: { section: CollectionSection; rows: D
             }
           >
             <CollectionListLabel
-              identifier={targetLabel(item)}
+              identifier={formatCollectionIdentifier(item)}
               title={savedItem?.title}
               businessCode={savedItem?.businessCode}
               businessLabel={savedItem?.businessLabel}

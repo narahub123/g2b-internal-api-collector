@@ -76,7 +76,7 @@ export function PriorSpecDetail({
   actions,
 }: {
   spec: PriorSpec;
-  orderPlanPath: (number: string) => string;
+  orderPlanPath: (number: string) => string | undefined;
   actions?: ReactNode;
 }) {
   const endpoint = `/api/prior-specs/${encodeURIComponent(spec.number)}`;
@@ -115,6 +115,7 @@ export function PriorSpecDetail({
             {rows.map(({ key, label, value, extra, link, prefix, suffix }) => {
               const orderPlan =
                 key === "oderPlanNo" ? g2bNumber(value) : undefined;
+              const orderPlanHref = orderPlan && orderPlanPath(orderPlan);
               return (
                 <div
                   key={key}
@@ -141,9 +142,9 @@ export function PriorSpecDetail({
                     ) : (
                       <>
                         {prefix && <span className="mr-2">{prefix}</span>}
-                        {orderPlan ? (
+                        {orderPlanHref ? (
                           <Link
-                            href={orderPlanPath(orderPlan)}
+                            href={orderPlanHref}
                             className={linkStyle}
                           >
                             {value}
@@ -168,8 +169,8 @@ export function PriorSpecDetail({
           <DetailAccordionSection title="파일첨부" heading="h3">
             {pending ? (
               <p className="text-muted-foreground">
-                첨부 목록이 아직 수집되지 않았습니다. 재수집으로 조회할 수
-                있습니다.
+                첨부 목록이 아직 수집되지 않았습니다.
+                {actions && " 재수집으로 조회할 수 있습니다."}
               </p>
             ) : (
               <AttachmentTable
