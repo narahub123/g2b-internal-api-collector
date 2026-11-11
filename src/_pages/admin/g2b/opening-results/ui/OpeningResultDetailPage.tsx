@@ -1,6 +1,6 @@
-import { NOTICE_LIST_PATH, noticePath } from "@/_pages/admin/config/routes";
+import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { noticePath } from "@/_pages/admin/config/routes";
 import { openingResultApiPath } from "@/features/collect-g2b/api/routes";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { NoticeKey } from "@/entities/notice/model/types";
 import { getG2bRepository } from "@/server/g2b/repository";
@@ -11,7 +11,6 @@ import {
 import { OpeningResultDetail } from "@/entities/opening-result/ui/OpeningResultDetail";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
-import { Button } from "@/shared/ui/button";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 
 /**
@@ -92,11 +91,7 @@ export async function OpeningResultDetailPage({ params }: { params: Promise<Noti
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <Button asChild variant="outline" className="w-fit">
-        <Link href={notice ? noticePath(key) : NOTICE_LIST_PATH}>
-          {notice ? "입찰공고로 돌아가기" : "목록으로 돌아가기"}
-        </Link>
-      </Button>
+      <DetailNavigation section="opening-results" />
       <h1 className="sr-only">개찰결과</h1>
       {results.length ? (
         <OpeningResultDetail

@@ -1,6 +1,5 @@
-import { NOTICE_LIST_PATH } from "@/_pages/admin/config/routes";
+import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
 import { contractRequestApiPath } from "@/features/collect-g2b/api/routes";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   contractRequestRevision,
@@ -9,7 +8,6 @@ import {
 import { ContractRequestDetail } from "@/entities/contract-request/ui/ContractRequestDetail";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
-import { Button } from "@/shared/ui/button";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 
 /**
@@ -31,9 +29,7 @@ export async function ContractRequestDetailPage({
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <Button asChild variant="outline" className="w-fit">
-        <Link href={NOTICE_LIST_PATH}>목록으로 돌아가기</Link>
-      </Button>
+      <DetailNavigation section="contract-requests" />
       <h1 className="sr-only">계약요청</h1>
       {contractRequest ? (
         <ContractRequestDetail

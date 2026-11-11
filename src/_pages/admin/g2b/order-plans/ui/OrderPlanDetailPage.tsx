@@ -1,10 +1,9 @@
-import { NOTICE_LIST_PATH, noticePath, priorSpecPath } from "@/_pages/admin/config/routes";
-import Link from "next/link";
+import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { noticePath, priorSpecPath } from "@/_pages/admin/config/routes";
 import { notFound } from "next/navigation";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { OrderPlanDetail } from "@/entities/order-plan/ui/OrderPlanDetail";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
-import { Button } from "@/shared/ui/button";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 
 /**
@@ -23,9 +22,7 @@ export async function OrderPlanDetailPage({
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <Button asChild variant="outline" className="w-fit">
-        <Link href={NOTICE_LIST_PATH}>목록으로 돌아가기</Link>
-      </Button>
+      <DetailNavigation section="order-plans" />
       <h1 className="sr-only">발주계획</h1>
       {plan ? (
         <OrderPlanDetail

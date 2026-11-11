@@ -1,10 +1,9 @@
-import { NOTICE_LIST_PATH, orderPlanPath } from "@/_pages/admin/config/routes";
-import Link from "next/link";
+import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { orderPlanPath } from "@/_pages/admin/config/routes";
 import { notFound } from "next/navigation";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { PriorSpecDetail } from "@/entities/prior-spec/ui/PriorSpecDetail";
-import { Button } from "@/shared/ui/button";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 
 /**
@@ -23,9 +22,7 @@ export async function PriorSpecDetailPage({
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <Button asChild variant="outline" className="w-fit">
-        <Link href={NOTICE_LIST_PATH}>목록으로 돌아가기</Link>
-      </Button>
+      <DetailNavigation section="prior-specs" />
       <h1 className="sr-only">사전규격</h1>
       {spec ? (
         <PriorSpecDetail

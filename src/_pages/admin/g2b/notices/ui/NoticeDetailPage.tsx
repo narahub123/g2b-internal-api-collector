@@ -1,19 +1,17 @@
+import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
 import { notFound } from "next/navigation";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import {
-  NOTICE_LIST_PATH,
   contractPath,
   contractRequestPath,
   openingResultPath,
   orderPlanPath,
   priorSpecPath,
 } from "@/_pages/admin/config/routes";
-import Link from "next/link";
 import type { NoticeKey } from "@/entities/notice";
 import { NoticeDetail } from "@/entities/notice/ui/NoticeDetail";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
-import { Button } from "@/shared/ui/button";
 
 /**
  * 저장된 공고와 연결 가능한 발주계획을 조회해 상세 화면을 구성한다.
@@ -30,9 +28,7 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
     number && repository.findOrderPlan(number) ? number : undefined;
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <Button asChild variant="outline" className="w-fit">
-        <Link href={NOTICE_LIST_PATH}>목록으로 돌아가기</Link>
-      </Button>
+      <DetailNavigation section="notices" />
       <NoticeDetail
         notice={notice}
         orderPlanNumber={orderPlanNumber}
