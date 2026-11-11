@@ -9,6 +9,25 @@
 - `src/server/g2b/repository/`는 여섯 업무가 함께 사용하는 저장소 계약과 SQLite 구현을 관리합니다.
 - `src/shared/`에는 공용 업무 명칭과 순서, 나라장터 세션·포맷·UI, shadcn/ui 기본 컴포넌트가 있습니다.
 
+## 목록 화면 구성
+
+검색·필터·정렬·페이지 이동이 필요한 새 목록은 `@/shared/ui/list-controls/ListView`의 `ListView`를 사용합니다. 검색과 정렬은 상단 한 줄에 배치하고, 이어서 필터, 결과, 페이지 이동을 표시합니다. 좁은 화면에서는 상단 조작부가 줄바꿈됩니다.
+
+```tsx
+<ListView
+  search={{ fields, defaultField, value: searchValue, onSubmit: applySearch }}
+  sort={{ options: sortOptions, value: sortValue, onChange: applySort }}
+  filters={{ filters: filterDefinitions, value: filterValues, onApply: applyFilters }}
+  pagination={{ page, totalPages, hrefForPage }}
+>
+  {results}
+</ListView>
+```
+
+화면마다 검색 대상·필터 항목·정렬 옵션과 결과 표시만 정합니다. 사용하지 않는 기능은 해당 prop을 생략합니다. 콜백은 클라이언트 컴포넌트에서 연결하고, 목록 조회와 URL 조건은 호출부에서 관리합니다. 검색·필터·정렬을 적용할 때는 1페이지로 돌아가고, 페이지 이동 링크에는 적용된 조건을 유지합니다. 공통 배치를 바꿀 때는 `ListView`를 수정합니다.
+
+## 실행
+
 Node.js 24 이상과 npm으로 실행합니다. Next.js 서버에서 `selectItemAnncMngV.do`를 HTTP POST로 호출해 물품 공고 상세를 수집합니다.
 
 ```powershell
