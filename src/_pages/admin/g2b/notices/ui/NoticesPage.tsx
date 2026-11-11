@@ -11,7 +11,7 @@ export function NoticesPage() {
   const notices = useQuery(noticeListOptions);
 
   return (
-    <main className="mx-auto grid max-w-5xl gap-6 px-4 py-8 sm:px-6">
+    <main className="mx-auto grid max-w-5xl gap-6">
       <h1 className="text-2xl font-semibold tracking-tight">나라장터 공고 수집</h1>
       <CollectNoticeForm onCollected={(key) => router.push(noticePath(key))} />
       <section aria-labelledby="saved-notices" className="grid gap-3">

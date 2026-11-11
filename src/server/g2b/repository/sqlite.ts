@@ -7,7 +7,7 @@ import type { OpeningResult } from '@/entities/opening-result/model/opening-resu
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import type { Notice, NoticeKey, NoticeSummary } from '@/entities/notice/model/types';
-import type { G2bRepository } from './types';
+import type { G2bCollectionCounts, G2bRepository } from './types';
 
 export function openG2bRepository(): G2bRepository {
   const directory = join(process.cwd(), '.data');
@@ -54,6 +54,15 @@ export function openG2bRepository(): G2bRepository {
       data TEXT NOT NULL,
       PRIMARY KEY (number, revision, opening_revision)
     );
+  `);
+  const collectionCounts = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM order_plans) AS "order-plans",
+      (SELECT COUNT(*) FROM prior_specs) AS "prior-specs",
+      (SELECT COUNT(*) FROM notices) AS notices,
+      (SELECT COUNT(*) FROM contract_requests) AS "contract-requests",
+      (SELECT COUNT(*) FROM opening_results) AS "opening-results",
+      (SELECT COUNT(*) FROM contracts) AS contracts
   `);
   const list = db.prepare(`
     SELECT number, revision, collected_at AS collectedAt, json_extract(data, '$.title') AS title,
@@ -119,6 +128,13 @@ export function openG2bRepository(): G2bRepository {
   `);
 
   return {
+    /**
+     * 수집 중에도 업무별 건수가 같은 읽기 시점을 기준으로 집계되도록 한 문장으로 조회한다.
+     * @throws SQLite가 집계 쿼리 실행에 실패한 경우.
+     */
+    getCollectionCounts() {
+      return collectionCounts.get() as G2bCollectionCounts;
+    },
     async list() {
       return list.all() as NoticeSummary[];
     },

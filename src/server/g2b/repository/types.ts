@@ -5,7 +5,23 @@ import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import type { Notice, NoticeKey, NoticeSummary } from '@/entities/notice/model/types';
 
+// 대시보드에 집계하는 여섯 업무의 저장 행 수이며, 키는 공용 업무 경로와 일치한다.
+export type G2bCollectionCounts = {
+  'order-plans': number;
+  'prior-specs': number;
+  notices: number;
+  'contract-requests': number;
+  'opening-results': number;
+  contracts: number;
+};
+
 export interface G2bRepository {
+  /**
+   * 여섯 업무의 저장 행 수를 같은 시점 기준으로 조회한다.
+   * @returns 차수가 다른 행은 각각 집계하며, 빈 테이블의 건수는 0이다.
+   * @throws 저장소에서 집계 쿼리를 실행하지 못한 경우.
+   */
+  getCollectionCounts(): G2bCollectionCounts;
   list(): Promise<NoticeSummary[]>;
   find(key: NoticeKey): Promise<Notice | null>;
   save(notice: Notice): Promise<void>;
