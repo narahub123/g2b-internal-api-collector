@@ -6,7 +6,8 @@ import { Button } from "@/shared/ui/button";
 import { RefreshCw } from "lucide-react";
 
 /**
- * 저장된 상세 자료의 재수집을 요청하고, 성공하면 현재 페이지의 서버 데이터를 갱신한다.
+ * 재수집을 요청하고 성공하면 현재 페이지의 서버 데이터를 갱신한다.
+ * 실패 목록에서는 새 실패 이력을 반영하도록 실패 시에도 페이지를 갱신할 수 있다.
  *
  * 재수집 중에는 중복 요청을 막기 위해 버튼을 비활성화하며, 요청 실패 시 오류를 표시한다.
  * `compact`는 제목 영역의 반응형 버튼에 사용하며, 기본값은 기존 텍스트 버튼을 유지한다.
@@ -19,12 +20,14 @@ export function RecollectButton({
   initial = false,
   requestBody,
   compact = false,
+  refreshOnError = false,
 }: {
   endpoint: string;
   initial?: boolean;
   requestBody?: Record<string, string>;
   /** 모바일에서는 아이콘+문구, sm 이상에서는 아이콘만 표시한다. */
   compact?: boolean;
+  refreshOnError?: boolean;
 }) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
@@ -57,6 +60,7 @@ export function RecollectButton({
       setError(
         error instanceof Error ? error.message : "수집 요청에 실패했습니다.",
       );
+      if (refreshOnError) startTransition(() => router.refresh());
     } finally {
       setSubmitting(false);
     }

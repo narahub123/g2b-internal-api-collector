@@ -6,6 +6,7 @@ import { attachmentGroup } from "@/shared/model/g2b/g2b-attachments";
 import { postG2b } from "./request";
 import { collectAttachments } from "./attachments";
 import { collectOnce } from "./collect-once";
+import { trackCollectionAttempt } from "./collection-attempt";
 
 /**
  * 사전규격 상세와 공개 첨부를 저장한다. 일반 수집은 저장된 본문이 있으면 미수집 첨부만 조회한다.
@@ -28,35 +29,37 @@ export async function collectPriorSpec(number: string, force = false) {
         !attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo))
     )
       return;
-    const request = await createG2bSession();
-    if (!spec) {
-      const collectedAt = new Date().toISOString();
-      const payload = await postG2b(
-        "/pn/pnz/pnza/BfSpec/selectBfSpec.do",
-        "FIUA027_01_wframe_popupCnts_bfSpecWfrm_sbmSrch",
-        {
-          dlParamM: {
-            bfSpecRegNo: number,
-            prcmBsneSeCd: "",
-            opnnSqno: "",
-            jobType: "",
+    return trackCollectionAttempt({ section: "prior-specs", number }, async () => {
+      const request = await createG2bSession();
+      if (!spec) {
+        const collectedAt = new Date().toISOString();
+        const payload = await postG2b(
+          "/pn/pnz/pnza/BfSpec/selectBfSpec.do",
+          "FIUA027_01_wframe_popupCnts_bfSpecWfrm_sbmSrch",
+          {
+            dlParamM: {
+              bfSpecRegNo: number,
+              prcmBsneSeCd: "",
+              opnnSqno: "",
+              jobType: "",
+            },
           },
-        },
-        request,
-      );
-      if (payload?.dlBfSpecM?.bfSpecRegNo !== number) {
-        throw new Error("요청한 사전규격의 상세 응답을 받지 못했습니다.");
+          request,
+        );
+        if (payload?.dlBfSpecM?.bfSpecRegNo !== number) {
+          throw new Error("요청한 사전규격의 상세 응답을 받지 못했습니다.");
+        }
+        spec = { number, collectedAt, payload };
       }
-      spec = { number, collectedAt, payload };
-    }
-    const group = attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo);
-    const attachments = group
-      ? await collectAttachments(group, "prior-spec", request).catch((error: unknown) => {
-          if (!findMaintenance(error) && !force && needsDetail) repository.savePriorSpec(spec);
-          throw error;
-        })
-      : undefined;
-    if (force || needsDetail || attachments)
-      repository.savePriorSpec({ ...spec, attachments });
+      const group = attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo);
+      const attachments = group
+        ? await collectAttachments(group, "prior-spec", request).catch((error: unknown) => {
+            if (!findMaintenance(error) && !force && needsDetail) repository.savePriorSpec(spec);
+            throw error;
+          })
+        : undefined;
+      if (force || needsDetail || attachments)
+        repository.savePriorSpec({ ...spec, attachments });
+    });
   });
 }

@@ -3,6 +3,7 @@ import { getG2bRepository } from "@/server/g2b/repository";
 import { findMaintenance, throwIfMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 import { postG2b } from "./request";
 import { collectOnce } from "./collect-once";
+import { trackCollectionAttempt } from "./collection-attempt";
 import { unifiedSearchPath } from "./work-progress";
 
 // 품목 API의 요청 크기와 마지막 페이지 판정에 같은 기준을 사용한다.
@@ -104,36 +105,38 @@ export async function collectContractRequest(
     force,
     async () => {
       if (!force && repository.findContractRequest(key)) return;
-      const collectedAt = new Date().toISOString();
-      // 상세에서 점검을 확인하면 진행 중인 품목 요청 이후에는 다음 페이지를 요청하지 않는다.
-      let maintenance: ReturnType<typeof findMaintenance>;
-      const [summary, items] = await Promise.allSettled([
-        fetchContractRequestData("srchDmndSttusSql", key).catch((error: unknown) => {
-          maintenance = findMaintenance(error);
-          throw error;
-        }),
-        collectContractRequestItems(key, () => {
-          if (maintenance) throw maintenance;
-        }),
-      ]);
-      throwIfMaintenance(summary, items);
-      if (summary.status === "rejected") throw summary.reason;
-      if (items.status === "rejected") throw items.reason;
-      const result = summary.value;
-      const detail =
-        Array.isArray(result.dlTotalSrchL) &&
-        result.dlTotalSrchL.find(
-          (row: Record<string, unknown>) =>
-            row?.bizNo === key.number &&
-            contractRequestRevision(row.bizOrd) === key.revision,
-        );
-      if (!detail)
-        throw new Error("요청한 계약요청의 상세 응답을 받지 못했습니다.");
-      repository.saveContractRequest({
-        ...key,
-        collectedAt,
-        detail,
-        items: items.value,
+      return trackCollectionAttempt({ section: "contract-requests", ...key }, async () => {
+        const collectedAt = new Date().toISOString();
+        // 상세에서 점검을 확인하면 진행 중인 품목 요청 이후에는 다음 페이지를 요청하지 않는다.
+        let maintenance: ReturnType<typeof findMaintenance>;
+        const [summary, items] = await Promise.allSettled([
+          fetchContractRequestData("srchDmndSttusSql", key).catch((error: unknown) => {
+            maintenance = findMaintenance(error);
+            throw error;
+          }),
+          collectContractRequestItems(key, () => {
+            if (maintenance) throw maintenance;
+          }),
+        ]);
+        throwIfMaintenance(summary, items);
+        if (summary.status === "rejected") throw summary.reason;
+        if (items.status === "rejected") throw items.reason;
+        const result = summary.value;
+        const detail =
+          Array.isArray(result.dlTotalSrchL) &&
+          result.dlTotalSrchL.find(
+            (row: Record<string, unknown>) =>
+              row?.bizNo === key.number &&
+              contractRequestRevision(row.bizOrd) === key.revision,
+          );
+        if (!detail)
+          throw new Error("요청한 계약요청의 상세 응답을 받지 못했습니다.");
+        repository.saveContractRequest({
+          ...key,
+          collectedAt,
+          detail,
+          items: items.value,
+        });
       });
     },
   );

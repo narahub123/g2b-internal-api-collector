@@ -73,6 +73,108 @@ function noticeRequest() {
   });
 }
 
+test('수집 이력은 기존 자료와 시도 대상을 합쳐 집계하고 늦게 끝난 시도로 최신 상태를 바꾸지 않는다', () => {
+  const target = { section: 'contracts', number: 'HISTORY-1', revision: '00' };
+  repository.saveContract({ number: 'LEGACY-1', revision: '00', collectedAt });
+  const history = repository.collectionAttempts;
+  const older = history.start(target);
+  const latest = history.start(target);
+  history.finish(latest, 'failed', '조회 실패');
+  history.finish(older, 'succeeded');
+  const { counts, failures } = history.overview('contracts');
+  assert.deepEqual(counts, { total: 2, collected: 1, uncollected: 1 });
+  assert.deepEqual(history.counts('contracts'), counts);
+  assert.equal(failures[0].id, latest);
+  assert.equal(failures[0].hasData, false);
+  repository.saveContract({ number: target.number, revision: target.revision, collectedAt });
+  assert.equal(history.overview('contracts').failures[0].hasData, true);
+  history.finish(history.start(target), 'succeeded');
+  assert.equal(history.overview('contracts').failures.length, 0);
+});
+
+test('여섯 업무의 미저장 실패를 기록하고 이력의 입력으로 재수집한다', async (t) => {
+  const { collectAndSaveNotice, collectContract, collectOpeningResult } = require('../src/features/collect-g2b/server');
+  const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
+  const number = 'RETRY-1';
+  const notice = { number, revision: '000', methodCode: 'METHOD' };
+  const opening = { number, revision: '001', openingRevision: '002' };
+  const queries = [{ ...opening, classification: '1', businessCode: '업130020' }];
+  let unavailable = true;
+  const calls = mockFetch(t, (path, options) => {
+    if (unavailable) return new Response(null, { status: 500 });
+    if (path === '/') return session();
+    const input = JSON.parse(options.body);
+    if (path.endsWith('/selectOderPlan.do')) return success({ dlOderPlanM: { oderPlanNo: number } });
+    if (path.endsWith('/selectBfSpec.do')) return success({ dlBfSpecM: { bfSpecRegNo: number } });
+    if (path.endsWith('/srchDmndSttusSql.do')) return success({ dlTotalSrchL: [{ bizNo: number, bizOrd: 0 }] });
+    if (path.endsWith('/srchDmndSttusItemSql.do')) return success({ dlTotalSrchItemL: [] });
+    if (path.endsWith('/srchCtrtDtl.do')) return success({
+      dlCtrtMngLstM: { ctrtNo: number, ctrtChgOrd: 0 },
+      dlCtrtEtpsLstL: [], dlCtrtEtpsSvsLstL: [], dlCtrtItemLstL: [],
+    });
+    if (path.endsWith('/selectItemAnncMngV.do')) return noticeDetail({ bidPbancNo: number });
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+    if (path.endsWith('/selectOnbsRsltFbid.do')) {
+      return success({ result: { bidPrgrs: { ...input.dlSrchOnbsRsltBidInM, prcsRsn: '새 결과' } } });
+    }
+    if (path.endsWith('/selectRsvePrceInfo.do')) return success({ pbancInfo: input.dlSrchPbancInfoInM, rsvePrceList: [] });
+    if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
+    assert.fail(path);
+  });
+  const cases = [
+    ['order-plans', () => collectOrderPlan(number, true)],
+    ['prior-specs', () => collectPriorSpec(number, true)],
+    ['contract-requests', () => collectContractRequest({ number, revision: '000' }, true)],
+    ['contracts', () => collectContract({ number, revision: '00' }, true)],
+    ['notices', () => collectAndSaveNotice(notice)],
+    ['opening-results', () => collectOpeningResult(opening, queries, true)],
+  ];
+  const request = new Request('http://localhost', { method: 'POST' });
+  for (const [section, collect] of cases) {
+    unavailable = true;
+    await assert.rejects(collect());
+    const history = repository.collectionAttempts;
+    const failed = history.overview(section).failures.find((row) => row.number === number);
+    assert.equal(failed.status, 'failed', section);
+    assert.equal(failed.hasData, false, section);
+    if (section === 'notices') assert.equal(history.retryTarget(failed.id).methodCode, notice.methodCode);
+    if (section === 'opening-results') assert.deepEqual(history.retryTarget(failed.id).queries, queries);
+
+    unavailable = false;
+    const context = { params: Promise.resolve({ id: String(failed.id) }) };
+    const response = await retry(request, context);
+    assert.equal(response.status, 204, response.status === 204 ? section : await response.text());
+    const updated = history.overview(section);
+    assert.deepEqual(history.counts(section), updated.counts, section);
+    assert.ok(updated.saved.some((row) => row.number === number), section);
+    assert.ok(!updated.failures.some((row) => row.number === number), section);
+    const count = calls.mock.callCount();
+    assert.equal((await retry(request, context)).status, 409, section);
+    assert.equal(calls.mock.callCount(), count, section);
+  }
+});
+
+test('동시 수집 요청은 이력과 외부 요청을 공유하고 진행 중인 시도를 다시 실행하지 않는다', async (t) => {
+  const { collectContract } = require('../src/features/collect-g2b/server');
+  const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
+  const target = { number: 'SHARED-1', revision: '00' };
+  const upstream = Promise.withResolvers();
+  const calls = mockFetch(t, () => upstream.promise);
+  const first = collectContract(target, true);
+  const second = collectContract(target, true);
+  const pending = repository.collectionAttempts.overview('contracts').failures.find(({ number }) => number === target.number);
+  assert.equal(pending.status, 'pending');
+  assert.equal((await retry(new Request('http://localhost', { method: 'POST' }), {
+    params: Promise.resolve({ id: String(pending.id) }),
+  })).status, 409);
+  assert.equal(calls.mock.callCount(), 1);
+  upstream.resolve(maintenancePage());
+  await Promise.all([assert.rejects(first, G2bMaintenanceError), assert.rejects(second, G2bMaintenanceError)]);
+  const deferred = repository.collectionAttempts.overview('contracts').failures.find(({ number }) => number === target.number);
+  assert.equal(deferred.id, pending.id);
+  assert.equal(deferred.status, 'deferred');
+});
+
 function noticeDetail(extra = {}) {
   return success({ dmItemMap: {
     bidPbancNo: key.number, bidPbancOrd: key.revision, bidPbancNm: '새 공고',
@@ -243,10 +345,17 @@ test('개찰차수의 점검은 부분 저장을 보류하고 일반 오류는 �
   assert.notEqual(updated.collectedAt, collectedAt);
   assert.equal(updated.results.find(({ query }) => query.classification === '1').detail.prcsRsn, '새 결과');
   assert.equal(updated.results.find(({ query }) => query.classification === '2').detail.prcsRsn, '기존 결과');
+  const failure = repository.collectionAttempts.overview('opening-results').failures.find(
+    ({ number, revision, openingRevision }) =>
+      number === openingKey.number && revision === openingKey.revision && openingRevision === openingKey.openingRevision,
+  );
+  assert.equal(failure.status, 'failed');
+  assert.equal(failure.hasData, true);
 });
 
 test('연기공고의 HTTP 200 점검 HTML은 다른 공지 오류보다 우선하며 개찰차수를 보존한다', async (t) => {
   const noticeKey = { number: 'R26BK00002', revision: '000' };
+  await repository.save({ ...noticeKey, title: '저장된 공고', collectedAt, payload: {} });
   const openingKey = { ...noticeKey, openingRevision: '001' };
   const query = { ...openingKey, classification: '1', businessCode: '업130020' };
   const previous = {
@@ -284,6 +393,75 @@ test('연기공고의 HTTP 200 점검 HTML은 다른 공지 오류보다 우선�
   assert.deepEqual(result.failedRevisions, ['001']);
   assert.equal(postponementCalls, 1);
   assert.deepEqual(repository.findOpeningResult(openingKey), previous);
+});
+
+test('미저장 공고의 전체 수집 결과를 개찰 요청에 공유하고 차수별 성공과 실패를 반환한다', async (t) => {
+  const fetchedNotices = [];
+  const fetchedOpenings = [];
+  let failSecond = true;
+  t.mock.method(console, 'error', () => {});
+  mockFetch(t, async (path, options) => {
+    if (path === '/') return session();
+    const input = JSON.parse(options.body);
+    if (path.endsWith('/selectItemAnncMngV.do')) {
+      const { bidPbancNo, bidPbancOrd, scsbdMthdCd } = input.dmItemMap;
+      fetchedNotices.push({ bidPbancNo, scsbdMthdCd });
+      await new Promise(setImmediate);
+      return success({
+        dmItemMap: { bidPbancNo, bidPbancOrd, bidPbancNm: '새 공고', prcmBsneSeCd: '03' },
+        dlBidBasePgstL: bidPbancNo === 'OPEN-NONE' ? [] : ['001', '002'].map((bidPrgrsOrd) => ({
+          bidPbancNo, bidPbancOrd, bidPrgrsOrd, bidClsfNo: '1', bidPgstCd: '입160005',
+        })),
+      });
+    }
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+    if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
+    if (path.endsWith('/selectRsvePrceInfo.do')) {
+      return success({ pbancInfo: input.dlSrchPbancInfoInM, rsvePrceList: [] });
+    }
+    assert.ok(path.endsWith('/selectOnbsRsltFbid.do'), path);
+    const detail = input.dlSrchOnbsRsltBidInM;
+    fetchedOpenings.push(detail.bidPrgrsOrd);
+    if (detail.bidPbancNo === 'OPEN-DEFER' && detail.bidPrgrsOrd === '002') return maintenancePage();
+    if (failSecond && detail.bidPrgrsOrd === '002') return new Response(null, { status: 500 });
+    return success({ result: { bidPrgrs: detail } });
+  });
+  const requestOpening = (number, body) => postOpeningResults(
+    new Request('http://localhost', { method: 'POST', body }),
+    { params: Promise.resolve({ number, revision: '000' }) },
+  );
+  const body = JSON.stringify({ methodCode: 'METHOD' });
+  const responses = await Promise.all([requestOpening('OPEN-PARTIAL', body), requestOpening('OPEN-PARTIAL', body)]);
+  for (const response of responses) {
+    assert.equal(response.status, 502);
+    const result = await response.json();
+    assert.equal(result.noticeSaved, true);
+    assert.deepEqual(result.targetRevisions, ['001', '002']);
+    assert.deepEqual(result.succeededRevisions, ['001']);
+    assert.deepEqual(result.failedRevisions, ['002']);
+  }
+  assert.deepEqual(fetchedNotices, [{ bidPbancNo: 'OPEN-PARTIAL', scsbdMthdCd: 'METHOD' }]);
+  assert.deepEqual(fetchedOpenings.sort(), ['001', '002']);
+  assert.ok(await repository.find({ number: 'OPEN-PARTIAL', revision: '000' }));
+
+  failSecond = false;
+  assert.equal((await requestOpening('OPEN-PARTIAL')).status, 200);
+  assert.equal(fetchedNotices.length, 1);
+  assert.deepEqual(fetchedOpenings.slice(2).sort(), ['001', '002']);
+  assert.equal((await requestOpening('OPEN-SUCCESS')).status, 200);
+
+  const absent = await requestOpening('OPEN-NONE');
+  assert.equal(absent.status, 404);
+  assert.equal((await absent.json()).noticeSaved, true);
+  const deferred = await requestOpening('OPEN-DEFER');
+  assert.equal(deferred.status, 503);
+  const result = await deferred.json();
+  assert.equal(result.noticeSaved, false);
+  assert.deepEqual(result.succeededRevisions, ['001']);
+  assert.deepEqual(result.failedRevisions, ['002']);
+  assert.equal(await repository.find({ number: 'OPEN-DEFER', revision: '000' }), null);
+  assert.equal((await requestOpening('OPEN-BAD', '{"methodCode":2}')).status, 400);
+  assert.ok(!fetchedNotices.some(({ bidPbancNo }) => bidPbancNo === 'OPEN-BAD'));
 });
 
 test('세션 발급과 다운로드 메타데이터의 점검을 감지한다', async (t) => {

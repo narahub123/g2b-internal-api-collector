@@ -51,3 +51,13 @@ export function contractRequestPath(key: NumberWithRevision) {
 export function openingResultPath(key: NumberWithRevision) {
   return `${ADMIN_G2B_PATH}${revisionRoute("opening-results", key)}`;
 }
+
+// 목록 링크와 수집 성공 후 이동에 같은 상세 경로를 사용한다.
+export const collectionDetailPaths = {
+  "order-plans": ({ number }: NumberWithRevision) => orderPlanPath(number),
+  "contract-requests": contractRequestPath,
+  "prior-specs": ({ number }: NumberWithRevision) => priorSpecPath(number),
+  notices: noticePath,
+  "opening-results": openingResultPath,
+  contracts: contractPath,
+};

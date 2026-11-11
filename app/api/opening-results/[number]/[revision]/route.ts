@@ -5,7 +5,10 @@ import {
   openingResultQueries,
   type OpeningResultQuery,
 } from "@/entities/opening-result/model/opening-result";
-import { collectOpeningResult } from "@/features/collect-g2b/server";
+import { collectAndSaveNotice } from "@/features/collect-g2b/server";
+import { collectOpeningGroups, type OpeningCollectionReport } from "@/features/collect-g2b/api/opening-results";
+import { NoticeCollectionDeferred } from "@/features/collect-g2b/api/notices";
+import { parseCollectNoticeInput } from "@/features/collect-g2b/model/input";
 import { maintenanceResponse } from "@/shared/api/g2b/g2b-maintenance";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 
@@ -37,99 +40,88 @@ function mergeSavedQueries(
   }
 }
 
+function responseDetails(report: OpeningCollectionReport | undefined, noticeSaved: boolean) {
+  return {
+    noticeSaved,
+    targetRevisions: report?.targetRevisions ?? [],
+    succeededRevisions: report?.succeededRevisions ?? [],
+    failedRevisions: report?.failures.map(({ revision }) => revision) ?? [],
+  };
+}
+
 /**
- * 지정한 공고의 개찰결과 상세를 나라장터에서 다시 수집한다.
- *
- * 현재 공고에서 생성한 조회 조건과 기존 저장 자료의 조회 조건을 병합한 뒤,
- * 개찰차수별 수집을 병렬 실행한다.
- *
- * 개별 차수의 수집 실패가 다른 차수의 실행을 중단시키지 않도록
- * Promise.allSettled를 사용하며, 실패한 차수와 성공한 차수를 구분하여 반환한다.
- *
- * @param _request HTTP 요청 객체. 현재 처리에서는 요청 본문을 사용하지 않는다.
- * @param params 공고번호와 공고차수가 포함된 비동기 경로 매개변수.
- * @returns 성공 시 공고 식별자를 반환한다. 입력 오류는 400, 조회 조건이 없으면 404를 반환한다.
- * 점검이 확인되면 503, 그 외 수집 실패는 502를 반환하며 두 응답 모두 성공·실패 차수를 포함한다.
- * @throws 조회 조건을 구성하는 데 필요한 저장 자료를 읽지 못한 경우.
+ * 저장된 공고가 있으면 개찰결과를 다시 조회하고, 없으면 공고 전체 수집 과정에서 개찰결과를 확보한다.
+ * @param request 선택적으로 낙찰방법 코드를 JSON 본문에 전달한다. 기존 상세 버튼은 본문을 생략한다.
+ * @param params 공고번호와 세 자리 공고차수.
+ * @returns 성공 시 공고 식별자와 차수별 결과. 입력 오류는 400, 개찰 대상 없음은 404,
+ * 수집 실패는 502, 점검은 503으로 응답한다.
+ * @throws 저장된 공고나 개찰결과 조회에 실패한 경우.
  */
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<NoticeKey> },
 ) {
   const key = await params;
-
-  // 잘못된 공고 식별자로 조회하거나 수집 작업을 시작하지 않도록 사전에 차단한다.
   if (g2bNumber(key.number) !== key.number || !/^\d{3}$/.test(key.revision)) {
-    return Response.json(
-      { error: "공고번호와 공고차수를 확인하세요." },
-      { status: 400 },
-    );
+    return Response.json({ error: "공고번호와 공고차수를 확인하세요." }, { status: 400 });
+  }
+
+  const body = await request.text();
+  let input: ReturnType<typeof parseCollectNoticeInput> = null;
+  try {
+    const options = body.trim() ? JSON.parse(body) : {};
+    if (options && typeof options === "object" && !Array.isArray(options)) {
+      input = parseCollectNoticeInput({
+        ...key,
+        methodCode: Object.hasOwn(options, "methodCode") ? options.methodCode : "",
+      });
+    }
+  } catch {
+    // 잘못된 본문은 외부 요청을 보내기 전에 400으로 처리한다.
+  }
+  if (!input) {
+    return Response.json({ error: "낙찰방법 코드를 확인하세요." }, { status: 400 });
   }
 
   const repository = getG2bRepository();
   const notice = await repository.find(key);
-  const groups = groupOpeningResultQueries(
-    notice ? openingResultQueries(notice.payload) : [],
-  );
-
-  // 현재 공고에 존재하지 않는 분류라도 이전에 저장된 조회 조건이 있으면 재수집 대상에 포함한다.
-  mergeSavedQueries(groups, repository.listOpeningResults(key));
-
-  // 현재 공고와 저장 자료 모두에서 조회 조건을 찾지 못하면 수집을 실행하지 않는다.
-  if (!groups.size) {
-    return Response.json(
-      { error: "조회할 개찰결과 상세를 찾을 수 없습니다." },
-      { status: 404 },
-    );
+  let report: OpeningCollectionReport;
+  if (notice) {
+    const groups = groupOpeningResultQueries(openingResultQueries(notice.payload));
+    mergeSavedQueries(groups, repository.listOpeningResults(key));
+    report = await collectOpeningGroups(groups, true);
+  } else {
+    try {
+      // 공고 수집 과정의 개찰 결과를 그대로 사용해 같은 차수를 다시 조회하지 않는다.
+      report = await collectAndSaveNotice(input);
+    } catch (error) {
+      const openingReport = error instanceof NoticeCollectionDeferred ? error.openingReport : undefined;
+      const details = responseDetails(openingReport, Boolean(await repository.find(key)));
+      return maintenanceResponse(error, details) ?? Response.json({
+        ...details,
+        error: "입찰공고를 수집하지 못했습니다. 공고 정보와 낙찰방법 코드를 확인하세요.",
+      }, { status: 502 });
+    }
   }
 
-  // 개찰차수별 수집 결과를 모두 확보하여 일부 실패가 발생해도 나머지 차수의 결과를 확인한다.
-  const settled = await Promise.allSettled(
-    [...groups].map(([openingRevision, queries]) =>
-      collectOpeningResult({ ...key, openingRevision }, queries, true),
-    ),
-  );
+  const details = responseDetails(report, true);
+  if (!report.targetRevisions.length) {
+    return Response.json({
+      ...details,
+      error: "조회할 개찰결과 상세를 찾을 수 없습니다.",
+    }, { status: 404 });
+  }
 
-  // 실패한 개찰차수를 응답에 포함해 전체 실패와 부분 실패를 구분할 수 있도록 한다.
-  const failedRevisions = [...groups.keys()].filter(
-    (_, index) => settled[index].status === "rejected",
-  );
-  const succeededRevisions = [...groups.keys()].filter(
-    (_, index) => settled[index].status === "fulfilled",
-  );
-  const errors = settled.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  const maintenance = maintenanceResponse(new AggregateError(errors), {
-    failedRevisions,
-    succeededRevisions,
-  });
+  const maintenance = maintenanceResponse(new AggregateError(report.failures.map(({ error }) => error)), details);
   if (maintenance) return maintenance;
-
-  // 실패한 차수와 오류 원인을 서버 로그에 기록하여 수집 실패를 추적할 수 있도록 한다.
-  settled.forEach((result, index) => {
-    if (result.status !== "rejected") return;
-
-    console.error("[개찰결과 수집 실패]", {
-      noticeNumber: key.number,
-      noticeRevision: key.revision,
-      openingRevision: [...groups.keys()][index],
-      error: result.reason,
-    });
-  });
-
-  if (failedRevisions.length) {
-    return Response.json(
-      {
-        error: "나라장터에서 일부 개찰결과를 수집하지 못했습니다.",
-        failedRevisions,
-        succeededRevisions,
-        // 일반 오류에서는 수집 함수가 성공한 분류를 먼저 저장한다.
-        // 따라서 실패한 개찰차수에도 일부 성공 자료가 저장되었을 수 있다.
-      },
-      { status: 502 },
-    );
+  if (report.failures.length) {
+    for (const { revision, error } of report.failures) {
+      console.error("[개찰결과 수집 실패]", { ...key, openingRevision: revision, error });
+    }
+    return Response.json({
+      ...details,
+      error: "나라장터에서 개찰결과를 모두 수집하지 못했습니다.",
+    }, { status: 502 });
   }
-
-  return Response.json(key);
+  return Response.json({ ...key, ...details });
 }

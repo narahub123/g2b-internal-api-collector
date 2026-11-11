@@ -4,6 +4,7 @@ import type { OpeningResult, OpeningResultKey } from '@/entities/opening-result/
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import type { Notice, NoticeKey, NoticeSummary } from '@/entities/notice/model/types';
+import type { openCollectionAttempts } from './collection-attempts';
 
 // 대시보드에 집계하는 여섯 업무의 저장 행 수이며, 키는 공용 업무 경로와 일치한다.
 export type G2bCollectionCounts = {
@@ -16,6 +17,7 @@ export type G2bCollectionCounts = {
 };
 
 export interface G2bRepository {
+  collectionAttempts: ReturnType<typeof openCollectionAttempts>;
   /**
    * 여섯 업무의 저장 행 수를 같은 시점 기준으로 조회한다.
    * @returns 차수가 다른 행은 각각 집계하며, 빈 테이블의 건수는 0이다.

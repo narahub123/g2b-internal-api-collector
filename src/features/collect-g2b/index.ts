@@ -1,1 +1,1 @@
-export { CollectNoticeForm } from './ui/CollectNoticeForm';
+export { CollectG2bForm } from "./ui/CollectG2bForm";

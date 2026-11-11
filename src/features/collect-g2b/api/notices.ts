@@ -10,7 +10,7 @@ import { attachmentGroup } from "@/shared/model/g2b/g2b-attachments";
 import { postG2b, G2bAccessDenied } from "./request";
 import { collectDocumentList, collectAttachments } from "./attachments";
 import { fetchWorkProgress } from "./work-progress";
-import { collectNoticeOpeningResults } from "./opening-results";
+import { collectNoticeOpeningResults, type OpeningCollectionReport } from "./opening-results";
 import { collectContractRequest } from "./contract-requests";
 import { collectOrderPlan } from "./order-plans";
 import { collectPriorSpec } from "./prior-specs";
@@ -129,13 +129,13 @@ async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["p
  * 독립적으로 완료된 관련 자료는 저장될 수 있다.
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
- * @returns 공고 상세 및 관련 목록의 원본 응답.
+ * @returns 저장할 공고 원본과 이번 요청에서 처리한 개찰차수별 결과.
  * @throws 공고 상세 조회 또는 식별자 검증에 실패하거나 상세·부가 조회에서 점검을 확인한 경우.
  */
 export async function collectNotice(
   key: NoticeKey,
   methodCode: string,
-): Promise<Notice> {
+): Promise<{ notice: Notice; openingReport: OpeningCollectionReport }> {
   const collectedAt = new Date().toISOString();
   const payload = await postG2b(
     "/pn/pnp/pnpe/ItemBidPbac/selectItemAnncMngV.do",
@@ -177,11 +177,17 @@ export async function collectNotice(
     orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
     priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
   ]);
-  throwIfMaintenance(...outcomes);
   const [attachments, proposal, contractLinks, openingResults, posts] = outcomes;
-  if (openingResults.status === "rejected") {
-    console.error("개찰결과 수집 실패:", openingResults.reason);
+  if (openingResults.status === "rejected") throw openingResults.reason;
+  const openingReport = openingResults.value;
+  try {
+    throwIfMaintenance(...outcomes, ...openingReport.failures.map(({ error }) => ({
+      status: "rejected", reason: error,
+    })));
+  } catch (error) {
+    throw new NoticeCollectionDeferred(openingReport, error);
   }
+  if (openingReport.failures.length) console.error("개찰결과 수집 실패:", openingReport.failures);
   // 문서 조회 오류가 공고 상세와 다른 문서의 저장을 막지 않도록 실패 종류를 따로 기록한다.
   const documents: NonNullable<Notice["documents"]> = {
     attachments:
@@ -198,12 +204,22 @@ export async function collectNotice(
   }
 
   return {
-    ...key,
-    title: detail.bidPbancNm,
-    collectedAt,
-    payload,
-    posts: posts.status === "fulfilled" ? posts.value : undefined,
-    documents,
-    ...(contractLinks.status === "fulfilled" ? contractLinks.value : {}),
+    openingReport,
+    notice: {
+      ...key,
+      title: detail.bidPbancNm,
+      collectedAt,
+      payload,
+      posts: posts.status === "fulfilled" ? posts.value : undefined,
+      documents,
+      ...(contractLinks.status === "fulfilled" ? contractLinks.value : {}),
+    },
   };
+}
+
+/** 점검으로 공고 저장을 보류할 때 이미 확인한 개찰 결과를 전달한다. */
+export class NoticeCollectionDeferred extends Error {
+  constructor(readonly openingReport: OpeningCollectionReport, cause: unknown) {
+    super("나라장터 점검으로 공고 저장을 보류했습니다.", { cause });
+  }
 }
