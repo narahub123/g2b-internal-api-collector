@@ -112,8 +112,9 @@ export async function CollectionListPage({
     }
     if (section !== "notices") return undefined;
     const regions = attempts.noticeList.regions();
-    const query = parseNoticeListQuery(params, regions);
-    return { section, regions, query, result: attempts.noticeList.page(query), href: noticeListHref } as const;
+    const businesses = attempts.noticeList.businesses();
+    const query = parseNoticeListQuery(params, regions, businesses);
+    return { section, regions, businesses, query, result: attempts.noticeList.page(query), href: noticeListHref } as const;
   })();
   const { counts, rows } = paginated ? {
     counts: paginated.result.counts,
@@ -175,9 +176,10 @@ export async function CollectionListPage({
           path={href}
           query={{ ...paginated.query, page: paginated.result.page }}
           totalPages={paginated.result.totalPages}
+          businesses={paginated.businesses}
           {...(paginated.section === "notices"
             ? { section: paginated.section, regions: paginated.regions }
-            : { section: paginated.section, businesses: paginated.businesses })}
+            : { section: paginated.section })}
         >
           {items}
         </CollectionQueryView>

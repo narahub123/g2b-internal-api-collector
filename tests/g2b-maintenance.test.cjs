@@ -712,6 +712,7 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
             dmstUntyGrpNm: index === 1 ? '테스트 수요기관' : '다른 기관',
             pbancPstgDt: '2026/11/01 09:00:00',
             alotBgtAmt: index,
+            prcmBsneSeCd: index === 1 ? '03' : index === 2 ? '01' : '05',
             rgnLmtYn: [1, 4, 5].includes(index) ? 'Y' : index === 3 ? null : 'N',
             rgnLmtYnNm: index === 2 ? '해당없음' : '공고서참조',
             rgnLmtCn: index === 1 ? '[서울특별시][경기도]' : index === 4 ? '[부산광역시]' : index === 5 ? null : '[숨겨진 지역]',
@@ -727,13 +728,15 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
     attempts.finish(failed, 'failed', '테스트 실패');
     const regions = attempts.noticeList.regions();
     assert.deepEqual(regions, ['경기도', '부산광역시', '서울특별시']);
-    const page = (params) => attempts.noticeList.page(parseNoticeListQuery(params, regions));
+    const businesses = attempts.noticeList.businesses();
+    const page = (params) => attempts.noticeList.page(parseNoticeListQuery(params, regions, businesses));
     const numbers = (params) => page(params).rows.map((row) => row.number);
     assert.deepEqual(numbers({ field: 'agency', q: '수요기관', region: ['경기도', '서울특별시'], postedTo: '2026-11-01', submissionFrom: '2026-11-05', budgetTo: '1' }), ['N01']);
     assert.deepEqual(numbers({ q: '& 검증' }), ['N01']);
     assert.deepEqual(numbers({ field: 'number', q: 'missing', status: 'uncollected' }), ['MISSING']);
     assert.deepEqual(numbers({ field: 'number', q: 'N01 - 000' }), ['N01']);
     const regionQuery = { region: ['경기도', '부산광역시'], sort: 'budget-asc' };
+    assert.deepEqual(numbers({ ...regionQuery, business: ['03', '01'] }), ['N01', 'N02']);
     assert.deepEqual(numbers(regionQuery), ['N01', 'N02', 'N04']);
     const noUncollected = page({ ...regionQuery, status: 'uncollected', page: '2' });
     assert.deepEqual(noUncollected.counts, { total: 3, collected: 3, uncollected: 0 });
@@ -749,10 +752,11 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
     for (const sort of ['posted-asc', 'submission-asc', 'deadline-desc', 'title-asc', 'budget-asc']) {
       assert.equal(page({ sort }).rows.length, 15);
     }
-    const query = parseNoticeListQuery({ field: 'agency', q: '기관', region: regions, page: '2', sort: 'deadline-asc' }, regions);
+    const query = parseNoticeListQuery({ field: 'agency', q: '기관', region: regions, business: '03', page: '2', sort: 'deadline-asc' }, regions, businesses);
     const href = new URL(noticeListHref('/notices', query), 'http://localhost');
     assert.equal(href.searchParams.get('page'), '2');
     assert.equal(href.searchParams.get('sort'), 'deadline-asc');
+    assert.equal(href.searchParams.get('business'), '03');
     assert.deepEqual(href.searchParams.getAll('region'), regions);
   } finally {
     databases.delete(db);

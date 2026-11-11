@@ -1,5 +1,5 @@
 import { validateFilters } from "@/shared/ui/list-controls/model";
-import type { ListFilter } from "@/shared/ui/list-controls/model";
+import type { ListFilter, ListOption } from "@/shared/ui/list-controls/model";
 import type { CollectionListQuery, CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 
 export type NoticeSearchParams = CollectionSearchParams;
@@ -26,8 +26,9 @@ export const noticeSortOptions = sortFields.flatMap(([field, label, desc, asc]) 
 export type NoticeListQuery = CollectionListQuery;
 
 /** 저장된 공고에 표시된 지역만 옵션으로 제공하고, 날짜와 금액의 입력 단위를 지정한다. */
-export function noticeFilterDefinitions(regions: readonly string[]): ListFilter[] {
+export function noticeFilterDefinitions(regions: readonly string[], businesses: readonly ListOption[]): ListFilter[] {
   return [
+    { id: "business", type: "multi-select", label: "업무구분", options: businesses },
     { id: "posted", type: "date-range", label: "공고게시일" },
     { id: "submission", type: "date-range", label: "입찰서 제출일(시작일)" },
     { id: "budget", type: "number-range", label: "배정예산", unit: "원" },
@@ -36,14 +37,16 @@ export function noticeFilterDefinitions(regions: readonly string[]): ListFilter[
 }
 
 /** URL에서 지원하는 검색·필터·정렬만 읽고 잘못된 조건은 제외한다. */
-export function parseNoticeListQuery(params: NoticeSearchParams, regions: readonly string[]): NoticeListQuery {
+export function parseNoticeListQuery(params: NoticeSearchParams, regions: readonly string[], businesses: readonly ListOption[]): NoticeListQuery {
   const single = (key: string) => typeof params[key] === "string" ? params[key] as string : undefined;
   const field = single("field");
   const sort = single("sort");
   const status = single("status");
   const page = Number(single("page"));
   const region = params.region;
-  const { values } = validateFilters(noticeFilterDefinitions(regions), {
+  const business = params.business;
+  const { values } = validateFilters(noticeFilterDefinitions(regions, businesses), {
+    business: Array.isArray(business) ? business : business ? [business] : [],
     posted: { from: single("postedFrom"), to: single("postedTo") },
     submission: { from: single("submissionFrom"), to: single("submissionTo") },
     budget: { from: single("budgetFrom"), to: single("budgetTo") },
@@ -70,8 +73,10 @@ export function noticeListHref(path: string, query: NoticeListQuery): string {
     if (range.from !== undefined) params.set(`${id}From`, String(range.from));
     if (range.to !== undefined) params.set(`${id}To`, String(range.to));
   }
-  const region = query.filters.region;
-  if (Array.isArray(region)) for (const value of region) params.append("region", value);
+  for (const id of ["business", "region"]) {
+    const selected = query.filters[id];
+    if (Array.isArray(selected)) for (const value of selected) params.append(id, value);
+  }
   if (query.sort !== "posted-desc") params.set("sort", query.sort);
   if (query.page > 1) params.set("page", String(query.page));
   const serialized = params.toString();
