@@ -1,14 +1,13 @@
-import { contractPath, contractRequestPath, orderPlanPath, priorSpecPath } from "@/shared/lib/routes";
+import type { ReactNode } from "react";
 import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
-import { g2bNumber } from "@/shared/model/g2b-number";
+import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
 import { NoticePostsSection } from "./NoticePostsSection";
-import { AttachmentTable } from "@/shared/ui/attachment-table";
-import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
-import { DetailTitle } from "@/shared/ui/detail-title";
-import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
-import { RecollectButton } from "@/shared/ui/recollect-button";
+import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
+import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
+import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { renderNoticeHtml } from "../lib/notice-html";
 import {
   getNoticeAttachmentFiles,
@@ -104,35 +103,46 @@ function NoticeTable({
 /**
  * 수집한 입찰공고의 상세 정보, 관련 자료 및 원본 페이지 이동 기능을 표시한다.
  * 제목의 HTML 엔티티 디코딩은 공통 DetailTitle에서 처리하며, 재수집은 기존 요청 기능을 사용한다.
- * @param props 공고 데이터와 저장이 확인된 발주계획번호.
+ * @param props 공고 데이터, 저장된 발주계획번호, 연관 업무 링크와 제목 영역의 동작.
  * @returns 공고 상세 본문과 조건에 따른 관련 정보 및 첨부 목록.
  */
 export function NoticeDetail({
   notice,
   orderPlanNumber,
+  links,
+  renderActions,
 }: {
   notice: Notice;
   orderPlanNumber?: string;
+  links: {
+    contractPath: (key: { number: string; revision: string }) => string;
+    contractRequestPath: (key: { number: string; revision: string }) => string;
+    openingResultPath: (key: { number: string; revision: string }) => string;
+    orderPlanPath: (number: string) => string;
+    priorSpecPath: (number: string) => string;
+  };
+  renderActions: (input: { number: string; revision: string; methodCode: string }) => ReactNode;
 }) {
   const contractLinks = [
     {
       label: "계약요청",
       links: (notice.contractRequests ?? []).map((key) => ({
         ...key,
-        href: contractRequestPath(key),
+        href: links.contractRequestPath(key),
       })),
     },
     {
       label: "계약현황",
       links: (notice.contracts ?? []).map((key) => ({
         ...key,
-        href: contractPath(key),
+        href: links.contractPath(key),
       })),
     },
   ].filter(({ links }) => links.length > 0);
   const sections = getNoticeDisplay(
     notice.payload,
     notice.documents,
+    links.openingResultPath,
     contractLinks.length > 0,
   );
   const attachmentFiles = getNoticeAttachmentFiles(
@@ -174,13 +184,7 @@ export function NoticeDetail({
         subtitle={`${number} / ${revision}`}
         business={resolveG2bBusiness(detail?.prcmBsneSeCd, detail?.prcmBsneSeNm)}
         originalHref={originalHref}
-        actions={
-          <RecollectButton
-            endpoint="/api/notices"
-            requestBody={{ number, revision, methodCode }}
-            compact
-          />
-        }
+        actions={renderActions({ number, revision, methodCode })}
       />
       {notice.documents?.unavailable?.map((kind) => (
         <p key={kind} className="text-sm text-muted-foreground">
@@ -225,14 +229,14 @@ export function NoticeDetail({
                     <dd>
                       {label === "발주계획번호" && orderPlanNumber === value ? (
                         <Link
-                          href={orderPlanPath(value)}
+                          href={links.orderPlanPath(value)}
                           className="text-primary underline underline-offset-2"
                         >
                           {value}
                         </Link>
                       ) : label === "사전규격등록번호" && g2bNumber(value) ? (
                         <Link
-                          href={priorSpecPath(value.trim())}
+                          href={links.priorSpecPath(value.trim())}
                           className="text-primary underline underline-offset-2"
                         >
                           {value}

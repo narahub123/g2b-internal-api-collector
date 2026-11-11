@@ -1,8 +1,7 @@
-import { noticePath } from "@/shared/lib/routes";
 import Link from "next/link";
 import { Button } from "@/shared/ui/button";
-import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
-import { BusinessBadge } from "@/shared/ui/business-badge";
+import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
+import { BusinessBadge } from "@/shared/ui/g2b/BusinessBadge";
 import type { NoticeSummary } from "../model/types";
 import { decodeHTMLStrict } from "entities";
 
@@ -14,7 +13,13 @@ import { decodeHTMLStrict } from "entities";
  * @param notices 표시할 입찰공고 요약 정보 목록
  * @returns 공고 목록 또는 저장된 공고가 없다는 안내 문구
  */
-export function NoticeList({ notices }: { notices: NoticeSummary[] }) {
+export function NoticeList({
+  notices,
+  noticePath,
+}: {
+  notices: NoticeSummary[];
+  noticePath: (key: { number: string; revision: string }) => string;
+}) {
   if (notices.length === 0)
     return (
       <p className="text-sm text-muted-foreground">저장된 공고가 없습니다.</p>

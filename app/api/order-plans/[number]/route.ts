@@ -1,6 +1,6 @@
-import { maintenanceResponse } from '@/shared/api/g2b-maintenance';
-import { g2bNumber } from '@/shared/model/g2b-number';
-import { collectOrderPlan } from '@/features/collect-notice/api/g2b';
+import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
+import { g2bNumber } from '@/shared/model/g2b/g2b-number';
+import { collectOrderPlan } from '@/features/collect-g2b/server';
 
 /**
  * 유효한 발주계획번호로 상세와 첨부 목록을 다시 조회해 수집이 완료되면 기존 자료를 교체한다.

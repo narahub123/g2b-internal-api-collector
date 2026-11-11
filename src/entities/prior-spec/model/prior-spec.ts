@@ -1,4 +1,4 @@
-import { g2bNumber } from "@/shared/model/g2b-number";
+import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 
 export type PriorSpec = {
   number: string;

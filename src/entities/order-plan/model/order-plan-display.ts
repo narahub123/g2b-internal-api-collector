@@ -3,7 +3,7 @@ import {
   formatG2bDisplayDate,
   formatG2bDisplayDateTime,
   formatG2bDisplayNumber,
-} from "@/shared/lib/g2b-display-format";
+} from "@/shared/lib/g2b/g2b-display-format";
 import { formatG2bPhone } from "@/shared/lib/g2b-phone";
 import type { OrderPlan } from "./order-plan";
 

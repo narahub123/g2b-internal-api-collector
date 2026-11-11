@@ -1,7 +1,7 @@
-import { maintenanceResponse } from '@/shared/api/g2b-maintenance';
+import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
 import { contractRequestRevision, type ContractRequestKey } from '@/entities/contract-request/model/contract-request';
-import { collectContractRequest } from '@/features/collect-notice/api/g2b';
-import { g2bNumber } from '@/shared/model/g2b-number';
+import { collectContractRequest } from '@/features/collect-g2b/server';
+import { g2bNumber } from '@/shared/model/g2b/g2b-number';
 
 /**
  * 정규화된 접수번호와 차수로 계약요청 상세와 전체 품목을 다시 수집해 함께 저장한다.

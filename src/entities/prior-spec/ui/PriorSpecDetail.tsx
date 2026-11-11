@@ -1,18 +1,17 @@
-import { orderPlanPath } from "@/shared/lib/routes";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import {
   attachmentGroup,
   publicAttachmentFiles,
-} from "@/shared/model/g2b-attachments";
-import { g2bNumber } from "@/shared/model/g2b-number";
+} from "@/shared/model/g2b/g2b-attachments";
+import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
-import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
-import { DetailTitle } from "@/shared/ui/detail-title";
-import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
-import { RecollectButton } from "@/shared/ui/recollect-button";
+import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
+import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import type { PriorSpec } from "../model/prior-spec";
 import { priorSpecDisplay } from "../model/prior-spec-display";
-import { AttachmentTable } from "@/shared/ui/attachment-table";
+import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
 
 const linkStyle = "text-primary underline underline-offset-2";
 
@@ -68,12 +67,20 @@ function DetailTable({
 
 /**
  * 사전규격 상세와 복합 목록, 첨부를 원본 순서대로 아코디언에 표시한다.
- * @param props 나라장터 상세 응답과 첨부 목록을 담은 저장된 사전규격.
+ * @param props 나라장터 상세 응답과 첨부 목록을 담은 저장된 사전규격와 제목 영역의 동작 및 연관 업무 링크.
  * @returns 페이지에 넣을 사전규격 상세 본문.
  */
-export function PriorSpecDetail({ spec }: { spec: PriorSpec }) {
-  const { title, rows, tables, opinions } = priorSpecDisplay(spec.payload);
+export function PriorSpecDetail({
+  spec,
+  orderPlanPath,
+  actions,
+}: {
+  spec: PriorSpec;
+  orderPlanPath: (number: string) => string;
+  actions?: ReactNode;
+}) {
   const endpoint = `/api/prior-specs/${encodeURIComponent(spec.number)}`;
+  const { title, rows, tables, opinions } = priorSpecDisplay(spec.payload);
   const group = attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo);
   const files = publicAttachmentFiles(group, spec.attachments, "prior-spec");
   const pending = Boolean(group && !spec.attachments);
@@ -96,7 +103,7 @@ export function PriorSpecDetail({ spec }: { spec: PriorSpec }) {
         subtitle={spec.number}
         business={resolveG2bBusiness(spec.payload.dlBfSpecM.prcmBsneSeCd, spec.payload.dlBfSpecM.prcmBsneSeCdNm)}
         originalHref={originalHref}
-        actions={<RecollectButton endpoint={endpoint} compact />}
+        actions={actions}
       />
       <Accordion
         type="multiple"

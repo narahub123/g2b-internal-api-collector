@@ -1,11 +1,11 @@
 import { decodeHTMLStrict } from "entities";
 import { Accordion } from "@/shared/ui/accordion";
-import { AttachmentTable } from "@/shared/ui/attachment-table";
-import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
+import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
+import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import {
   attachmentGroup,
   publicAttachmentFiles,
-} from "@/shared/model/g2b-attachments";
+} from "@/shared/model/g2b/g2b-attachments";
 import { renderNoticeHtml } from "../lib/notice-html";
 import {
   noticePostFields,

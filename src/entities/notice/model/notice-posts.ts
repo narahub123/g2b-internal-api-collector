@@ -1,5 +1,5 @@
 import { decodeHTMLStrict } from "entities";
-import { formatG2bDisplayDateTime } from "@/shared/lib/g2b-display-format";
+import { formatG2bDisplayDateTime } from "@/shared/lib/g2b/g2b-display-format";
 
 type RawResponse = Record<string, unknown>;
 

@@ -1,7 +1,7 @@
-import { maintenanceResponse } from '@/shared/api/g2b-maintenance';
+import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
 import { contractRevision, type ContractKey } from '@/entities/contract/model/contract';
-import { collectContract } from '@/features/collect-notice/api/g2b';
-import { g2bNumber } from '@/shared/model/g2b-number';
+import { collectContract } from '@/features/collect-g2b/server';
+import { g2bNumber } from '@/shared/model/g2b/g2b-number';
 
 /**
  * 정규화된 계약번호와 변경차수로 계약현황을 다시 조회해 검증된 상세를 저장한다.

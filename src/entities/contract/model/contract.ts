@@ -1,4 +1,4 @@
-import { g2bNumber } from "@/shared/model/g2b-number";
+import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import type { NoticeKey } from "@/entities/notice/model/types";
 
 export type ContractKey = { number: string; revision: string };

@@ -1,17 +1,16 @@
-import { contractApiPath } from "@/shared/lib/routes";
+import type { ReactNode } from "react";
 import { Fragment } from "react";
 import { Accordion } from "@/shared/ui/accordion";
-import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
-import { RecollectButton } from "@/shared/ui/recollect-button";
-import { DetailTitle } from "@/shared/ui/detail-title";
-import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
+import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
+import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { type Contract } from "../model/contract";
 import { contractDisplay } from "../model/contract-display";
 
 /**
  * 계약현황의 복합 목록을 아코디언 표로 렌더링한다.
  * 빈 데이터 행·빈 표는 contractDisplay에서 이미 제외한 상태로 전달된다.
- * @param props 표 제목, 열, 표시할 행 및 2행 구성 정보.
+ * @param props 표 제목, 열, 표시할 행 및 2행 구성 정보와 제목 영역의 동작.
  * @returns 기존 병합 셀 구성을 유지하는 계약현황 표.
  */
 function ContractTable({
@@ -100,7 +99,13 @@ function ContractTable({
  * @param props 저장된 계약 상세 및 목록.
  * @returns 계약현황 상세 본문.
  */
-export function ContractDetail({ contract }: { contract: Contract }) {
+export function ContractDetail({
+  contract,
+  actions,
+}: {
+  contract: Contract;
+  actions?: ReactNode;
+}) {
   // 표시 모델에서 빈 필드·빈 행·빈 섹션·빈 테이블을 이미 제외한다.
   // 여기서는 필터링 결과만 렌더링해 표시 순서와 기존 표 병합 구조를 유지한다.
   const { title, sections, tables } = contractDisplay(contract);
@@ -114,9 +119,7 @@ export function ContractDetail({ contract }: { contract: Contract }) {
           contract.detail.prcmBsneSeNm,
         )}
         headingLevel="h2"
-        actions={
-          <RecollectButton endpoint={contractApiPath(contract)} compact />
-        }
+        actions={actions}
       />
       {/* 표시 모델에 남은 섹션·표만 열고, 기존 배열 순서대로 배치한다. */}
       <Accordion

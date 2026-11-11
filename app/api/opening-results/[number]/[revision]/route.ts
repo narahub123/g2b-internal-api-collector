@@ -1,13 +1,13 @@
-import { getNoticeRepository } from "@/entities/notice/server";
+import { getG2bRepository } from "@/server/g2b/repository";
 import type { NoticeKey } from "@/entities/notice/model/types";
 import {
   groupOpeningResultQueries,
   openingResultQueries,
   type OpeningResultQuery,
 } from "@/entities/opening-result/model/opening-result";
-import { collectOpeningResult } from "@/features/collect-notice/api/g2b";
-import { maintenanceResponse } from "@/shared/api/g2b-maintenance";
-import { g2bNumber } from "@/shared/model/g2b-number";
+import { collectOpeningResult } from "@/features/collect-g2b/server";
+import { maintenanceResponse } from "@/shared/api/g2b/g2b-maintenance";
+import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 
 /**
  * 현재 공고에서 생성한 개찰결과 조회 조건에 기존 저장 자료의 누락된 분류를 보충한다.
@@ -21,7 +21,7 @@ import { g2bNumber } from "@/shared/model/g2b-number";
 function mergeSavedQueries(
   groups: Map<string, OpeningResultQuery[]>,
   saved: ReturnType<
-    ReturnType<typeof getNoticeRepository>["listOpeningResults"]
+    ReturnType<typeof getG2bRepository>["listOpeningResults"]
   >,
 ) {
   for (const result of saved) {
@@ -66,7 +66,7 @@ export async function POST(
     );
   }
 
-  const repository = getNoticeRepository();
+  const repository = getG2bRepository();
   const notice = await repository.find(key);
   const groups = groupOpeningResultQueries(
     notice ? openingResultQueries(notice.payload) : [],

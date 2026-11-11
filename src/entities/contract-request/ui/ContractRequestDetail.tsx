@@ -1,9 +1,8 @@
-import { contractRequestApiPath } from "@/shared/lib/routes";
+import type { ReactNode } from "react";
 import { Accordion } from "@/shared/ui/accordion";
-import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
-import { DetailTitle } from "@/shared/ui/detail-title";
-import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
-import { RecollectButton } from "@/shared/ui/recollect-button";
+import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
+import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { type ContractRequest } from "../model/contract-request";
 
 import {
@@ -40,13 +39,15 @@ function DetailFields({
 
 /**
  * 계약요청 상세와 품목을 아코디언으로 표시한다.
- * @param props 저장된 계약요청과 품목.
+ * @param props 저장된 계약요청과 품목와 제목 영역의 동작.
  * @returns 페이지 또는 탭에 넣을 계약요청 상세 본문.
  */
 export function ContractRequestDetail({
   contractRequest,
+  actions,
 }: {
   contractRequest: ContractRequest;
+  actions?: ReactNode;
 }) {
   const { detail, items, number, revision } = contractRequest;
   const { sections, amountFields, showAmounts, columns, showItemList } =
@@ -59,12 +60,7 @@ export function ContractRequestDetail({
         subtitle={`${number} / ${revision}`}
         business={resolveG2bBusiness(undefined, detail.prcmBsneAreaNm)}
         headingLevel="h2"
-        actions={
-          <RecollectButton
-            endpoint={contractRequestApiPath(contractRequest)}
-            compact
-          />
-        }
+        actions={actions}
       />
       <Accordion
         type="multiple"

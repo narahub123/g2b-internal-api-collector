@@ -1,4 +1,4 @@
-import { ADMIN_NAVIGATION } from "./_config/navigation";
+import { ADMIN_NAVIGATION } from "@/_pages/admin/config/navigation";
 
 export default function Page() {
   return (

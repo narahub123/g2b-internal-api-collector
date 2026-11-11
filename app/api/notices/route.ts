@@ -1,15 +1,15 @@
-import { getNoticeRepository } from '@/entities/notice/server';
-import { collectNotice, parseCollectNoticeInput } from '@/features/collect-notice/server';
-import { maintenanceResponse } from '@/shared/api/g2b-maintenance';
+import { getG2bRepository } from '@/server/g2b/repository';
+import { collectNotice, parseCollectNoticeInput } from '@/features/collect-g2b/server';
+import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
 import { noticePostRecord } from '@/entities/notice/model/notice-posts';
-import { attachmentGroup } from '@/shared/model/g2b-attachments';
+import { attachmentGroup } from '@/shared/model/g2b/g2b-attachments';
 
 /**
  * 목록 화면에 표시할 공고 요약을 SQLite에서 읽어 반환한다.
  * @throws 저장소를 열거나 목록을 조회하지 못한 경우.
  */
 export async function GET() {
-  return Response.json(await getNoticeRepository().list());
+  return Response.json(await getG2bRepository().list());
 }
 
 /**
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
     if (maintenance) return maintenance;
     return Response.json({ error: '나라장터에서 공고 상세를 가져오지 못했습니다.' }, { status: 502 });
   }
-  const repository = getNoticeRepository();
+  const repository = getG2bRepository();
   const documents = notice.documents;
   if (documents?.unavailable?.length || notice.contractRequests === undefined || notice.contracts === undefined ||
       !notice.posts || notice.posts.entries.some((post) => !post.body ||

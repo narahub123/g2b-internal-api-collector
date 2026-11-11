@@ -5,7 +5,7 @@ import {
   formatG2bDisplayDate,
   formatG2bDisplayDateTime,
   formatG2bDisplayNumber,
-} from "@/shared/lib/g2b-display-format";
+} from "@/shared/lib/g2b/g2b-display-format";
 
 /** 기본정보의 한 항목을 표현한다. 추가 정보와 링크·금액 단위는 표시 단계에서 조합한다. */
 type Row = {

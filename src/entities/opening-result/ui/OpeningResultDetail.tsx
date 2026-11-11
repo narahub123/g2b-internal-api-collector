@@ -1,13 +1,12 @@
-import { openingResultApiPath } from "@/shared/lib/routes";
+import type { ReactNode } from "react";
 import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
 import type { NoticeKey } from "@/entities/notice/model/types";
-import { formatG2bDisplayDateTime } from "@/shared/lib/g2b-display-format";
+import { formatG2bDisplayDateTime } from "@/shared/lib/g2b/g2b-display-format";
 import { Accordion } from "@/shared/ui/accordion";
-import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
-import { RecollectButton } from "@/shared/ui/recollect-button";
-import { DetailTitle } from "@/shared/ui/detail-title";
-import type { G2bBusiness } from "@/shared/lib/g2b-business";
+import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
+import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import type { G2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { type OpeningResult } from "../model/opening-result";
 import {
   getOpeningResultDisplay,
@@ -151,6 +150,8 @@ function ResultTable({ table }: { table: DisplayTable }) {
  * @param results 개찰차수별 조회 결과.
  * @param title 화면 제목. 생략하면 기본 제목을 사용한다.
  * @param business 연결 공고나 저장된 조회 조건에서 결정한 업무구분.
+ * @param noticePath 연결 공고 주소를 만드는 함수.
+ * @param actions 상세 제목 영역에 표시할 동작.
  */
 export function OpeningResultDetail({
   noticeKey,
@@ -158,12 +159,16 @@ export function OpeningResultDetail({
   title,
   business,
   originalHref,
+  noticePath,
+  actions,
 }: {
   noticeKey: NoticeKey;
   results: OpeningResult[];
   title?: string;
   business?: G2bBusiness;
   originalHref?: string;
+  noticePath: (key: NoticeKey) => string;
+  actions?: ReactNode;
 }) {
   // 개찰차수와 분류는 데이터 그룹 키일 뿐, 원본 화면에 없는 제목으로 출력하지 않는다.
   const sections = results.flatMap((result) => {
@@ -172,7 +177,7 @@ export function OpeningResultDetail({
       ? getOpeningResultPriceDisplay(result.price).sections
       : [];
     return result.results.flatMap(({ query, detail }) =>
-      getOpeningResultDisplay(query, detail).sections.map((section, index) => ({
+      getOpeningResultDisplay(query, detail, noticePath).sections.map((section, index) => ({
         // 개찰차수·업무 분류·섹션 순서로 서로 다른 조회 결과의 렌더링 키를 구분한다.
         key: `${result.openingRevision}/${query.classification}/${index}`,
         section,
@@ -202,9 +207,7 @@ export function OpeningResultDetail({
         business={business}
         originalHref={originalHref}
         headingLevel="h2"
-        actions={
-          <RecollectButton endpoint={openingResultApiPath(noticeKey)} compact />
-        }
+        actions={actions}
       />
       {/* 공지사항이 없는 경우에는 제목과 빈 영역도 생성하지 않는다. */}
       {notices.length > 0 && (

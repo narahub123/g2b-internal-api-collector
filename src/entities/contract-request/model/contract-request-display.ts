@@ -1,10 +1,10 @@
 import { decodeHTMLStrict } from "entities";
-import { getG2bCommonCodeName } from "@/shared/lib/common-codes";
+import { getG2bCommonCodeName } from "@/shared/lib/g2b/common-codes";
 import {
   formatG2bDisplayNumber,
   formatG2bDisplayText,
   type G2bDisplayFormat,
-} from "@/shared/lib/g2b-display-format";
+} from "@/shared/lib/g2b/g2b-display-format";
 
 /**
  * 계약요청 상세 화면의 표시 정의와 값 변환 로직.

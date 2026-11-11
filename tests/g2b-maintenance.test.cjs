@@ -24,9 +24,9 @@ const aliasHook = registerHooks({
   },
 });
 
-const { G2bMaintenanceError, assertNotMaintenance, findMaintenance, maintenanceResponse } = require('../src/shared/api/g2b-maintenance');
-const { collectContractRequest, collectOrderPlan, collectPriorSpec } = require('../src/features/collect-notice/api/g2b');
-const { getNoticeRepository } = require('../src/entities/notice/server');
+const { G2bMaintenanceError, assertNotMaintenance, findMaintenance, maintenanceResponse } = require('../src/shared/api/g2b/g2b-maintenance');
+const { collectContractRequest, collectOrderPlan, collectPriorSpec } = require('../src/features/collect-g2b/server');
+const { getG2bRepository } = require('../src/server/g2b/repository');
 const { POST: postNotice } = require('../app/api/notices/route');
 const { POST: postOpeningResults } = require('../app/api/opening-results/[number]/[revision]/route');
 const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]/attachments/[seq]/route');
@@ -50,7 +50,7 @@ const execMock = mock.method(DatabaseSync.prototype, 'exec', function (sql) {
   return sqliteExec.call(this, sql);
 });
 process.chdir(tempDir);
-const repository = getNoticeRepository();
+const repository = getG2bRepository();
 after(() => {
   aliasHook.deregister();
   execMock.mock.restore();

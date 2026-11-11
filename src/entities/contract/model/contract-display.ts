@@ -2,14 +2,14 @@ import { decodeHTMLStrict } from "entities";
 import {
   G2B_COMMON_CODE_COMPONENT_GROUPS,
   getG2bCommonCodeName,
-} from "@/shared/lib/common-codes";
+} from "@/shared/lib/g2b/common-codes";
 import type { Contract } from "./contract";
 import { formatG2bPhone } from "@/shared/lib/g2b-phone";
 import {
   formatG2bDisplayDate,
   formatG2bDisplayNumber,
   formatG2bDisplayRate,
-} from "@/shared/lib/g2b-display-format";
+} from "@/shared/lib/g2b/g2b-display-format";
 
 /** 공통코드 API 조회 없이 화면에서 직접 변환하는 Y/N 선택값 목록. */
 const inlineOptions: Readonly<

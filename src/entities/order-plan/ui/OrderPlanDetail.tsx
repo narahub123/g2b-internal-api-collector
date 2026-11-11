@@ -1,28 +1,37 @@
-import { noticePath, priorSpecPath } from "@/shared/lib/routes";
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { g2bNumber } from "@/shared/model/g2b-number";
+import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
-import { DetailAccordionSection } from "@/shared/ui/detail-accordion-section";
-import { DetailTitle } from "@/shared/ui/detail-title";
-import { resolveG2bBusiness } from "@/shared/lib/g2b-business";
-import { RecollectButton } from "@/shared/ui/recollect-button";
+import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
+import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { orderPlanSections } from "../model/order-plan-display";
 import {
   orderPlanAttachmentGroup,
   orderPlanFiles,
   type OrderPlan,
 } from "../model/order-plan";
-import { AttachmentTable } from "@/shared/ui/attachment-table";
+import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
 
 const rowClass = "grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]";
 const linkClass = "text-primary underline underline-offset-2";
 
 /**
  * 발주계획 상세, 첨부파일과 연관 정보 링크를 독립적인 본문으로 표시한다.
- * @param props 나라장터 상세 응답과 첨부 정보를 담은 저장된 발주계획.
+ * @param props 나라장터 상세 응답과 첨부 정보를 담은 저장된 발주계획와 제목 영역의 동작 및 연관 업무 링크.
  * @returns 페이지에 넣을 발주계획 본문.
  */
-export function OrderPlanDetail({ plan }: { plan: OrderPlan }) {
+export function OrderPlanDetail({
+  plan,
+  noticePath,
+  priorSpecPath,
+  actions,
+}: {
+  plan: OrderPlan;
+  noticePath: (key: { number: string; revision: string }) => string;
+  priorSpecPath: (number: string) => string;
+  actions?: ReactNode;
+}) {
   const detail = plan.payload.dlOderPlanM;
   const title = [detail.bizNm, detail.itemNm].find(
     (value): value is string =>
@@ -78,12 +87,7 @@ export function OrderPlanDetail({ plan }: { plan: OrderPlan }) {
         subtitle={plan.number}
         business={resolveG2bBusiness(detail.prcmBsneSeCd, detail.prcmBsneSeCdNm)}
         originalHref={originalHref}
-        actions={
-          <RecollectButton
-            endpoint={`/api/order-plans/${encodeURIComponent(plan.number)}`}
-            compact
-          />
-        }
+        actions={actions}
       />
       <Accordion
         type="multiple"

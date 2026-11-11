@@ -1,7 +1,7 @@
 import {
   attachmentGroup,
   publicAttachmentFiles,
-} from "@/shared/model/g2b-attachments";
+} from "@/shared/model/g2b/g2b-attachments";
 
 export type OrderPlan = {
   number: string;

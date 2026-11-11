@@ -1,8 +1,7 @@
-import { noticePath } from "@/shared/lib/routes";
 import {
   formatG2bDisplayText,
   type G2bDisplayFormat,
-} from "@/shared/lib/g2b-display-format";
+} from "@/shared/lib/g2b/g2b-display-format";
 import {
   resolveOpeningResultEndpoint,
   type OpeningResultEndpoint,
@@ -551,10 +550,14 @@ function selectedFields(
     .map(({ key, label }) => ({ key, label, value: source[key] }));
 }
 
-/** 원본 응답의 섹션/필드를 표시 모델로 변환한다. 원본에 없는 안내문은 만들지 않는다. */
+/**
+ * 원본 응답의 섹션과 필드를 표시 모델로 변환한다. 원본에 없는 안내문은 만들지 않는다.
+ * @param noticePath 연결 공고 주소를 만드는 함수.
+ */
 export function getOpeningResultDisplay(
   query: OpeningResultQuery,
   detail: Data,
+  noticePath: (key: { number: string; revision: string }) => string,
 ): OpeningResultDisplay {
   const endpoint = resolveOpeningResultEndpoint(query);
   const status = query.status ?? "유찰"; // 구형 저장 JSON 호환
