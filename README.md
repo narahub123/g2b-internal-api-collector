@@ -2,8 +2,7 @@
 
 ## 폴더 구조
 
-- `app/`은 Next.js 페이지와 API 진입점입니다.
-- `src/app/`에는 전역 스타일과 TanStack Query Provider가 있습니다.
+- `app/`에는 Next.js 페이지와 API 진입점, 전역 스타일, TanStack Query Provider가 있습니다.
 - `src/_pages/notices/`는 수집 폼과 공고 목록을, `src/_pages/notice-detail/`은 공고 상세 화면을 구성합니다. `_pages` 이름은 Next.js Pages Router와의 충돌을 피하기 위해 사용합니다.
 - `src/features/collect-notice/`는 수집 폼, 입력 검증, 수집 요청을 담당합니다.
 - `src/entities/notice/`는 공고 타입, 목록·상세 컴포넌트, 저장소를 관리합니다.
