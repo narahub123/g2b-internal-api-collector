@@ -1,5 +1,6 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { decodeHTMLStrict } from "entities";
+import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
 import { formatG2bDisplayDate, formatG2bDisplayDateTime } from "@/shared/lib/g2b/g2b-display-format";
 import type { CollectionListRow, CollectionSection } from "./collection-attempts";
 
@@ -93,5 +94,99 @@ export function queryCollectionPage(db: DatabaseSync, targets: string, options: 
     page: Math.max(1, Math.min(page, totalPages)),
     totalPages,
     rows: rows.filter((row) => row.number !== null),
+  };
+}
+
+const businessKey = "COALESCE(json_extract(b.value, '$.code'), json_extract(b.value, '$.label'))";
+
+/**
+ * 업무가 전달한 조회 필드로 검색·필터와 페이지 조회를 연결한다.
+ * @param projection 저장소가 정의한 SQL 표현식. 정규화된 날짜·기관·업무구분 JSON을 반환한다.
+ * @param extraCondition 업무 전용 범위 조건을 조합하는 함수. range가 경계값을 바인딩한다.
+ * @throws SQLite 함수 등록이나 조회문 준비가 실패한 경우.
+ */
+export function openCollectionList(
+  db: DatabaseSync,
+  section: CollectionSection,
+  targets: string,
+  projection: string,
+  extraCondition?: (range: (id: string, expression: string) => string) => string,
+) {
+  const businessOptions = db.prepare(`${targets}
+    SELECT DISTINCT ${businessKey} AS value, json_extract(b.value, '$.label') AS label
+    FROM saved, json_each(${projection}, '$.businesses') b
+    ORDER BY label
+  `);
+
+  return {
+    /**
+     * 저장된 업무 자료에 있는 업무구분을 선택지로 조회한다.
+     * @throws SQLite에서 업무구분을 읽지 못한 경우.
+     */
+    businesses() {
+      return (businessOptions.all(section) as { value: string; label: string }[])
+        .map(({ value, label }) => ({ value, label }));
+    },
+
+    /**
+     * 검색과 필터에 일치하는 건수를 집계하고 선택 상태의 페이지를 반환한다.
+     * @throws SQLite에서 조회문 준비나 실행이 실패한 경우.
+     */
+    page(query: CollectionListQuery) {
+      const where: string[] = [];
+      const values: SQLInputValue[] = [];
+      const { field, query: keyword } = query.search;
+      if (keyword) {
+        if (field === "number") {
+          where.push("(instr(collection_search_text(number || revision), collection_search_text(?)) > 0 OR instr(collection_search_text(json_extract(fields, '$.receipt')), collection_search_text(?)) > 0)");
+          values.push(keyword.replace(/[\s/-]+/g, "") || keyword, keyword);
+        } else if (field === "agency") {
+          where.push("EXISTS (SELECT 1 FROM json_each(fields, '$.agencies') WHERE instr(collection_search_text(value), collection_search_text(?)) > 0)");
+          values.push(keyword);
+        } else {
+          where.push("instr(sortTitle, collection_search_text(?)) > 0");
+          values.push(keyword);
+        }
+      }
+
+      const selected = query.filters.business;
+      if (Array.isArray(selected) && selected.length) {
+        where.push(`EXISTS (SELECT 1 FROM json_each(fields, '$.businesses') b WHERE ${businessKey} IN (SELECT value FROM json_each(?)))`);
+        values.push(JSON.stringify(selected));
+      }
+
+      function rangeCondition(id: string, expression: string) {
+        const range = query.filters[id];
+        if (!range || !("from" in range || "to" in range)) return "";
+        const conditions = [];
+        if (range.from !== undefined) {
+          conditions.push(`${expression} >= ?`);
+          values.push(range.from);
+        }
+        if (range.to !== undefined) {
+          conditions.push(`${expression} <= ?`);
+          values.push(range.to);
+        }
+        return conditions.join(" AND ");
+      }
+
+      const date = rangeCondition("date", "substr(sortDate, 1, 10)");
+      if (date) where.push(date);
+      const extra = extraCondition?.(rangeCondition);
+      if (extra) where.push(extra);
+
+      const [sort, direction] = query.sort.split("-");
+      return queryCollectionPage(db, targets, {
+        section,
+        projection: `${projection} AS fields, NULLIF(collection_search_text(saved.title), '') AS sortTitle`,
+        columns: "json_extract(fields, '$.date') AS sortDate",
+        where,
+        values,
+        order: sort === "title" ? "sortTitle" : "sortDate",
+        ascending: direction === "asc",
+        status: query.status,
+        page: query.page,
+      });
+    },
   };
 }

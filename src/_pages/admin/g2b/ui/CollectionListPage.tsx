@@ -1,7 +1,10 @@
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { noticeListHref, parseNoticeListQuery } from "@/entities/notice/model/notice-list-query";
-import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
+import { collectionListHref, type CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
+import { parsePriorSpecListQuery } from "@/entities/prior-spec/model/prior-spec-list-query";
+import { parseOpeningResultListQuery } from "@/entities/opening-result/model/opening-result-list-query";
+import { parseContractListQuery } from "@/entities/contract/model/contract-list-query";
 import { orderPlanListHref, parseOrderPlanListQuery } from "@/entities/order-plan/model/order-plan-list-query";
 import { contractRequestListHref, parseContractRequestListQuery } from "@/entities/contract-request/model/contract-request-list-query";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
@@ -87,6 +90,16 @@ export async function CollectionListPage({
     status === "collected" || status === "uncollected" ? status : "total";
   const attempts = getG2bRepository().collectionAttempts;
   const paginated = (() => {
+    if (section === "prior-specs" || section === "opening-results" || section === "contracts") {
+      const [list, parse] = ({
+        "prior-specs": [attempts.priorSpecList, parsePriorSpecListQuery],
+        "opening-results": [attempts.openingResultList, parseOpeningResultListQuery],
+        contracts: [attempts.contractList, parseContractListQuery],
+      } as const)[section];
+      const businesses = list.businesses();
+      const query = parse(params, businesses);
+      return { section, businesses, query, result: list.page(query), href: collectionListHref } as const;
+    }
     if (section === "contract-requests") {
       const businesses = attempts.contractRequestList.businesses();
       const query = parseContractRequestListQuery(params, businesses);

@@ -16,8 +16,18 @@ import {
   noticeSearchFields,
   noticeSortOptions,
 } from "@/entities/notice/model/notice-list-query";
-import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
+import { collectionListHref, type CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
+import { priorSpecListControls } from "@/entities/prior-spec/model/prior-spec-list-query";
+import { openingResultListControls } from "@/entities/opening-result/model/opening-result-list-query";
+import { contractListControls } from "@/entities/contract/model/contract-list-query";
 import { ListView } from "@/shared/ui/list-controls/ListView";
+
+// 각 업무의 검색 항목과 필터 정의는 해당 업무 모듈이 소유한다.
+const listControls = {
+  "prior-specs": priorSpecListControls,
+  "opening-results": openingResultListControls,
+  contracts: contractListControls,
+};
 
 /** 업무별 조회 조건을 URL로 이동시키고 공통 목록에 서버에서 조회한 결과를 표시한다. */
 export function CollectionQueryView({ path, query, totalPages, children, ...options }: {
@@ -25,13 +35,15 @@ export function CollectionQueryView({ path, query, totalPages, children, ...opti
   query: CollectionListQuery;
   totalPages: number;
   children: ReactNode;
-} & ({ section: "notices"; regions: string[] } | { section: "order-plans" | "contract-requests"; businesses: ListOption[] })) {
+} & ({ section: "notices"; regions: string[] } | { section: "order-plans" | "contract-requests" | keyof typeof listControls; businesses: ListOption[] })) {
   const router = useRouter();
   const config = options.section === "notices"
     ? { href: noticeListHref, fields: noticeSearchFields, sort: noticeSortOptions, filters: noticeFilterDefinitions(options.regions) }
     : options.section === "contract-requests"
       ? { href: contractRequestListHref, fields: contractRequestSearchFields, sort: contractRequestSortOptions, filters: contractRequestFilters(options.businesses) }
-      : { href: orderPlanListHref, fields: orderPlanSearchFields, sort: orderPlanSortOptions, filters: orderPlanFilters(options.businesses) };
+      : options.section === "order-plans"
+        ? { href: orderPlanListHref, fields: orderPlanSearchFields, sort: orderPlanSortOptions, filters: orderPlanFilters(options.businesses) }
+        : { href: collectionListHref, ...listControls[options.section](options.businesses) };
   const apply = (changes: Partial<CollectionListQuery>) => {
     router.push(config.href(path, { ...query, ...changes, page: 1 }));
   };

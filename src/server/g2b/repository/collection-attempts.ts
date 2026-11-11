@@ -4,6 +4,9 @@ import type { G2bCollectionCounts } from "./types";
 import { openNoticeList } from "./notice-list";
 import { openOrderPlanList } from "./order-plan-list";
 import { openContractRequestList } from "./contract-request-list";
+import { openPriorSpecList } from "./prior-spec-list";
+import { openOpeningResultList } from "./opening-result-list";
+import { openContractList } from "./contract-list";
 import { cleanText } from "./collection-list-query";
 
 export type CollectionSection = keyof G2bCollectionCounts;
@@ -71,7 +74,8 @@ const savedQueries: Record<CollectionSection, string> = {
     SELECT number, '' AS revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.payload.dlBfSpecM.bfSpecNm') AS title,
       json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCd') AS businessCode,
-      json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCdNm') AS businessLabel
+      json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCdNm') AS businessLabel,
+      data
     FROM prior_specs`,
   notices: `
     SELECT number, revision, '' AS opening_revision, collected_at,
@@ -91,7 +95,8 @@ const savedQueries: Record<CollectionSection, string> = {
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.detail.ctrtNm') AS title,
       json_extract(data, '$.detail.prcmBsneSeCd') AS businessCode,
-      json_extract(data, '$.detail.prcmBsneSeNm') AS businessLabel
+      json_extract(data, '$.detail.prcmBsneSeNm') AS businessLabel,
+      data
     FROM contracts`,
   "opening-results": `
     SELECT result.number, result.revision, result.opening_revision, result.collected_at,
@@ -109,7 +114,9 @@ const savedQueries: Record<CollectionSection, string> = {
           FROM json_each(result.data, '$.results') AS entry
           HAVING COUNT(DISTINCT json_extract(entry.value, '$.query.businessCode')) = 1)
       ) AS businessCode,
-      json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel
+      json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel,
+      result.data,
+      json_extract(notice.data, '$.payload.dmItemMap.dmstUntyGrpNm') AS linkedAgency
     FROM opening_results AS result
     LEFT JOIN notices AS notice ON notice.number = result.number AND notice.revision = result.revision`,
 };
@@ -189,6 +196,9 @@ export function openCollectionAttempts(db: DatabaseSync) {
     noticeList: openNoticeList(db, summaries.get("notices")!.targets),
     orderPlanList: openOrderPlanList(db, summaries.get("order-plans")!.targets),
     contractRequestList: openContractRequestList(db, summaries.get("contract-requests")!.targets),
+    priorSpecList: openPriorSpecList(db, summaries.get("prior-specs")!.targets),
+    openingResultList: openOpeningResultList(db, summaries.get("opening-results")!.targets),
+    contractList: openContractList(db, summaries.get("contracts")!.targets),
     /**
      * 외부 조회 직전에 입력과 시작 시각을 기록한다.
      * @returns 종료 결과를 기록하거나 재시도할 때 쓰는 시도 ID.

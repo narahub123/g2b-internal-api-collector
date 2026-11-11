@@ -31,6 +31,9 @@ const { openCollectionAttempts } = require('../src/server/g2b/repository/collect
 const { noticeListHref, parseNoticeListQuery } = require('../src/entities/notice/model/notice-list-query');
 const { orderPlanListHref, parseOrderPlanListQuery } = require('../src/entities/order-plan/model/order-plan-list-query');
 const { parseContractRequestListQuery } = require('../src/entities/contract-request/model/contract-request-list-query');
+const { parsePriorSpecListQuery } = require('../src/entities/prior-spec/model/prior-spec-list-query');
+const { parseOpeningResultListQuery } = require('../src/entities/opening-result/model/opening-result-list-query');
+const { parseContractListQuery } = require('../src/entities/contract/model/contract-list-query');
 const { POST: postNotice } = require('../app/api/notices/route');
 const { POST: postOpeningResults } = require('../app/api/opening-results/[number]/[revision]/route');
 const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]/attachments/[seq]/route');
@@ -486,6 +489,54 @@ test('세션 발급과 다운로드 메타데이터의 점검을 감지한다', 
   assert.equal(response.status, 503);
   assert.equal((await response.json()).code, 'g2b_maintenance');
   assert.equal(calls.mock.callCount(), 2);
+});
+
+test('사전규격·개찰결과·계약현황은 원본 통화와 업무별 날짜를 사용한다', () => {
+  const attempts = repository.collectionAttempts;
+  const lists = {
+    'prior-specs': [attempts.priorSpecList, parsePriorSpecListQuery],
+    'opening-results': [attempts.openingResultList, parseOpeningResultListQuery],
+    contracts: [attempts.contractList, parseContractListQuery],
+  };
+  const page = (section, params) => {
+    const [list, parse] = lists[section];
+    return list.page(parse(params, list.businesses()));
+  };
+  for (const [number, code] of [['TESTSPECWON', '01'], ['TESTSPECUSD', '02']]) {
+    repository.savePriorSpec({ number, collectedAt, payload: { dlBfSpecM: {
+      bfSpecRegNo: number, bfSpecNm: '검증 사전규격', prcmBsneSeCd: code, dmstUntyGrpNm: '검증기관',
+      specRlsDt: '2026/11/06 09:00', alotBgtPrspAmt: 500,
+    } } });
+  }
+  const specQuery = { field: 'agency', q: '검증기관', dateTo: '2026-11-06' };
+  assert.deepEqual(page('prior-specs', { ...specQuery, budgetFrom: '0' }).rows.map(({ number }) => number), ['TESTSPECWON']);
+  assert.deepEqual(page('prior-specs', { ...specQuery, budgetUsdTo: '500' }).rows.map(({ number }) => number), ['TESTSPECUSD']);
+  assert.equal(page('prior-specs', { ...specQuery, budgetFrom: '0', budgetUsdTo: '500' }).counts.total, 2);
+
+  const number = 'TESTOPENING';
+  const revision = '000';
+  for (const openingRevision of ['001', '002']) {
+    const query = { number, revision, openingRevision, businessCode: '03', classification: '001' };
+    repository.saveOpeningResult({ number, revision, openingRevision, collectedAt, results: [
+      { query, detail: { bidInfo: { bidPbancNm: '검증 개찰', dmstNm: '검증기관', realOnbsDt: '2026/11/03 10:00' } } },
+      { query: { ...query, classification: '002' }, detail: openingRevision === '001'
+        ? { bidInfo: { dmstNm: '검증기관', realOnbsDt: '2026/11/05 10:00' } }
+        : { onbsPrnmntDt: '2026/11/09 10:00' } },
+    ] });
+  }
+  const openingQuery = { field: 'number', q: number, business: '03' };
+  assert.deepEqual(page('opening-results', { ...openingQuery, dateFrom: '2026-11-05' }).rows.map(({ openingRevision }) => openingRevision), ['001']);
+  assert.deepEqual(page('opening-results', { ...openingQuery, dateFrom: '2026-11-06' }).rows, []);
+  assert.equal(page('opening-results', { field: 'agency', q: '검증기관' }).counts.total, 2);
+
+  for (const [number, date] of [['TESTCTRT1', '20261109'], ['TESTCTRT2', '20261108']]) {
+    repository.saveContract({ number, revision: '00', collectedAt, companies: [], services: [], items: [],
+      detail: { ctrtNm: '검증 계약', ctrtView: number, dmstUntyGrpNm: '검증기관', prcmBsneSeCd: '05', frstCtrtDt: date },
+    });
+  }
+  const contractQuery = { field: 'agency', q: '검증기관', business: '05', dateTo: '2026-11-09', sort: 'date-asc' };
+  assert.deepEqual(page('contracts', contractQuery).rows.map(({ number }) => number), ['TESTCTRT2', 'TESTCTRT1']);
+  assert.deepEqual(page('contracts', { ...contractQuery, status: 'uncollected' }).counts, { total: 2, collected: 2, uncollected: 0 });
 });
 
 test('계약요청 세부품명은 표시되는 모든 물품 행에서 검색한 뒤 요청 단위로 페이지를 나눈다', () => {
