@@ -957,7 +957,7 @@ test('수집 이력에서 네트워크 하위 원인과 각각의 스택을 확�
   assert.match(diagnostics.cause.stack, /Error: read ECONNRESET/);
 });
 
-test('관리자 목록의 실패 진단은 업무 오류, HTTP 오류, JSON 파싱 원인을 표시한다', async () => {
+test('관리자 목록은 업무 오류, HTTP 오류, JSON 파싱 진단을 접힌 아코디언으로 제공한다', async () => {
   const { createElement } = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { CollectionFailureDetails } = require('../src/_pages/admin/g2b/ui/CollectionFailureDetails');
@@ -979,14 +979,21 @@ test('관리자 목록의 실패 진단은 업무 오류, HTTP 오류, JSON 파�
     assert.equal(diagnostic.response.status, status);
     assert.doesNotMatch(row.diagnostics, /secret-value|raw-private-body/);
     const html = renderToStaticMarkup(createElement(CollectionFailureDetails, { diagnostics: row.diagnostics }));
-    assert.match(html, /<details[^>]*><summary[^>]*>원인 보기/);
-    assert.match(html, /스택 보기/);
-    assert.match(html, new RegExp(step));
+    const [, triggerAttributes] = html.match(/<button\b([^>]*)>원인 보기/) ?? [];
+    assert.ok(triggerAttributes, '원인 보기 버튼이 있어야 한다');
+    assert.match(triggerAttributes, /\baria-expanded="false"/);
+    const [, triggerId] = triggerAttributes.match(/\sid="([^"]+)"/) ?? [];
+    assert.ok(triggerId, '원인 보기 버튼에 패널이 참조할 ID가 있어야 한다');
+    const panel = html.match(/<div\b[^>]*\brole="region"[^>]*>/)?.[0] ?? '';
+    assert.ok(panel.includes(`aria-labelledby="${triggerId}"`));
+    assert.match(panel, /\bhidden=""/);
+    assert.doesNotMatch(html, /스택 보기/);
+    assert.ok(diagnostic.stack);
     if (index === 0) {
       assert.equal(diagnostic.response.errorCode, 'E-42');
-      assert.match(html, /품목 조회 권한 없음/);
+      assert.match(diagnostic.response.errorMessage, /품목 조회 권한 없음/);
     } else if (index === 1) {
-      assert.match(html, /서버 내부 원인 확인 불가/);
+      assert.equal(diagnostic.response.errorMessage, undefined);
     } else {
       assert.equal(diagnostic.name, 'SyntaxError');
       assert.equal(diagnostic.details?.['오류 위치'], index === 3 ? 29 : undefined);

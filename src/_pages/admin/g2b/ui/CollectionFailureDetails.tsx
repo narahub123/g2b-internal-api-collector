@@ -1,4 +1,5 @@
 import type { CollectionDiagnostic } from "@/shared/api/g2b/collection-diagnostic";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/ui/accordion";
 
 /**
  * 최신 수집 이력의 진단을 관리자 목록에서 펼쳐 본다.
@@ -14,10 +15,16 @@ export function CollectionFailureDetails({ diagnostics }: { diagnostics: string 
   if (!error?.name) return null;
 
   return (
-    <details className="mt-2 min-w-0">
-      <summary className="cursor-pointer font-medium">원인 보기</summary>
-      <DiagnosticError error={error} />
-    </details>
+    <Accordion type="single" collapsible className="mt-2 min-w-0">
+      <AccordionItem value="error">
+        <AccordionTrigger className="justify-start gap-1 py-0 font-medium hover:no-underline cursor-pointer">
+          원인 보기
+        </AccordionTrigger>
+        <AccordionContent>
+          <DiagnosticError error={error} />
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   );
 }
 
@@ -41,24 +48,42 @@ function DiagnosticError({ error }: { error: CollectionDiagnostic }) {
   };
   return (
     <div className="mt-2 min-w-0 space-y-1 border-l pl-3 wrap-anywhere">
-      <p><strong>{step ?? error.name}</strong>{error.message && ` · ${error.message}`}</p>
+      <p>
+        <strong>{step ?? error.name}</strong>
+        {error.message && ` · ${error.message}`}
+      </p>
       <dl className="text-muted-foreground">
-        {Object.entries(fields).map(([label, value]) => value !== undefined && (
-          <div key={label} className="flex flex-wrap gap-x-2">
-            <dt className="font-medium">{label}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
+        {Object.entries(fields).map(
+          ([label, value]) =>
+            value !== undefined && (
+              <div key={label} className="flex flex-wrap gap-x-2">
+                <dt className="font-medium">{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ),
+        )}
       </dl>
-      {response?.status === 503 && !response.errorMessage && <p>나라장터 서버 내부 원인 확인 불가</p>}
+      {response?.status === 503 && !response.errorMessage && (
+        <p>나라장터 서버 내부 원인 확인 불가</p>
+      )}
       {error.stack && (
-        <details>
-          <summary className="cursor-pointer">스택 보기</summary>
-          <pre className="mt-1 max-h-64 overflow-auto rounded bg-muted p-2 text-xs">{error.stack}</pre>
-        </details>
+        <Accordion type="single" collapsible className="min-w-0 max-w-full">
+          <AccordionItem value="stack" className="border-b-0">
+            <AccordionTrigger className="justify-start gap-1 py-0 font-normal hover:no-underline cursor-pointer">
+              스택 보기
+            </AccordionTrigger>
+            <AccordionContent className="pb-0">
+              <pre className="mt-1 max-w-full overflow-auto whitespace-pre-wrap wrap-anywhere rounded bg-muted p-2 text-xs">
+                {error.stack}
+              </pre>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       )}
       {error.cause && <DiagnosticError error={error.cause} />}
-      {error.errors?.map((child, index) => <DiagnosticError key={index} error={child} />)}
+      {error.errors?.map((child, index) => (
+        <DiagnosticError key={index} error={child} />
+      ))}
     </div>
   );
 }
