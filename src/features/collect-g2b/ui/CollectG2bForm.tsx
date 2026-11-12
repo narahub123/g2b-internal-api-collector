@@ -11,6 +11,7 @@ import { Card } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
 import { contractApiPath, contractRequestApiPath, openingResultApiPath } from "../api/routes";
 import { parseCollectNoticeInput } from "../model/input";
+import { collectionNumberError } from "../model/number";
 
 // 기존 API가 요구하는 번호와 차수 형식으로 입력을 변환한다.
 const settings = {
@@ -43,6 +44,7 @@ const settings = {
 
 /**
  * 업무에 필요한 식별자를 받아 기존 수집 API에 제출한다.
+ * 업무별 번호 형식을 제출 전에 검사해 오입력이 수집 이력에 남는 것을 막는다.
  * 오류가 나면 입력을 유지하고, 성공하면 정규화한 식별자를 전달한 뒤 화면 전환 처리가 끝날 때까지 제출을 막는다.
  * @param props.onCollected 저장 성공 뒤 화면을 갱신하고 이동한다. 실패하면 수집 완료와 화면 갱신 실패를 함께 안내한다.
  * @param props.onFailure 일부 자료가 저장되었을 수 있으므로 호출 화면의 목록과 집계를 갱신한다.
@@ -61,6 +63,11 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
     if (pending) return;
     const fields = new FormData(event.currentTarget);
     const number = g2bNumber(String(fields.get("number")).toUpperCase());
+    const numberError = collectionNumberError(section, number);
+    if (numberError) {
+      setError(numberError);
+      return;
+    }
     const revision = "normalizeRevision" in config ? config.normalizeRevision(fields.get("revision")) : "";
     if (!number || revision === undefined) {
       setError("번호와 차수 입력을 확인하세요.");

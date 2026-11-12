@@ -1,5 +1,6 @@
 import { getG2bRepository } from '@/server/g2b/repository';
 import { collectAndSaveNotice, parseCollectNoticeInput } from '@/features/collect-g2b/server';
+import { collectionNumberError } from '@/features/collect-g2b/model/number';
 import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
 
 /**
@@ -12,11 +13,14 @@ export async function GET() {
 
 /**
  * 공고 상세와 관련 자료를 수집해 공고 행을 저장한다. 일반 부가 조회 실패 시 재사용할 수 있는 기존 자료를 보완한다.
- * @param request JSON 본문에 공고번호, 세 자리 차수, 낙찰방법 코드를 전달한다.
+ * @param request JSON 본문에 차세대 BK 공고번호, 세 자리 차수, 낙찰방법 코드를 전달한다.
  * @returns 저장 성공 시 공고 식별자, 입력 오류는 400, 점검 보류는 503, 그 외 수집 오류는 502를 반환한다.
  */
 export async function POST(request: Request) {
-  const input = parseCollectNoticeInput(await request.json().catch(() => null));
+  const body = await request.json().catch(() => null);
+  const numberError = collectionNumberError('notices', body?.number);
+  if (numberError) return Response.json({ error: numberError }, { status: 400 });
+  const input = parseCollectNoticeInput(body);
   if (!input) {
     return Response.json({ error: '공고번호, 세 자리 차수, 낙찰방법 코드를 확인하세요.' }, { status: 400 });
   }

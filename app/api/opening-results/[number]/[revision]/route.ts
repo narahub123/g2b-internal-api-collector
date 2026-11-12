@@ -10,7 +10,7 @@ import { collectOpeningGroups, type OpeningCollectionReport } from "@/features/c
 import { NoticeCollectionDeferred } from "@/features/collect-g2b/api/notices";
 import { parseCollectNoticeInput } from "@/features/collect-g2b/model/input";
 import { maintenanceResponse } from "@/shared/api/g2b/g2b-maintenance";
-import { g2bNumber } from "@/shared/model/g2b/g2b-number";
+import { collectionNumberError } from "@/features/collect-g2b/model/number";
 
 /**
  * 현재 공고에서 생성한 개찰결과 조회 조건에 기존 저장 자료의 누락된 분류를 보충한다.
@@ -52,7 +52,7 @@ function responseDetails(report: OpeningCollectionReport | undefined, noticeSave
 /**
  * 저장된 공고가 있으면 개찰결과를 다시 조회하고, 없으면 공고 전체 수집 과정에서 개찰결과를 확보한다.
  * @param request 선택적으로 낙찰방법 코드를 JSON 본문에 전달한다. 기존 상세 버튼은 본문을 생략한다.
- * @param params 공고번호와 세 자리 공고차수.
+ * @param params 차세대 BK 공고번호와 세 자리 공고차수.
  * @returns 성공 시 공고 식별자와 차수별 결과. 입력 오류는 400, 개찰 대상 없음은 404,
  * 수집 실패는 502, 점검은 503으로 응답한다.
  * @throws 저장된 공고나 개찰결과 조회에 실패한 경우.
@@ -62,8 +62,10 @@ export async function POST(
   { params }: { params: Promise<NoticeKey> },
 ) {
   const key = await params;
-  if (g2bNumber(key.number) !== key.number || !/^\d{3}$/.test(key.revision)) {
-    return Response.json({ error: "공고번호와 공고차수를 확인하세요." }, { status: 400 });
+  const numberError = collectionNumberError("opening-results", key.number);
+  if (numberError) return Response.json({ error: numberError }, { status: 400 });
+  if (!/^\d{3}$/.test(key.revision)) {
+    return Response.json({ error: "공고차수를 확인하세요." }, { status: 400 });
   }
 
   const body = await request.text();
