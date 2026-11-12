@@ -17,6 +17,8 @@ export type G2bRequest = (url: URL, init: RequestInit) => Promise<Response>;
  * 나라장터 내부 API에 JSON 요청을 보내고 HTTP 상태 및 업무 오류 코드를 검사한다.
  * 점검 화면은 HTTP 200으로도 반환되므로 본문을 먼저 확인한다.
  * 세션이 필요한 호출은 주입된 request를 사용하며, 메뉴 정보는 조회 화면에 맞게 지정한다.
+ * 사전규격 상세는 코드 99와 상세 데이터가 함께 반환될 수 있어 등록번호가 있는 응답을 호출자에게 넘긴다.
+ * 호출자는 응답 등록번호가 요청 번호와 일치하는지 확인한 뒤 저장한다.
  *
  * @param path API 경로.
  * @param submissionid 요청을 발생시킨 화면의 submission 식별자.
@@ -82,7 +84,13 @@ export async function postG2b(
     throw collectionError(new G2bAccessDenied(`나라장터 API 접근이 거부됐습니다: ${path}`), { ...responseContext, step: "HTTP 응답" });
   if (!response.ok)
     throw collectionError(new Error(`나라장터 API 요청에 실패했습니다: ${path}`), { ...responseContext, step: "HTTP 응답" });
-  if (String(errorCode) !== "0")
+  // 코드 99와 상세가 함께 반환된 사례는 사전규격 상세에서 확인됐다.
+  const isPriorSpecDetailWithCode99 =
+    path === "/pn/pnz/pnza/BfSpec/selectBfSpec.do" &&
+    String(errorCode) === "99" &&
+    typeof result?.dlBfSpecM?.bfSpecRegNo === "string" &&
+    result.dlBfSpecM.bfSpecRegNo.trim() !== "";
+  if (String(errorCode) !== "0" && !isPriorSpecDetailWithCode99)
     throw collectionError(new Error(`나라장터 API가 오류를 반환했습니다: ${path}`), {
       ...responseContext,
       step: errorCode === undefined ? "응답 검증" : "나라장터 업무 응답",

@@ -87,6 +87,32 @@ function mockFetch(t, respond) {
   });
 }
 
+test('코드 99는 요청 번호와 일치하는 사전규격 상세만 저장한다', async (t) => {
+  const number = 'TESTSPEC99';
+  let detail = { bfSpecRegNo: number, bfSpecNm: '사전규격 테스트' };
+  mockFetch(t, (path) => {
+    if (path === '/') return session();
+    if (path.endsWith('/selectBfSpec.do')) {
+      return Response.json({ ErrorCode: '99', ErrorMsg: '정상적으로 조회되었습니다.', dlBfSpecM: detail });
+    }
+    assert.ok(path.endsWith('/selectOderPlan.do'));
+    return Response.json({ ErrorCode: '99', dlOderPlanM: { oderPlanNo: number } });
+  });
+
+  await collectPriorSpec(number);
+  const saved = repository.findPriorSpec(number);
+  assert.deepEqual(saved.payload.dlBfSpecM, detail);
+  assert.equal(saved.payload.ErrorCode, '99');
+
+  for (const invalidDetail of [undefined, { bfSpecRegNo: 'OTHER' }]) {
+    detail = invalidDetail;
+    await assert.rejects(collectPriorSpec(number, true));
+    assert.deepEqual(repository.findPriorSpec(number), saved);
+  }
+  await assert.rejects(collectOrderPlan(number));
+  assert.equal(repository.findOrderPlan(number), null);
+});
+
 test('기타 공고는 업무진행을 한 번 조회하고 기타 상세와 공개 첨부를 수집한다', async (t) => {
   const key = { number: 'R26BK01792130', revision: '000' };
   const detail = {
