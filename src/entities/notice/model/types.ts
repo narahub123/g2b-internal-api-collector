@@ -13,6 +13,8 @@ export type NoticeSummary = NoticeKey & {
 
 export type Notice = NoticeSummary & {
   payload: Record<string, unknown>;
+  // 원본 공고의 조회 번호와 다를 수 있는, 실제로 저장한 발주계획의 번호.
+  orderPlanNumber?: string;
   posts?: NoticePosts;
   contractRequests?: ContractRequestKey[];
   contracts?: ContractKey[];

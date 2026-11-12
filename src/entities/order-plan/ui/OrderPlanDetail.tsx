@@ -19,16 +19,18 @@ const linkClass = "text-primary underline underline-offset-2";
 
 /**
  * 발주계획 상세, 첨부파일과 연관 정보 링크를 독립적인 본문으로 표시한다.
- * @param props 나라장터 상세 응답과 첨부 정보를 담은 저장된 발주계획와 제목 영역의 동작 및 연관 업무 링크.
+ * @param props 저장된 발주계획, 수집으로 확인한 연관 공고 목록과 업무별 링크 및 제목 영역 동작.
  * @returns 페이지에 넣을 발주계획 본문.
  */
 export function OrderPlanDetail({
   plan,
+  notices,
   noticePath,
   priorSpecPath,
   actions,
 }: {
   plan: OrderPlan;
+  notices: ReturnType<typeof orderPlanNoticeReferences>;
   noticePath: (key: { number: string; revision: string }) => string | undefined;
   priorSpecPath: (number: string) => string | undefined;
   actions?: ReactNode;
@@ -43,7 +45,6 @@ export function OrderPlanDetail({
         .map((row) => g2bNumber(row?.bfSpecRegNo))
         .filter((number): number is string => number !== undefined)
     : [];
-  const notices = orderPlanNoticeReferences(plan);
   const files = orderPlanFiles(plan);
   const attachmentsPending = Boolean(
     orderPlanAttachmentGroup(plan) && !plan.attachments,

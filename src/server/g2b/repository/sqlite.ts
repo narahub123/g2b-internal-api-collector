@@ -119,10 +119,11 @@ export function openG2bRepository(): G2bRepository {
     UPDATE order_plans SET data = json_set(data, '$.attachments', json(?))
     WHERE number = ? AND collected_at = ? AND json_type(data, '$.attachments') IS NULL
   `);
-  // 기존에 수집한 공고도 원본 응답에 기록된 계획번호로 연결한다.
+  // 실제 저장 번호를 우선 사용하고 기존 공고는 원본 응답에 기록된 계획번호로 연결한다.
   const findNoticesForOrderPlan = db.prepare(`
     SELECT number, revision FROM notices
     WHERE coalesce(
+      json_extract(data, '$.orderPlanNumber'),
       nullif(trim(json_extract(data, '$.payload.dmItemMap.oderPlanUntyNo')), ''),
       trim(json_extract(data, '$.payload.dmItemMap.oderPlanNo'))
     ) = ?

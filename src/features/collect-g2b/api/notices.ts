@@ -187,7 +187,7 @@ export async function collectNotice(
     throw collectionValidationError("요청한 공고의 상세 응답을 받지 못했습니다.", field, key, { number, revision });
   }
   // 첨부 목록은 공고의 첨부 그룹만 조회하고, 제안요청은 상세 JS와 같이 협상계약에만 적용한다.
-  const orderPlanNumber = isEtc ? undefined : getNoticeOrderPlanNumber(payload);
+  const orderPlanLookupNumber = isEtc ? undefined : getNoticeOrderPlanNumber(payload);
   const priorSpecNumber = isEtc ? undefined : getNoticePriorSpecNumber(payload);
   const group = isEtc ? noticeAttachmentGroup(payload) : detail.itemPbancUntyAtchFileNo?.trim();
   const linkedRows = isEtc ? workProgress?.map((row) => {
@@ -213,11 +213,13 @@ export async function collectNotice(
     linkedRows ? collectNoticeContractLinks(key, linkedRows) : undefined,
     isEtc ? { targetRevisions: [], succeededRevisions: [], failures: [] } : collectNoticeOpeningResults(payload),
     isEtc ? undefined : collectNoticePosts(key, recordFailure),
-    orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
+    orderPlanLookupNumber ? collectOrderPlan(orderPlanLookupNumber, false, { fromNotice: true }) : undefined,
     priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
   ]);
-  const [attachments, proposal, contractLinks, openingResults, posts] = outcomes;
+  const [attachments, proposal, contractLinks, openingResults, posts, orderPlan] = outcomes;
+  const collectedOrderPlan = orderPlan.status === "fulfilled" ? orderPlan.value : undefined;
   if (recordFailure) {
+    if (collectedOrderPlan?.attachmentFailure) recordFailure(collectedOrderPlan.attachmentFailure.reason);
     for (const outcome of outcomes) {
       if (outcome.status === "rejected" && !findMaintenance(outcome.reason)) recordFailure(outcome.reason);
     }
@@ -254,6 +256,7 @@ export async function collectNotice(
       title: detail.bidPbancNm,
       collectedAt,
       payload,
+      orderPlanNumber: collectedOrderPlan?.number,
       posts: posts.status === "fulfilled" ? posts.value : undefined,
       documents,
       ...(contractLinks.status === "fulfilled" ? contractLinks.value : {}),

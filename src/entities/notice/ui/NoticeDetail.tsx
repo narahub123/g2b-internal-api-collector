@@ -104,6 +104,7 @@ function NoticeTable({
 /**
  * 수집한 입찰공고의 상세 정보, 관련 자료 및 원본 페이지 이동 기능을 표시한다.
  * 관련 자료의 주소가 없으면 원래 값을 표시하고, 제목 동작은 호출 화면이 제공할 때만 표시한다.
+ * 발주계획번호 항목은 공고 원본의 값을 표시하고 저장된 발주계획번호로 이동한다.
  * @param props 공고 데이터, 저장된 발주계획번호, 연관 업무 링크와 제목 영역의 동작.
  * @returns 공고 상세 본문과 조건에 따른 관련 정보 및 첨부 목록.
  */
@@ -217,8 +218,8 @@ export function NoticeDetail({
               <dl className="grid gap-4 text-sm">
                 {section.fields.map(({ label, value, ...rest }, index) => {
                   const priorSpecNumber = label === "사전규격등록번호" ? g2bNumber(value) : undefined;
-                  const href = label === "발주계획번호" && orderPlanNumber === value
-                    ? links.orderPlanPath(value)
+                  const href = label === "발주계획번호" && orderPlanNumber
+                    ? links.orderPlanPath(orderPlanNumber)
                     : priorSpecNumber && links.priorSpecPath(priorSpecNumber);
                   return (
                     <div

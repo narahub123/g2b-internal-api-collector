@@ -113,6 +113,95 @@ test('코드 99는 요청 번호와 일치하는 사전규격 상세만 저장�
   assert.equal(repository.findOrderPlan(number), null);
 });
 
+test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번호로 연결한다', async (t) => {
+  const { collectAndSaveNotice } = require('../src/features/collect-g2b/server');
+  const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
+  const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
+  const { createElement } = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const noticeKey = { number: 'R26BK01824855', revision: '000' };
+  const detail = {
+    bidPbancNo: noticeKey.number, bidPbancOrd: noticeKey.revision, bidPbancNm: '발주계획 연결 공고',
+    oderPlanUntyNo: 'P81202600BB1-00',
+  };
+  const responseNumber = 'R26DD20926396';
+  let returnedNumber;
+  let attachmentStatus = 500;
+  let planCalls = 0;
+  let attachmentCalls = 0;
+  mockFetch(t, (path, options) => {
+    if (path === '/') return session();
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+    if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
+    if (path.endsWith('/selectItemAnncMngV.do')) return success({ dmItemMap: detail });
+    if (path.endsWith('/selectOderPlan.do')) {
+      assert.equal(JSON.parse(options.body).dlParamM.oderPlanNo, detail.oderPlanUntyNo);
+      planCalls++;
+      return success({ dlOderPlanM: { oderPlanNo: returnedNumber, oderPlanUntyAtchFileNo: group } });
+    }
+    assert.ok(path.endsWith('/selectUntyAtchFileList.do'), path);
+    attachmentCalls++;
+    return attachmentStatus === 500
+      ? new Response(null, { status: 500 })
+      : success({ dlUntyAtchFileL: [] });
+  });
+
+  const recollect = () => collectAndSaveNotice({ ...noticeKey, methodCode: '' });
+  for (returnedNumber of [undefined, 'R26BK20926396']) {
+    await recollect();
+    assert.equal((await repository.find(noticeKey)).orderPlanNumber, undefined);
+    assert.equal(repository.findOrderPlan('R26BK20926396'), null);
+  }
+
+  returnedNumber = responseNumber;
+  await recollect();
+  assert.equal(planCalls, 3);
+  assert.equal(attachmentCalls, 1);
+  const saved = await repository.find(noticeKey);
+  assert.deepEqual(saved.payload.dmItemMap, detail);
+  assert.equal(saved.orderPlanNumber, responseNumber);
+  assert.equal(repository.findOrderPlan(responseNumber).attachments, undefined);
+  assert.equal(repository.findOrderPlan(detail.oderPlanUntyNo), null);
+  const linkedNotices = () => repository.findNoticesForOrderPlan(responseNumber).map((row) => ({ ...row }));
+  assert.deepEqual(linkedNotices(), [noticeKey]);
+  assert.deepEqual(repository.findNoticesForOrderPlan(detail.oderPlanUntyNo), []);
+  await assert.rejects(collectOrderPlan(detail.oderPlanUntyNo, true), /발주계획의 상세 응답/);
+
+  attachmentStatus = 200;
+  detail.oderPlanUntyNo = 'R26DD20926397';
+  await recollect();
+  assert.ok(repository.findOrderPlan(responseNumber).attachments);
+  const collected = repository.findOrderPlan(responseNumber);
+  await recollect();
+  assert.deepEqual(repository.findOrderPlan(responseNumber), collected);
+  assert.equal(attachmentCalls, 2);
+
+  detail.oderPlanUntyNo = 'P81202600BB1-00';
+  await recollect();
+  const admin = await NoticeDetailPage({ params: Promise.resolve(noticeKey) });
+  const user = await G2bDetailPage({
+    section: 'notices', params: Promise.resolve(noticeKey), searchParams: Promise.resolve({}),
+  });
+  for (const [page, prefix] of [[admin, '/admin'], [user, '']]) {
+    const body = page.props.children.find((child) => child?.props?.notice);
+    const html = renderToStaticMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
+    assert.ok(html.includes(`href="${prefix}/g2b/order-plans/${responseNumber}">${detail.oderPlanUntyNo}</a>`));
+  }
+
+  const legacyKey = { number: 'R26BK01824856', revision: '000' };
+  await repository.save({
+    ...saved, ...legacyKey, orderPlanNumber: undefined,
+    payload: { dmItemMap: { ...detail, oderPlanUntyNo: responseNumber } },
+  });
+  assert.deepEqual(linkedNotices(), [noticeKey, legacyKey]);
+  const orderPlanPage = await G2bDetailPage({
+    section: 'order-plans', params: Promise.resolve({ number: responseNumber }), searchParams: Promise.resolve({}),
+  });
+  const orderPlanBody = orderPlanPage.props.children.find((child) => child?.props?.plan);
+  assert.equal(orderPlanBody.props.noticePath(noticeKey), '/g2b/notices/R26BK01824855/000');
+  assert.ok(orderPlanBody.props.notices.some(({ number }) => number === noticeKey.number));
+});
+
 test('기타 공고는 업무진행을 한 번 조회하고 기타 상세와 공개 첨부를 수집한다', async (t) => {
   const key = { number: 'R26BK01792130', revision: '000' };
   const detail = {

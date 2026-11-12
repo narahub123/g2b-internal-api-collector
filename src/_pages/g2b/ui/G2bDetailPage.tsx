@@ -53,9 +53,11 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
       const plan = repository.findOrderPlan(number);
       if (!plan) notFound();
       // 공통 본문의 링크 함수는 동기이므로 연결된 공고의 저장 여부를 먼저 조회한다.
-      const noticePath = await savedNoticePaths(orderPlanNoticeReferences(plan));
+      const notices = orderPlanNoticeReferences(plan, repository.findNoticesForOrderPlan(number));
+      const noticePath = await savedNoticePaths(notices);
       return <OrderPlanDetail
         plan={plan}
+        notices={notices}
         priorSpecPath={priorSpecPath}
         noticePath={noticePath}
       />;
@@ -83,7 +85,7 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
       if (!notice) notFound();
       return <NoticeDetail
         notice={notice}
-        orderPlanNumber={getNoticeOrderPlanNumber(notice.payload)}
+        orderPlanNumber={notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload)}
         links={{
           orderPlanPath,
           priorSpecPath,
