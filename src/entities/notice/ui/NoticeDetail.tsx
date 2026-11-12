@@ -17,6 +17,7 @@ import {
 } from "../model/notice-display";
 import type { Notice } from "../model/types";
 import { etcNoticeDetail, noticeDetail } from "../model/notice-detail";
+import type { NumberWithRevision } from "@/shared/lib/g2b/revision-route";
 
 /**
  * 공고 필드값을 HTML 표시 정책에 따라 출력한다.
@@ -101,10 +102,19 @@ function NoticeTable({
   );
 }
 
+/** 공고번호와 차수로 나라장터의 공개 상세 링크를 만든다. */
+function originalNoticeHref({ number, revision }: NumberWithRevision) {
+  return `https://www.g2b.go.kr/link/PNPE027_01/single/?${new URLSearchParams({
+    bidPbancNo: number,
+    bidPbancOrd: revision,
+  })}`;
+}
+
 /**
  * 수집한 입찰공고의 상세 정보, 관련 자료 및 원본 페이지 이동 기능을 표시한다.
  * 관련 자료의 주소가 없으면 원래 값을 표시하고, 제목 동작은 호출 화면이 제공할 때만 표시한다.
  * 발주계획번호 항목은 공고 원본의 값을 표시하고 저장된 발주계획번호로 이동한다.
+ * 관련공고는 저장된 상세로 연결하며, 미수집 공고는 나라장터 원본 상세로 연결한다.
  * @param props 공고 데이터, 저장된 발주계획번호, 연관 업무 링크와 제목 영역의 동작.
  * @returns 공고 상세 본문과 조건에 따른 관련 정보 및 첨부 목록.
  */
@@ -119,6 +129,7 @@ export function NoticeDetail({
   links: {
     contractPath: (key: { number: string; revision: string }) => string | undefined;
     contractRequestPath: (key: { number: string; revision: string }) => string | undefined;
+    noticePath: (key: NumberWithRevision) => string | undefined;
     openingResultPath: (key: { number: string; revision: string }) => string | undefined;
     orderPlanPath: (number: string) => string | undefined;
     priorSpecPath: (number: string) => string | undefined;
@@ -130,6 +141,7 @@ export function NoticeDetail({
       label: "계약요청",
       links: (notice.contractRequests ?? []).map((key) => ({
         ...key,
+        text: `${key.number} / ${key.revision}`,
         href: links.contractRequestPath(key),
       })),
     },
@@ -137,6 +149,7 @@ export function NoticeDetail({
       label: "계약현황",
       links: (notice.contracts ?? []).map((key) => ({
         ...key,
+        text: `${key.number} / ${key.revision}`,
         href: links.contractPath(key),
       })),
     },
@@ -171,12 +184,7 @@ export function NoticeDetail({
 
   // 현재는 원본 페이지 존재 여부를 알려주는 공고 API 항목이 없어 번호와 차수로 링크를 생성해 항상 표시한다.
   // 향후 해당 정보가 수집되면 원본 페이지의 존재 여부에 따른 표시 조건을 적용할 수 있다.
-  const originalHref = `https://www.g2b.go.kr/link/PNPE027_01/single/?${new URLSearchParams(
-    {
-      bidPbancNo: number,
-      bidPbancOrd: revision,
-    },
-  )}`;
+  const originalHref = originalNoticeHref(notice);
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
@@ -213,6 +221,19 @@ export function NoticeDetail({
         )}
         {sections.map((section) => {
           const { title } = section;
+          const relatedLinks = title === relatedNoticeSectionTitle || (isEtc && title === "공고일반")
+            ? [...contractLinks]
+            : [];
+          if ("relatedNotices" in section && section.relatedNotices?.length) {
+            relatedLinks.unshift({
+              label: "관련공고",
+              links: section.relatedNotices.map((key) => ({
+                ...key,
+                text: `${key.number}-${key.revision}`,
+                href: links.noticePath(key) ?? originalNoticeHref(key),
+              })),
+            });
+          }
           return "fields" in section ? (
             <DetailAccordionSection key={title} title={title}>
               <dl className="grid gap-4 text-sm">
@@ -263,8 +284,7 @@ export function NoticeDetail({
                     </div>
                   );
                 })}
-                {(title === relatedNoticeSectionTitle || (isEtc && title === "공고일반")) &&
-                  contractLinks.map(({ label, links }) => (
+                {relatedLinks.map(({ label, links }) => (
                     <div
                       key={label}
                       className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]"
@@ -272,13 +292,13 @@ export function NoticeDetail({
                       <dt className="text-muted-foreground">{label}</dt>
                       <dd>
                         <ul className="grid gap-1">
-                          {links.map(({ number, revision, href }, index) => (
+                          {links.map(({ number, revision, text, href }, index) => (
                             <li key={`${number}/${revision}/${index}`}>
                               {href ? (
                                 <Link href={href} className="text-primary underline underline-offset-2">
-                                  {number} / {revision}
+                                  {text}
                                 </Link>
-                              ) : `${number} / ${revision}`}
+                              ) : text}
                             </li>
                           ))}
                         </ul>

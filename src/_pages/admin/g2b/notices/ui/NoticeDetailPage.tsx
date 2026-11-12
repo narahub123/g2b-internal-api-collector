@@ -5,16 +5,18 @@ import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan
 import {
   contractPath,
   contractRequestPath,
+  noticePath,
   openingResultPath,
   orderPlanPath,
   priorSpecPath,
 } from "@/_pages/admin/config/routes";
 import type { NoticeKey } from "@/entities/notice";
+import { getRelatedNoticeKeys } from "@/entities/notice/model/notice-display";
 import { NoticeDetail } from "@/entities/notice/ui/NoticeDetail";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 
 /**
- * 저장된 공고와 연결 가능한 발주계획을 조회해 상세 화면을 구성한다.
+ * 저장된 공고와 연결 가능한 발주계획을 조회하고 관리자 상세 경로를 본문에 전달한다.
  * @param props Next.js에서 전달한 공고번호와 차수.
  * @throws 저장된 공고가 없으면 Next.js의 404 처리를 호출하고, 조회 오류는 호출자에 전달한다.
  */
@@ -26,13 +28,27 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
   const number = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
   const orderPlanNumber =
     number && repository.findOrderPlan(number) ? number : undefined;
+  const savedNoticePaths = new Set<string>();
+  await Promise.all(getRelatedNoticeKeys(notice.payload).map(async (key) => {
+    if (await repository.find(key)) savedNoticePaths.add(noticePath(key));
+  }));
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
       <DetailNavigation section="notices" />
       <NoticeDetail
         notice={notice}
         orderPlanNumber={orderPlanNumber}
-        links={{ contractPath, contractRequestPath, openingResultPath, orderPlanPath, priorSpecPath }}
+        links={{
+          contractPath,
+          contractRequestPath,
+          noticePath: (key) => {
+            const href = noticePath(key);
+            return savedNoticePaths.has(href) ? href : undefined;
+          },
+          openingResultPath,
+          orderPlanPath,
+          priorSpecPath,
+        }}
         renderActions={(input) => <RecollectButton endpoint="/api/notices" requestBody={input} compact />}
       />
     </div>

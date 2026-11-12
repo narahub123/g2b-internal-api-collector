@@ -40,6 +40,21 @@ const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]
 const { collectNotice } = require('../src/features/collect-g2b/api/notices');
 const { getNoticeDisplay, getNoticeAttachmentFiles } = require('../src/entities/notice/model/notice-display');
 
+test('관련공고는 상세 응답의 번호와 차수를 원본 순서로 연관정보에 표시한다', () => {
+  const display = (relaPbancNo) => getNoticeDisplay({ dmItemMap: { relaPbancNo } }, undefined, () => undefined)
+    .find(({ title }) => title === '연관정보');
+
+  assert.deepEqual(display('R26BK01815045-001,R26BK01815045-000').relatedNotices, [
+    { number: 'R26BK01815045', revision: '001' },
+    { number: 'R26BK01815045', revision: '000' },
+  ]);
+  assert.deepEqual(display('R26BK01795517-000').relatedNotices, [
+    { number: 'R26BK01795517', revision: '000' },
+  ]);
+  assert.equal(display(' , , '), undefined);
+  assert.equal(display(undefined), undefined);
+});
+
 test('사용자 상세의 목록 복귀 주소는 같은 업무의 홈 조회 조건만 허용한다', () => {
   const { userDetailPath, userListReturnHref } = require('../src/_pages/g2b/config/routes');
   assert.equal(userDetailPath('order-plans', { number: 'PLAN-1', revision: '' }), '/g2b/order-plans/PLAN-1');

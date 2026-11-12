@@ -6,6 +6,7 @@ import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";
 import { getNoticeAttachmentKindName } from "@/shared/model/g2b/attachment-kind-codes";
 import { formatAttachmentFileSize } from "@/shared/model/g2b/attachment-file-size";
+import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import {
   formatG2bDisplayText,
   type G2bDisplayFormat,
@@ -15,7 +16,7 @@ type RecordValue = Record<string, unknown>;
 type Column = readonly [key: string, label: string];
 type Field = readonly [key: string, label?: string, visible?: boolean];
 
-// 연관정보는 일반 필드 외에 계약요청 목록도 표시하므로 섹션 식별용 이름을 공유한다.
+// 연관정보는 일반 필드 외에 관련공고와 계약 목록도 표시하므로 섹션 이름을 공유한다.
 export const relatedNoticeSectionTitle = "연관정보";
 
 // ItemBidAnncMngV 화면에서 필드와 표가 나오는 순서다.
@@ -396,6 +397,23 @@ function etcNoticeSections(detail: RecordValue) {
 }
 
 /**
+ * 상세 응답에 포함된 관련공고 번호를 원본 순서대로 상세 조회 키로 변환한다.
+ * @returns 일반 공고의 유효한 번호와 차수 목록. 기타 공고의 관련공고 목록은 별도 형식을 사용한다.
+ */
+export function getRelatedNoticeKeys(payload: RecordValue) {
+  if (etcNoticeDetail(payload)) return [];
+  const value = record(payload.dmItemMap).relaPbancNo;
+  // 공고번호 자체에 하이픈이 포함될 수 있으므로 끝의 세 자리를 차수로 분리한다.
+  return typeof value === "string"
+    ? value.split(",").flatMap((entry) => {
+        const match = /^(.+)-(\d{3})$/.exec(entry.trim());
+        const number = g2bNumber(match?.[1]);
+        return number && match ? [{ number, revision: match[2] }] : [];
+      })
+    : [];
+}
+
+/**
  * 저장한 응답에서 공고 상세 화면에 표시할 항목을 구성한다.
  * @param payload 공고 상세 API의 원본 응답.
  * @param documents 문서 API의 원본 응답. 이전에 저장한 공고에는 없을 수 있다.
@@ -415,6 +433,7 @@ export function getNoticeDisplay(
   const detail = record(payload.dmItemMap);
   const guide = record(payload.dmItemGuidMap);
   const evaluation = record(payload.dmEvlStepMap);
+  const relatedNotices = getRelatedNoticeKeys(payload);
   // 이하 조건들은 원본 화면의 필드 및 표 표시 여부를 판단하는 데 사용한다.
   const standard = detail.stdPbancDocAplcnYn === "Y";
   const goods = detail.prcmBsneSeCd === "01";
@@ -679,6 +698,7 @@ export function getNoticeDisplay(
     },
     {
       title: relatedNoticeSectionTitle,
+      relatedNotices,
       fields: fields(
         {
           ...detail,
@@ -696,7 +716,7 @@ export function getNoticeDisplay(
     (group) =>
       group.fields.length > 0 ||
       group.nestedTable ||
-      (group.title === relatedNoticeSectionTitle && hasContractLinks),
+      (group.title === relatedNoticeSectionTitle && (relatedNotices.length > 0 || hasContractLinks)),
   );
 
   // 일반 첨부파일과 공개 제안요청 문서를 서로 다른 데이터 원본에서 추린다.
