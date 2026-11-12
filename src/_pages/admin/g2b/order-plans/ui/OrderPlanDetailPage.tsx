@@ -3,6 +3,7 @@ import { noticePath, priorSpecPath } from "@/_pages/admin/config/routes";
 import { notFound } from "next/navigation";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { OrderPlanDetail } from "@/entities/order-plan/ui/OrderPlanDetail";
+import { orderPlanNoticeReferences } from "@/entities/order-plan/model/order-plan";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 import { UncollectedBadge } from "@/shared/ui/g2b/UncollectedBadge";
@@ -28,6 +29,7 @@ export async function OrderPlanDetailPage({
       {plan ? (
         <OrderPlanDetail
           plan={plan}
+          notices={orderPlanNoticeReferences(plan, repository.findNoticesForOrderPlan(number))}
           noticePath={noticePath}
           priorSpecPath={priorSpecPath}
           actions={<RecollectButton endpoint={`/api/order-plans/${encodeURIComponent(number)}`} compact />}

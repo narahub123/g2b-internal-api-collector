@@ -1,4 +1,5 @@
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
+import type { NoticeKey } from "@/entities/notice/model/types";
 import {
   attachmentGroup,
   publicAttachmentFiles,
@@ -47,10 +48,14 @@ export function getNoticeOrderPlanNumber(payload: Record<string, unknown>) {
   }
 }
 
-/** 발주계획의 연관 공고를 번호·차수로 정규화하고 원래 표시용 식별자를 함께 반환한다. */
-export function orderPlanNoticeReferences(plan: OrderPlan) {
+/**
+ * 발주계획 응답의 공고 순서와 표시 번호를 보존하고, 공고 수집에서 확인한 연결을 뒤에 추가한다.
+ * @param plan 연관 공고 목록을 포함할 수 있는 발주계획 원본.
+ * @param linkedNotices 이 발주계획에 연결된 저장 공고. 원본 목록의 번호·차수와 겹치면 생략한다.
+ */
+export function orderPlanNoticeReferences(plan: OrderPlan, linkedNotices: NoticeKey[] = []) {
   const detail = plan.payload.dlOderPlanM;
-  return Array.isArray(detail.bidPbancList)
+  const references = Array.isArray(detail.bidPbancList)
     ? detail.bidPbancList.flatMap((row) => {
         const number = g2bNumber(row?.bidPbancNo);
         const order = row?.bidPbancOrd;
@@ -70,4 +75,12 @@ export function orderPlanNoticeReferences(plan: OrderPlan) {
         ];
       })
     : [];
+  const seen = new Set(references.map(({ number, revision }) => `${number}-${revision}`));
+  for (const key of linkedNotices) {
+    const label = `${key.number}-${key.revision}`;
+    if (seen.has(label)) continue;
+    references.push({ ...key, label });
+    seen.add(label);
+  }
+  return references;
 }

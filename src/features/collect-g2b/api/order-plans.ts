@@ -8,21 +8,36 @@ import { collectAttachments } from "./attachments";
 import { collectOnce } from "./collect-once";
 import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
 
+// 공고의 조회 번호와 달라도 차세대 나라장터 발주계획번호 형식이면 상세 응답의 번호를 사용한다.
+const orderPlanNumberPattern = /^R[0-9]{2}DD[0-9]{8}$/;
+
+type CollectedOrderPlan = {
+  number: string;
+  attachmentFailure?: { reason: unknown };
+};
+
 /**
  * 발주계획 본문과 첨부 목록을 수집한다. 일반 수집은 저장된 본문을 재사용하고 누락된 첨부만 보충한다.
  * 새 본문의 첨부 조회가 일반 오류로 끝나면 본문을 남겨 다음 수집에서 첨부만 조회한다. 점검이면 저장을 보류한다.
  * @param number 발주계획번호.
  * @param force 기본값은 false. true이면 상세와 첨부를 모두 다시 조회하고 성공 시 교체한다.
- * @throws 점검, 세션 발급, 상세·첨부 조회 또는 검증, 저장소 접근이 실패한 경우.
+ * @param options.fromNotice 공고에서 연결된 계획을 수집할 때 유효한 응답 번호를 저장 키로 허용한다.
+ * @returns 저장된 번호와, 공고 수집에서 본문을 연결할 수 있는 경우 첨부 오류를 함께 반환한다.
+ * @throws 점검, 세션 발급, 상세 조회 또는 검증, 저장소 접근 실패 및 직접 수집의 첨부 오류.
  */
-export async function collectOrderPlan(number: string, force = false) {
+export async function collectOrderPlan(
+  number: string,
+  force = false,
+  { fromNotice = false }: { fromNotice?: boolean } = {},
+): Promise<CollectedOrderPlan> {
   const repository = getG2bRepository();
+  const allowResponseNumber = fromNotice && !force;
 
-  return collectOnce(`order-plan:${number}`, force, async () => {
+  return collectOnce(`order-plan:${allowResponseNumber ? "notice:" : ""}${number}`, force, async () => {
     let plan = force ? null : await trackCollectionLookup({ section: "order-plans", number }, "발주계획", () => repository.findOrderPlan(number));
-    const needsDetail = !plan;
+    let needsSave = !plan;
     // 저장된 본문이 있고 첨부 수집이 끝났거나 첨부 그룹이 없으면 중복 요청을 피한다.
-    if (plan && (plan.attachments || !orderPlanAttachmentGroup(plan))) return;
+    if (plan && (plan.attachments || !orderPlanAttachmentGroup(plan))) return { number: plan.number };
     return trackCollectionAttempt({ section: "order-plans", number }, async (recordFailure) => {
       const request = await createG2bSession();
       if (!plan) {
@@ -33,17 +48,30 @@ export async function collectOrderPlan(number: string, force = false) {
           { dlParamM: { oderPlanNo: number, resultCnt: "" } },
           request,
         );
-        if (payload?.dlOderPlanM?.oderPlanNo !== number) {
+        const responseNumber = payload?.dlOderPlanM?.oderPlanNo;
+        if (responseNumber !== number &&
+            !(allowResponseNumber && typeof responseNumber === "string" && orderPlanNumberPattern.test(responseNumber))) {
           throw collectionValidationError("요청한 발주계획의 상세 응답을 받지 못했습니다.", "dlOderPlanM.oderPlanNo",
-            { number }, { number: payload?.dlOderPlanM?.oderPlanNo });
+            { number }, { number: responseNumber });
         }
-        plan = { number, collectedAt, payload };
+        if (responseNumber !== number) {
+          // 여러 공고가 같은 응답 번호로 연결될 수 있으므로 이미 저장한 본문과 첨부를 재사용한다.
+          plan = collectionStep("SQLite 응답 발주계획 조회", () => repository.findOrderPlan(responseNumber));
+          needsSave = !plan;
+        }
+        plan ??= { number: responseNumber, collectedAt, payload };
       }
+      const savedNumber = plan.number;
       const group = orderPlanAttachmentGroup(plan);
-      const attachments = group
-        ? await collectAttachments(group, "order-plan", request).catch((error: unknown) => {
-            // 일반 오류일 때만 새 본문을 남겨 다음 수집에서 첨부 조회를 이어간다.
-            if (!findMaintenance(error) && !force && needsDetail) {
+      if (!needsSave && (plan.attachments || !group)) return { number: savedNumber };
+      let attachments;
+      if (group) {
+        try {
+          attachments = await collectAttachments(group, "order-plan", request);
+        } catch (error) {
+          // 일반 오류일 때만 새 본문을 남겨 다음 수집에서 첨부 조회를 이어간다.
+          if (!findMaintenance(error) && !force) {
+            if (needsSave) {
               try {
                 collectionStep("SQLite 발주계획 부분 저장", () => repository.saveOrderPlan(plan));
               } catch (saveError) {
@@ -51,17 +79,23 @@ export async function collectOrderPlan(number: string, force = false) {
                 throw saveError;
               }
             }
-            throw error;
-          })
-        : undefined;
+            if (allowResponseNumber) {
+              recordFailure(error);
+              return { number: savedNumber, attachmentFailure: { reason: error } };
+            }
+          }
+          throw error;
+        }
+      }
       if (force) collectionStep("SQLite 발주계획 저장", () => repository.replaceOrderPlan({ ...plan, attachments }));
-      else if (needsDetail) collectionStep("SQLite 발주계획 저장", () => repository.saveOrderPlan({ ...plan, attachments }));
+      else if (needsSave) collectionStep("SQLite 발주계획 저장", () => repository.saveOrderPlan({ ...plan, attachments }));
       else if (attachments)
         collectionStep("SQLite 발주계획 첨부 저장", () => repository.saveOrderPlanAttachments(
-          number,
+          savedNumber,
           plan.collectedAt,
           attachments,
         ));
+      return { number: savedNumber };
     });
   });
 }

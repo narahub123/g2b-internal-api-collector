@@ -23,7 +23,7 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
   const notice = await repository.find(await params);
   if (!notice) notFound();
 
-  const number = getNoticeOrderPlanNumber(notice.payload);
+  const number = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
   const orderPlanNumber =
     number && repository.findOrderPlan(number) ? number : undefined;
   return (
