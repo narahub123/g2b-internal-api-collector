@@ -29,7 +29,7 @@ function regionsFrom(raw: unknown) {
 
 function noticeFields(raw: unknown) {
   const { payload = {}, title } =
-    typeof raw === "string" ? JSON.parse(raw) : {};
+    (typeof raw === "string" ? JSON.parse(raw) : null) ?? {};
   const detail = noticeDetail(payload ?? {});
   const isEtc = Boolean(etcNoticeDetail(payload ?? {}));
   const business = resolveG2bBusiness(detail.prcmBsneSeCd, detail.prcmBsneSeNm);
@@ -82,15 +82,17 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
   );
   const regions = db.prepare(`
     SELECT DISTINCT region.value AS label
-    FROM notices, json_each(notice_list_regions(json_extract(data, '$.payload.dmItemMap.rgnLmtCn'))) region
-    WHERE json_extract(data, '$.payload.dmItemMap.rgnLmtYn') = 'Y'
+    FROM notices, json_each(notice_list_regions(
+      CASE WHEN json_valid(data) THEN json_extract(data, '$.payload.dmItemMap.rgnLmtCn') END
+    )) region
+    WHERE CASE WHEN json_valid(data) THEN json_extract(data, '$.payload.dmItemMap.rgnLmtYn') = 'Y' END
     ORDER BY label
   `);
   const businesses = db.prepare(`
     SELECT DISTINCT COALESCE(json_extract(data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd')) AS code,
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS label
-    FROM notices
+    FROM notices WHERE json_valid(data)
   `);
 
   return {

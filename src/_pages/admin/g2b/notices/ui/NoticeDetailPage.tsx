@@ -11,7 +11,6 @@ import {
   priorSpecPath,
 } from "@/_pages/admin/config/routes";
 import type { NoticeKey } from "@/entities/notice";
-import { getRelatedNoticeKeys } from "@/entities/notice/model/notice-display";
 import { NoticeDetail } from "@/entities/notice/ui/NoticeDetail";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
 
@@ -28,10 +27,6 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
   const number = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
   const orderPlanNumber =
     number && repository.findOrderPlan(number) ? number : undefined;
-  const savedNoticePaths = new Set<string>();
-  await Promise.all(getRelatedNoticeKeys(notice.payload).map(async (key) => {
-    if (await repository.find(key)) savedNoticePaths.add(noticePath(key));
-  }));
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
       <DetailNavigation section="notices" />
@@ -41,10 +36,7 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
         links={{
           contractPath,
           contractRequestPath,
-          noticePath: (key) => {
-            const href = noticePath(key);
-            return savedNoticePaths.has(href) ? href : undefined;
-          },
+          noticePath: (key) => repository.findUsableNotice(key) ? noticePath(key) : undefined,
           openingResultPath,
           orderPlanPath,
           priorSpecPath,

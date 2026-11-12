@@ -521,6 +521,129 @@ function noticeDetail(extra = {}) {
   } });
 }
 
+function relatedNoticeRequest(number, revision = '000') {
+  return postNotice(new Request('http://localhost/api/notices', {
+    method: 'POST', body: JSON.stringify({ number, revision, methodCode: '' }),
+  }));
+}
+
+function mockRelatedNotices(t, onDetail) {
+  return mockFetch(t, (path, options) => {
+    if (path === '/') return session();
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+    if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
+    assert.ok(path.endsWith('/selectItemAnncMngV.do'), path);
+    const { dmItemMap } = JSON.parse(options.body);
+    return onDetail(dmItemMap, (related) => noticeDetail({ ...dmItemMap, relaPbancNo: related }));
+  });
+}
+
+test('관련공고 수집은 정상 저장 건을 거쳐 미수집 차수까지 탐색하고 내부 링크를 표시한다', async (t) => {
+  const a = 'R26BK00000601', b = 'R26BK00000602', c = 'R26BK00000603';
+  const bKey = { number: b, revision: '000' };
+  await repository.save({ ...bKey, title: '저장 공고', collectedAt, payload: { dmItemMap: {
+    bidPbancNo: b, bidPbancOrd: 0, relaPbancNo: `${c}-000,${c}-001,${a}-000`,
+  } } });
+  const start = t.mock.method(repository.collectionAttempts, 'start');
+  const calls = [];
+  mockRelatedNotices(t, ({ bidPbancNo, bidPbancOrd, scsbdMthdCd }, detail) => {
+    assert.equal(scsbdMthdCd, '');
+    calls.push(`${bidPbancNo}-${bidPbancOrd}`);
+    return detail(bidPbancNo === a ? `${a}-000,${b}-000,${b}-000,${c}-000` : undefined);
+  });
+  assert.equal((await relatedNoticeRequest(a)).status, 200);
+  assert.deepEqual(calls, [`${a}-000`, `${c}-000`, `${c}-001`]);
+  assert.ok(start.mock.calls.every(({ arguments: [target] }) => target.number !== b));
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { createElement } = require('react');
+  const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
+  const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
+  const params = Promise.resolve({ number: a, revision: '000' });
+  const admin = await NoticeDetailPage({ params });
+  const user = await G2bDetailPage({
+    section: 'notices', params, searchParams: Promise.resolve({}),
+  });
+  for (const [page, prefix] of [[admin, '/admin'], [user, '']]) {
+    const body = page.props.children.find((child) => child?.props?.notice);
+    const html = renderToStaticMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
+    assert.ok(html.includes(`href="${prefix}/g2b/notices/${c}/000"`));
+  }
+});
+
+test('관련공고 수집은 손상된 상세를 복구하고 실패한 행을 보존하며 점검 시 중단한다', async (t) => {
+  const [a, badJson, missing, mismatch, failed, next, deferred, skipped, lookupError, retryChild, failedShape] =
+    Array.from({ length: 11 }, (_, index) => `R26BK${String(610 + index).padStart(8, '0')}`);
+  const db = new DatabaseSync(join(tempDir, '.data', 'notices.sqlite'));
+  t.after(() => db.close());
+  const insert = db.prepare('INSERT INTO notices VALUES (?, ?, ?, ?)');
+  const revision = '000';
+  const wrongDetail = JSON.stringify({ payload: { dmItemMap: { bidPbancNo: a, bidPbancOrd: revision } } });
+  for (const [number, data] of [
+    [badJson, '{'], [missing, '{}'], [mismatch, wrongDetail], [failed, '{'], [failedShape, 'null'],
+  ]) {
+    insert.run(number, revision, '2099-01-01T00:00:00.000Z', data);
+  }
+  const read = repository.findUsableNotice;
+  t.mock.method(repository, 'findUsableNotice', (key) => {
+    if (key.number === lookupError) throw new Error('SQLite 조회 테스트 오류');
+    return read(key);
+  });
+  const calls = [];
+  let retrying = false;
+  mockRelatedNotices(t, ({ bidPbancNo }, detail) => {
+    calls.push(bidPbancNo);
+    if (bidPbancNo === failed) return retrying ? detail(`${retryChild}-000`) : new Response('', { status: 500 });
+    if (bidPbancNo === failedShape) return new Response('', { status: 500 });
+    if (bidPbancNo === deferred) return maintenancePage();
+    if (bidPbancNo === a) return detail([badJson, missing, mismatch, failed, failedShape, lookupError, next, deferred, skipped]
+      .map((number) => `${number}-000`).join(','));
+    return detail();
+  });
+  assert.equal((await relatedNoticeRequest(a)).status, 200);
+  assert.deepEqual(calls, [a, badJson, missing, mismatch, failed, failedShape, next, deferred]);
+  for (const number of [badJson, missing, mismatch, next]) {
+    assert.equal((await repository.find({ number, revision })).payload.dmItemMap.bidPbancNo, number);
+  }
+  assert.equal(db.prepare('SELECT data FROM notices WHERE number = ?').get(failed).data, '{');
+  assert.equal(db.prepare('SELECT data FROM notices WHERE number = ?').get(failedShape).data, 'null');
+  assert.equal(await repository.find({ number: skipped, revision }), null);
+  const failures = repository.collectionAttempts.overview('notices').failures;
+  const failedAttempt = failures.find(({ number }) => number === failed);
+  assert.equal(failedAttempt.status, 'failed');
+  assert.doesNotThrow(() => repository.collectionAttempts.noticeList.regions());
+  assert.doesNotThrow(() => repository.collectionAttempts.noticeList.businesses());
+  const { noticeList } = repository.collectionAttempts;
+  assert.doesNotThrow(() => noticeList.page(parseNoticeListQuery({}, noticeList.regions(), noticeList.businesses())));
+  assert.equal(failures.find(({ number }) => number === deferred).status, 'deferred');
+  assert.match(failures.find(({ number }) => number === lookupError).diagnostics, /SQLite 관련공고 조회/);
+  const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
+  const page = await NoticeDetailPage({ params: Promise.resolve({ number: a, revision }) });
+  const body = page.props.children.find((child) => child?.props?.notice);
+  assert.equal(body.props.links.noticePath({ number: failed, revision }), undefined);
+  const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
+  retrying = true;
+  assert.equal((await retry(new Request('http://localhost', { method: 'POST' }), {
+    params: Promise.resolve({ id: String(failedAttempt.id) }),
+  })).status, 204);
+  assert.deepEqual(calls.slice(-2), [failed, retryChild]);
+  assert.ok(await repository.find({ number: retryChild, revision }));
+});
+
+test('서로 참조하는 공고의 동시 직접 수집은 단건 저장만 공유한다', { timeout: 5000 }, async (t) => {
+  const a = 'R26BK00000621', b = 'R26BK00000622';
+  const bothStarted = Promise.withResolvers();
+  const calls = [];
+  mockRelatedNotices(t, async ({ bidPbancNo }, detail) => {
+    calls.push(bidPbancNo);
+    if (calls.length === 2) bothStarted.resolve();
+    await bothStarted.promise;
+    return detail(`${bidPbancNo === a ? b : a}-000`);
+  });
+  const responses = await Promise.all([relatedNoticeRequest(a), relatedNoticeRequest(b)]);
+  assert.deepEqual(responses.map(({ status }) => status), [200, 200]);
+  assert.deepEqual(calls.sort(), [a, b]);
+});
+
 test('명시적인 점검 화면만 판별한다', () => {
   assert.throws(() => assertNotMaintenance(maintenanceHtml), G2bMaintenanceError);
   assert.throws(() => assertNotMaintenance(`<h1>시스템\n <span>점검</span>&nbsp;안내</h1><p>${interruption}</p>`), G2bMaintenanceError);
@@ -867,7 +990,9 @@ test('미저장 공고의 전체 수집 결과를 개찰 요청에 공유하고 
       fetchedNotices.push({ bidPbancNo, scsbdMthdCd });
       await new Promise(setImmediate);
       return success({
-        dmItemMap: { bidPbancNo, bidPbancOrd, bidPbancNm: '새 공고', prcmBsneSeCd: '03' },
+        dmItemMap: {
+          bidPbancNo, bidPbancOrd, bidPbancNm: '새 공고', prcmBsneSeCd: '03', relaPbancNo: 'R26BK00000699-000',
+        },
         dlBidBasePgstL: bidPbancNo === 'R26BK00000023' ? [] : ['001', '002'].map((bidPrgrsOrd) => ({
           bidPbancNo, bidPbancOrd, bidPrgrsOrd, bidClsfNo: '1', bidPgstCd: '입160005',
         })),

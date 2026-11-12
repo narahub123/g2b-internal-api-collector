@@ -69,7 +69,7 @@ const orderPlanAttemptKeys = `
     SELECT notice_order_plan_lookup(data) AS lookup_number,
       json_extract(data, '$.orderPlanNumber') AS plan_number
     FROM notices
-    WHERE json_type(data, '$.orderPlanNumber') = 'text'
+    WHERE CASE WHEN json_valid(data) THEN json_type(data, '$.orderPlanNumber') = 'text' END
   ),
   unique_order_plan_links AS (
     SELECT lookup_number, MIN(plan_number) AS plan_number
@@ -118,7 +118,7 @@ const savedQueries: Record<CollectionSection, string> = {
         json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd')) AS businessCode,
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel,
       data
-    FROM notices`,
+    FROM notices WHERE json_valid(data)`,
   "contract-requests": `
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.detail.bizNm') AS title,
@@ -153,7 +153,8 @@ const savedQueries: Record<CollectionSection, string> = {
       result.data,
       json_extract(notice.data, '$.payload.dmItemMap.dmstUntyGrpNm') AS linkedAgency
     FROM opening_results AS result
-    LEFT JOIN notices AS notice ON notice.number = result.number AND notice.revision = result.revision`,
+    LEFT JOIN notices AS notice ON notice.number = result.number AND notice.revision = result.revision
+      AND json_valid(notice.data)`,
 };
 
 /**

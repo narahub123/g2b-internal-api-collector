@@ -6,7 +6,6 @@ import { ContractRequestDetail } from "@/entities/contract-request/ui/ContractRe
 import { contractRevision } from "@/entities/contract/model/contract";
 import { ContractDetail } from "@/entities/contract/ui/ContractDetail";
 import { NoticeDetail } from "@/entities/notice/ui/NoticeDetail";
-import { getRelatedNoticeKeys } from "@/entities/notice/model/notice-display";
 import { openingResultNoticeKey } from "@/entities/opening-result/model/opening-result-display";
 import { openingResultHeader } from "@/entities/opening-result/model/opening-result-header";
 import { OpeningResultDetail } from "@/entities/opening-result/ui/OpeningResultDetail";
@@ -84,12 +83,13 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
       if (!/^\d{3}$/.test(revision)) notFound();
       const notice = await repository.find(key);
       if (!notice) notFound();
-      const noticePath = await savedNoticePaths(getRelatedNoticeKeys(notice.payload));
       return <NoticeDetail
         notice={notice}
         orderPlanNumber={notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload)}
         links={{
-          noticePath,
+          noticePath: (reference) => repository.findUsableNotice(reference)
+            ? userDetailPath("notices", reference)
+            : undefined,
           orderPlanPath,
           priorSpecPath,
           contractPath: (reference) => repository.findContract(reference)

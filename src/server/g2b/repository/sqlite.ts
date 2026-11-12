@@ -7,13 +7,42 @@ import type { OpeningResult } from '@/entities/opening-result/model/opening-resu
 import type { OrderPlan } from '@/entities/order-plan/model/order-plan';
 import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import type { Notice, NoticeKey, NoticeSummary } from '@/entities/notice/model/types';
+import { etcNoticeDetail } from '@/entities/notice/model/notice-detail';
 import type { G2bCollectionCounts, G2bRepository } from './types';
 import { openCollectionAttempts } from './collection-attempts';
+
+// 저장 키와 업무별 상세 응답의 번호·차수가 일치해야 재사용할 수 있다.
+function usableNotice(notice: Notice | null, { number, revision }: NoticeKey) {
+  const payload = notice?.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const etc = etcNoticeDetail(payload);
+  const detail = etc ?? payload.dmItemMap;
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null;
+  const fields = detail as Record<string, unknown>;
+  const detailNumber = etc ? fields.bidPbancUntyNo : fields.bidPbancNo;
+  const order = etc ? fields.bidPbancUntyOrd : fields.bidPbancOrd;
+  if (typeof order !== 'string' && typeof order !== 'number') return null;
+  const detailRevision = String(order);
+  return detailNumber === number && /^\d{1,3}$/.test(detailRevision) &&
+    detailRevision.padStart(3, '0') === revision ? notice : null;
+}
+
+function parseUsableNotice(data: string, key: NoticeKey) {
+  try {
+    return usableNotice(JSON.parse(data) as Notice | null, key);
+  } catch (error) {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
 
 export function openG2bRepository(): G2bRepository {
   const directory = join(process.cwd(), '.data');
   mkdirSync(directory, { recursive: true });
   const db = new DatabaseSync(join(directory, 'notices.sqlite'));
+  db.function('notice_has_usable_detail', { deterministic: true }, (data, number, revision) =>
+    Number(typeof data === 'string' && typeof number === 'string' && typeof revision === 'string' &&
+      Boolean(parseUsableNotice(data, { number, revision }))));
   db.exec(`
     PRAGMA busy_timeout = 5000;
     CREATE TABLE IF NOT EXISTS notices (
@@ -70,14 +99,16 @@ export function openG2bRepository(): G2bRepository {
       CAST(COALESCE(json_extract(data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),
         json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd')) AS TEXT) AS businessCode,
       CAST(json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS TEXT) AS businessLabel
-    FROM notices ORDER BY collected_at DESC, number, revision
+    FROM notices WHERE json_valid(data) ORDER BY collected_at DESC, number, revision
   `);
   const find = db.prepare('SELECT data FROM notices WHERE number = ? AND revision = ?');
+  // 정상적인 최신 응답은 보존하되 손상된 행의 저장 시각은 복구를 막지 않는다.
   const save = db.prepare(`
     INSERT INTO notices (number, revision, collected_at, data) VALUES (?, ?, ?, ?)
     ON CONFLICT (number, revision) DO UPDATE SET
       collected_at = excluded.collected_at, data = excluded.data
     WHERE excluded.collected_at >= notices.collected_at
+      OR notice_has_usable_detail(notices.data, notices.number, notices.revision) = 0
   `);
   const findOrderPlan = db.prepare('SELECT data FROM order_plans WHERE number = ?');
   const findOpeningResult = db.prepare('SELECT data FROM opening_results WHERE number = ? AND revision = ? AND opening_revision = ?');
@@ -122,11 +153,11 @@ export function openG2bRepository(): G2bRepository {
   // 실제 저장 번호를 우선 사용하고 기존 공고는 원본 응답에 기록된 계획번호로 연결한다.
   const findNoticesForOrderPlan = db.prepare(`
     SELECT number, revision FROM notices
-    WHERE coalesce(
+    WHERE CASE WHEN json_valid(data) THEN coalesce(
       json_extract(data, '$.orderPlanNumber'),
       nullif(trim(json_extract(data, '$.payload.dmItemMap.oderPlanUntyNo')), ''),
       trim(json_extract(data, '$.payload.dmItemMap.oderPlanNo'))
-    ) = ?
+    ) = ? END
     ORDER BY number, revision
   `);
 
@@ -145,6 +176,10 @@ export function openG2bRepository(): G2bRepository {
     async find({ number, revision }) {
       const row = find.get(number, revision);
       return row ? JSON.parse(String(row.data)) as Notice : null;
+    },
+    findUsableNotice({ number, revision }) {
+      const row = find.get(number, revision);
+      return row ? parseUsableNotice(String(row.data), { number, revision }) : null;
     },
     async save(notice) {
       save.run(notice.number, notice.revision, notice.collectedAt, JSON.stringify(notice));

@@ -26,6 +26,12 @@ export interface G2bRepository {
   getCollectionCounts(): G2bCollectionCounts;
   list(): Promise<NoticeSummary[]>;
   find(key: NoticeKey): Promise<Notice | null>;
+  /**
+   * 재사용할 수 있는 저장 상세를 읽고 업무별 상세 번호와 차수를 확인한다.
+   * @returns 키가 일치하는 저장 공고. 행이 없거나 상세를 읽을 수 없으면 null.
+   * @throws SQLite 조회에 실패한 경우.
+   */
+  findUsableNotice(key: NoticeKey): Notice | null;
   save(notice: Notice): Promise<void>;
   /**
    * 발주계획을 번호로 조회한다.
