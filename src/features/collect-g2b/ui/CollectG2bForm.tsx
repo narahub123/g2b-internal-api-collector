@@ -43,12 +43,13 @@ const settings = {
 
 /**
  * 업무에 필요한 식별자를 받아 기존 수집 API에 제출한다.
- * 오류가 나면 입력을 유지하고, 성공하면 정규화한 식별자를 호출자에게 전달한다.
+ * 오류가 나면 입력을 유지하고, 성공하면 정규화한 식별자를 전달한 뒤 화면 전환 처리가 끝날 때까지 제출을 막는다.
+ * @param props.onCollected 저장 성공 뒤 화면을 갱신하고 이동한다. 실패하면 수집 완료와 화면 갱신 실패를 함께 안내한다.
  * @param props.onFailure 일부 자료가 저장되었을 수 있으므로 호출 화면의 목록과 집계를 갱신한다.
  */
 export function CollectG2bForm({ section, onCollected, onFailure }: {
   section: CollectionSection;
-  onCollected: (key: NoticeKey) => void;
+  onCollected: (key: NoticeKey) => Promise<void>;
   onFailure: () => void;
 }) {
   const config = settings[section];
@@ -93,7 +94,11 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
         onFailure();
         return;
       }
-      onCollected(key);
+      try {
+        await onCollected(key);
+      } catch {
+        setError("수집은 완료됐지만 목록을 갱신하지 못했습니다. 페이지를 새로고침해 주세요.");
+      }
     } catch {
       setError("수집 요청을 완료하지 못했습니다. 다시 시도해 주세요.");
       onFailure();

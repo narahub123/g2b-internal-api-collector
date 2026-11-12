@@ -4,16 +4,21 @@ import { useRouter } from "next/navigation";
 import { CollectG2bForm } from "@/features/collect-g2b";
 import type { CollectionSection } from "@/server/g2b/repository/collection-attempts";
 import { collectionDetailPaths } from "../../config/routes";
+import { refreshCollectionNavigation } from "../actions/refresh-collection-navigation";
 
 /**
- * 업무 목록에 수집 폼을 배치하고 결과에 따라 상세 이동 또는 현재 목록 갱신을 수행한다.
+ * 수집 성공 시 이전 목록의 갱신을 기다린 뒤 상세로 이동한다.
+ * 수집 실패 시 부분 저장을 반영하도록 현재 목록을 갱신하고, 성공 후 갱신 오류는 수집 폼에 전달한다.
  */
 export function CollectionForm({ section }: { section: CollectionSection }) {
   const router = useRouter();
   return (
     <CollectG2bForm
       section={section}
-      onCollected={(key) => router.push(collectionDetailPaths[section](key))}
+      onCollected={async (key) => {
+        await refreshCollectionNavigation();
+        router.push(collectionDetailPaths[section](key));
+      }}
       onFailure={() => router.refresh()}
     />
   );
