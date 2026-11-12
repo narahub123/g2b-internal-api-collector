@@ -6,6 +6,11 @@ export const attachmentSources = {
     tblNm: "PBANC_BID_PBANC",
     colNm: "ITEM_PBANC_UNTY_ATCH_FILE_NO",
   },
+  "etc-notice": {
+    bsnePath: "PNPE",
+    tblNm: "PBANC_UNTY_BID_PBANC",
+    colNm: "UNTY_ATCH_FILE_NO",
+  },
   "notice-post": {
     bsnePath: "ntcbbs",
     tblNm: "PBASP_PST",

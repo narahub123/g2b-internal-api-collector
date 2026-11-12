@@ -1,5 +1,6 @@
 import { getG2bRepository } from "@/server/g2b/repository";
 import { noticePostRecord } from "@/entities/notice/model/notice-posts";
+import { etcNoticeDetail, noticeAttachmentGroup } from "@/entities/notice/model/notice-detail";
 import { attachmentGroup } from "@/shared/model/g2b/g2b-attachments";
 import type { CollectNoticeInput } from "../model/input";
 import { trackCollectionAttempt } from "./collection-attempt";
@@ -20,21 +21,26 @@ export async function collectAndSaveNotice(input: CollectNoticeInput) {
       const { notice, openingReport } = await collectNotice({ number, revision }, methodCode);
       const repository = getG2bRepository();
       const documents = notice.documents;
+      const isEtc = Boolean(etcNoticeDetail(notice.payload));
       if (documents?.unavailable?.length || notice.contractRequests === undefined || notice.contracts === undefined ||
-          !notice.posts || notice.posts.entries.some((post) => !post.body ||
-            (!post.attachments && attachmentGroup(noticePostRecord(post.detail?.dlPstM).untyAtchFileNo)))) {
+          (!isEtc && (!notice.posts || notice.posts.entries.some((post) => !post.body ||
+            (!post.attachments && attachmentGroup(noticePostRecord(post.detail?.dlPstM).untyAtchFileNo)))))) {
         // 일시적인 문서 조회 실패 때문에 이전에 저장한 원본 목록을 잃지 않도록 한다.
         const previous = await repository.find({ number, revision });
         if (documents) {
           for (const kind of documents.unavailable ?? []) {
+            if (isEtc && kind === "attachments") {
+              const group = noticeAttachmentGroup(notice.payload);
+              if (!previous || !group || group !== noticeAttachmentGroup(previous.payload)) continue;
+            }
             documents[kind] = previous?.documents?.[kind];
           }
         }
         notice.contractRequests ??= previous?.contractRequests;
         notice.contracts ??= previous?.contracts;
-        if (!notice.posts) {
+        if (!isEtc && !notice.posts) {
           notice.posts = previous?.posts;
-        } else {
+        } else if (notice.posts) {
           for (const post of notice.posts.entries) {
             const saved = previous?.posts?.entries.find(({ bbsNo, pstNo }) => bbsNo === post.bbsNo && pstNo === post.pstNo);
             if (!saved) continue;

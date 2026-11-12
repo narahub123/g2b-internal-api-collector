@@ -1,5 +1,7 @@
 import { openingResultQuery } from "@/entities/opening-result/model/opening-result";
 import type { Notice } from "./types";
+import { etcNoticeDetail, noticeAttachmentGroup } from "./notice-detail";
+import { publicAttachmentFiles } from "@/shared/model/g2b/g2b-attachments";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";
 import { getNoticeAttachmentKindName } from "@/shared/model/g2b/attachment-kind-codes";
@@ -273,6 +275,20 @@ export function getNoticeAttachmentFiles(
   payload: RecordValue,
   documents?: Notice["documents"],
 ) {
+  const etc = etcNoticeDetail(payload);
+  if (etc) {
+    // 공통 다운로드 API에는 기타 상세 응답의 BK 번호·차수와 업무구분을 전달한다.
+    const downloadKey = {
+      bidPbancNo: etc.bidPbancUntyNo,
+      bidPbancOrd: etc.bidPbancUntyOrd,
+      prcmBsneSeCd: etc.prcmBsneSeCd,
+    };
+    return publicAttachmentFiles(noticeAttachmentGroup(payload), documents?.attachments, "etc-notice")
+      .map((file) => ({
+        ...file,
+        href: file.downloadable ? attachmentDownloadUrl(downloadKey, { atchFileSqno: file.seq }) : undefined,
+      }));
+  }
   const detail = record(payload.dmItemMap);
   return documentRows(documents).map((row) => {
     const source: RecordValue = row;
@@ -325,6 +341,60 @@ export function getNoticeProposalFiles(
   });
 }
 
+/** 기타 원본 화면의 고정 필드와 조건부 표시값을 화면 순서대로 구성한다. */
+function etcNoticeSections(detail: RecordValue) {
+  const kind = displayValue(detail.pbancKndNm);
+  const status = displayValue(detail.pbancSttsNm);
+  const title = displayValue(detail.bidPbancNm);
+  const fee = displayValue(detail.bidFee);
+  const related = Array.isArray(detail.relaPbancList)
+    ? detail.relaPbancList.flatMap((item) => {
+        const { bidPbancUntyNo, bidPbancUntyOrd } = record(item);
+        const number = displayValue(bidPbancUntyNo);
+        const revision = displayValue(bidPbancUntyOrd);
+        return number && revision ? [`${number}-${revision}`] : [];
+      })
+    : [];
+  const values: RecordValue = {
+    ...detail,
+    kindAndStatus: kind && status ? `${kind}(${status})` : kind ?? status,
+    bidPbancNm: title && detail.lastPbancYn !== "Y" ? `${title} (최종 공고가 아닙니다.)` : title,
+    bidFee: fee === undefined ? undefined : `${formatG2bDisplayText(fee, "integer")} 원`,
+    related: related.join("\n"),
+  };
+  const fixedFields = (definitions: readonly Field[]) => definitions.map(([key, label]) => ({
+    label,
+    value: displayFieldValue(key, values[key]) ?? "",
+  }));
+  return [
+    { title: "공고일반", fields: fixedFields([
+      ["kindAndStatus", "공고종류"],
+      ["pbancPstgDt", "공고일시"],
+      ["bidPbancUntyNoOrd", "입찰공고번호-차수"],
+      ["ldocNoVal", "참조번호"],
+      ["oderInstUntyGrpNm", "공고기관"],
+      ["dmstNm", "수요기관"],
+      ["bidPbancNm", "공고명"],
+      ["bidMthdNm", "입찰방법"],
+      ["scsbdMthdNm", "낙찰방법"],
+      ["related", "관련공고"],
+    ]) },
+    { title: "입찰집행", fields: fixedFields([
+      ["bidFee", "입찰참가 수수료"],
+      ["depoElctPayTrgtYnNm", "보증금 여부"],
+      ["onbsPrnmntDtStr", "개찰(입찰)일시"],
+      ["jintSyddYnNm", "공동수급 여부"],
+      ["onbsPlacNm", "개찰장소"],
+    ]) },
+    { title: "기타", fields: fixedFields([
+      ["rbidPrmsYnNm", "재입찰여부"],
+      ["bulkBidQlfcCn", "입찰자격"],
+      ["rmrkCn", "비고"],
+    ]) },
+    { title: "파일첨부", columns: [], rows: [] },
+  ];
+}
+
 /**
  * 저장한 응답에서 공고 상세 화면에 표시할 항목을 구성한다.
  * @param payload 공고 상세 API의 원본 응답.
@@ -339,6 +409,8 @@ export function getNoticeDisplay(
   openingResultPath: (key: { number: string; revision: string }) => string | undefined,
   hasContractLinks = false,
 ) {
+  const etc = etcNoticeDetail(payload);
+  if (etc) return etcNoticeSections(etc);
   // 공고 기본정보·안내정보·평가정보를 각각 원본 응답에서 분리한다.
   const detail = record(payload.dmItemMap);
   const guide = record(payload.dmItemGuidMap);

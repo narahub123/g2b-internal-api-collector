@@ -1,5 +1,6 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query";
+import { etcNoticeDetail, noticeDetail } from "@/entities/notice/model/notice-detail";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { cleanText, queryCollectionPage, sortDate } from "./collection-list-query";
 const sortColumns = new Map([
@@ -29,7 +30,8 @@ function regionsFrom(raw: unknown) {
 function noticeFields(raw: unknown) {
   const { payload = {}, title } =
     typeof raw === "string" ? JSON.parse(raw) : {};
-  const detail = payload?.dmItemMap ?? {};
+  const detail = noticeDetail(payload ?? {});
+  const isEtc = Boolean(etcNoticeDetail(payload ?? {}));
   const business = resolveG2bBusiness(detail.prcmBsneSeCd, detail.prcmBsneSeNm);
   // 같은 시작 코드가 공동수급협정서에도 있으므로 입찰서 제출 종료 코드로 행을 구분한다.
   const schedule = Array.isArray(payload?.dmItemList1)
@@ -40,13 +42,13 @@ function noticeFields(raw: unknown) {
     schedule.find(
       (item) => cleanText(item?.subject).replace(/\s+/g, "") === "입찰서제출",
     );
-  const budget = detail.alotBgtAmt;
+  const budget = isEtc ? detail.bgtAmt : detail.alotBgtAmt;
   const amount =
     typeof budget === "number" ||
     (typeof budget === "string" && /^[+-]?\d+(?:\.\d+)?$/.test(budget.trim()))
       ? Number(budget)
       : null;
-  const agencies = [detail.dmstUntyGrpNm];
+  const agencies = [isEtc ? detail.dmstNm : detail.dmstUntyGrpNm];
   for (const key of ["dmItemList2", "dmItemItemList"]) {
     if (Array.isArray(payload?.[key])) {
       agencies.push(...payload[key].map((item) => item?.dmstUntyGrpNm));
@@ -57,8 +59,8 @@ function noticeFields(raw: unknown) {
     detail.rgnLmtYn === "N" && cleanText(detail.rgnLmtYnNm) === "해당없음";
   return JSON.stringify({
     posted: sortDate(detail.pbancPstgDt),
-    submission: sortDate(submission?.startDt),
-    deadline: sortDate(submission?.endDt),
+    submission: sortDate(isEtc ? detail.slprRcptBgngDt : submission?.startDt),
+    deadline: sortDate(isEtc ? detail.slprRcptDdlnDt : submission?.endDt),
     sortTitle: cleanText(title || detail.bidPbancNm) || null,
     agencies: [...new Set(agencies.map(cleanText).filter(Boolean))],
     budget: Number.isFinite(amount) ? amount : null,
@@ -85,7 +87,8 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
     ORDER BY label
   `);
   const businesses = db.prepare(`
-    SELECT DISTINCT json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd') AS code,
+    SELECT DISTINCT COALESCE(json_extract(data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),
+      json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd')) AS code,
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS label
     FROM notices
   `);
