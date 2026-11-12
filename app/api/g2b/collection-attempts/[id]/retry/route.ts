@@ -6,14 +6,14 @@ import {
   collectContract,
   collectContractRequest,
   collectOpeningResult,
-  collectOrderPlan,
+  collectOrderPlanWithRelated,
   collectPriorSpec,
 } from "@/features/collect-g2b/server";
 import { maintenanceResponse } from "@/shared/api/g2b/g2b-maintenance";
 
 /**
  * 대상의 최신 수집 이력에 보존된 입력으로 같은 업무의 수집을 다시 실행한다.
- * 입찰공고 재시도는 요청 공고를 저장한 뒤 연결된 공고도 탐색한다.
+ * 입찰공고와 발주계획 재시도는 요청 대상을 저장한 뒤 연결된 공고도 탐색한다.
  * @returns 성공 시 빈 204 응답. 번호 형식 오류는 400, 없는 이력은 404, 진행 중이거나 바뀐 이력은 409,
  * 나라장터 점검은 503, 기타 수집 오류는 502를 반환한다.
  * @throws 재시도 대상 이력을 읽지 못한 경우.
@@ -39,7 +39,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   try {
     switch (target.section) {
       case "order-plans":
-        await collectOrderPlan(target.number, true);
+        await collectOrderPlanWithRelated(target.number);
         break;
       case "prior-specs":
         await collectPriorSpec(target.number, true);

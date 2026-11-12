@@ -3,11 +3,13 @@ import { noticePostRecord } from "@/entities/notice/model/notice-posts";
 import { etcNoticeDetail, noticeAttachmentGroup } from "@/entities/notice/model/notice-detail";
 import { getRelatedNoticeKeys } from "@/entities/notice/model/notice-display";
 import type { Notice, NoticeKey } from "@/entities/notice/model/types";
+import { getNoticeOrderPlanNumber, orderPlanNoticeReferences } from "@/entities/order-plan/model/order-plan";
 import { attachmentGroup } from "@/shared/model/g2b/g2b-attachments";
 import type { CollectNoticeInput } from "../model/input";
 import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
 import { collectOnce } from "./collect-once";
 import { collectNotice } from "./notices";
+import { collectOrderPlan } from "./order-plans";
 import { collectionError, collectionStep } from "@/shared/api/g2b/collection-diagnostic";
 import { findMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 
@@ -76,33 +78,69 @@ export async function collectAndSaveNotice(input: CollectNoticeInput) {
   return (await collectRequestedNotice(input)).openingReport;
 }
 
-/**
- * 요청한 공고를 저장한 뒤 상세 응답으로 연결된 공고를 순서대로 탐색한다.
- * 정상 저장 건은 조회 결과를 재사용하고, 미저장 또는 손상 건만 단건 수집을 시도한다.
- * 관련공고 실패는 개별 이력에 남기며 점검이 확인되면 이후 탐색을 중단한다.
- * @throws 최초 요청 공고의 수집이나 저장에 실패한 경우.
- */
-export async function collectNoticeWithRelated(input: CollectNoticeInput) {
-  const { notice } = await collectRequestedNotice(input);
-  const visited = new Set([noticeCollectionKey(input)]);
-  const queue = getRelatedNoticeKeys(notice.payload);
+async function collectRelatedNotices(root: Notice | string) {
+  const repository = getG2bRepository();
+  const visitedNotices = new Set<string>();
+  const visitedPlans = new Set<string>();
+  const queue: NoticeKey[] = [];
+
+  const enqueuePlanNotices = (number: string) => {
+    if (visitedPlans.has(number)) return;
+    visitedPlans.add(number);
+    const plan = repository.findOrderPlan(number);
+    if (!plan) return;
+    for (const reference of orderPlanNoticeReferences(plan)) queue.push(reference);
+  };
+  const enqueueNoticeLinks = (notice: Notice) => {
+    for (const reference of getRelatedNoticeKeys(notice.payload)) queue.push(reference);
+    // 공고 수집에서 확인한 실제 저장 번호를 우선 사용한다.
+    const planNumber = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
+    if (planNumber) enqueuePlanNotices(planNumber);
+  };
+
+  if (typeof root === "string") {
+    enqueuePlanNotices(root);
+  } else {
+    visitedNotices.add(noticeCollectionKey(root));
+    enqueueNoticeLinks(root);
+  }
 
   // 다른 요청도 상대 공고의 단건 결과를 받을 수 있도록 탐색은 수집 잠금 밖에서 진행한다.
   for (const key of queue) {
     const collectionKey = noticeCollectionKey(key);
-    if (visited.has(collectionKey)) continue;
-    visited.add(collectionKey);
+    if (visitedNotices.has(collectionKey)) continue;
+    visitedNotices.add(collectionKey);
     const relatedInput = { ...key, methodCode: "" };
     try {
       const result = await collectOnce<{ notice: Notice }>(collectionKey, false, async () => {
         const saved = await trackCollectionLookup({ section: "notices", ...relatedInput }, "관련공고", () =>
-          getG2bRepository().findUsableNotice(key));
+          repository.findUsableNotice(key));
         if (saved) return { notice: saved };
         return saveCollectedNotice(relatedInput, false);
       });
-      for (const reference of getRelatedNoticeKeys(result.notice.payload)) queue.push(reference);
+      enqueueNoticeLinks(result.notice);
     } catch (error) {
       if (findMaintenance(error)) break;
     }
   }
+}
+
+/**
+ * 요청한 공고를 저장한 뒤 공고 상세와 저장된 발주계획에 연결된 공고를 탐색한다.
+ * 정상 저장 건은 재사용하며, 관련공고 수집에서 점검이 확인되면 이후 탐색을 중단한다.
+ * @throws 최초 요청 공고의 수집·저장 또는 탐색에 필요한 최초 발주계획 조회에 실패한 경우.
+ */
+export async function collectNoticeWithRelated(input: CollectNoticeInput) {
+  const { notice } = await collectRequestedNotice(input);
+  await collectRelatedNotices(notice);
+}
+
+/**
+ * 요청한 발주계획을 다시 수집한 뒤 원본 공고 목록에서 연쇄 수집을 시작한다.
+ * 공고가 같은 계획을 참조할 수 있으므로 계획 단건 저장이 끝난 뒤 공고를 처리한다.
+ * @throws 요청한 발주계획의 수집·저장 또는 저장 결과 조회에 실패한 경우.
+ */
+export async function collectOrderPlanWithRelated(number: string) {
+  const plan = await collectOrderPlan(number, true);
+  await collectRelatedNotices(plan.number);
 }

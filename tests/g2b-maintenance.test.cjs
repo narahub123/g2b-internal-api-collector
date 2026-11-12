@@ -538,6 +538,50 @@ function mockRelatedNotices(t, onDetail) {
   });
 }
 
+test('발주계획과 입찰공고 어느 쪽에서 시작해도 계획의 미수집 공고를 순환 없이 수집한다', { timeout: 5000 }, async (t) => {
+  const { POST: postOrderPlan } = require('../app/api/order-plans/[number]/route');
+  for (const [index, startFromPlan] of [true, false].entries()) {
+    const planNumber = `R26DD0000063${index}`;
+    const a = `R26BK0000063${index}`, b = `R26BK0000064${index}`, c = `R26BK0000065${index}`;
+    const key = { number: a, revision: '000' };
+    if (startFromPlan) await repository.save({
+      ...key, title: '기존 공고', collectedAt,
+      payload: { dmItemMap: { bidPbancNo: a, bidPbancOrd: '000', oderPlanNo: planNumber } },
+    });
+    const calls = [];
+    const mockRequest = mockFetch(t, (path, options) => {
+      if (path === '/') return session();
+      if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+      if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
+      if (path.endsWith('/selectOderPlan.do')) {
+        calls.push(planNumber);
+        return success({ dlOderPlanM: {
+          oderPlanNo: planNumber, bidPbancList: [a, b, b].map((number) => ({ bidPbancNo: number, bidPbancOrd: '000' })),
+        } });
+      }
+      assert.ok(path.endsWith('/selectItemAnncMngV.do'), path);
+      const { bidPbancNo, bidPbancOrd } = JSON.parse(options.body).dmItemMap;
+      calls.push(bidPbancNo);
+      return noticeDetail({
+        bidPbancNo, bidPbancOrd, oderPlanNo: planNumber,
+        relaPbancNo: bidPbancNo === b ? `${c}-000,${a}-000` : undefined,
+      });
+    });
+    try {
+      const response = startFromPlan
+        ? await postOrderPlan(new Request('http://localhost', { method: 'POST' }), {
+            params: Promise.resolve({ number: planNumber }),
+          })
+        : await relatedNoticeRequest(a);
+      assert.equal(response.status, 200);
+      assert.deepEqual(calls, [...(startFromPlan ? [] : [a]), planNumber, b, c]);
+      assert.ok(await repository.find({ number: c, revision: '000' }));
+    } finally {
+      mockRequest.mock.restore();
+    }
+  }
+});
+
 test('관련공고 수집은 정상 저장 건을 거쳐 미수집 차수까지 탐색하고 내부 링크를 표시한다', async (t) => {
   const a = 'R26BK00000601', b = 'R26BK00000602', c = 'R26BK00000603';
   const bKey = { number: b, revision: '000' };
