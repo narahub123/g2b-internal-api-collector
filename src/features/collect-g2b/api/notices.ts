@@ -1,6 +1,7 @@
 import { contractRequestKeys } from "@/entities/contract-request/model/contract-request";
 import { contractKeys } from "@/entities/contract/model/contract";
 import type { Notice, NoticeKey } from "@/entities/notice";
+import { etcNoticeBusinessCode, etcNoticeDetail, noticeAttachmentGroup } from "@/entities/notice/model/notice-detail";
 import { noticePostRecord, noticePostRows, type NoticePost } from "@/entities/notice/model/notice-posts";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";
@@ -15,6 +16,7 @@ import { collectContractRequest } from "./contract-requests";
 import { collectContract } from "./contracts";
 import { collectOrderPlan } from "./order-plans";
 import { collectPriorSpec } from "./prior-specs";
+import { fetchEtcNotice } from "./etc-notice";
 
 // 공고 상세 화면의 submission 식별자 접두사.
 const submissionPrefix = "FIUA027_01_wframe_popupCnts_bidPbancWfrm_mainWframe_";
@@ -44,15 +46,14 @@ async function collectProposal(
 }
 
 /**
- * 공고 업무 진행 내역에서 연결된 미수집 계약요청·계약 상세를 수집한다.
+ * 공고 유형 판별에 사용한 업무 진행 내역에서 연결된 미수집 계약요청·계약 상세를 수집한다.
  * 일반 조회 실패가 있어도 확인된 연결을 반환해 개별 재수집에 사용할 수 있게 한다.
  *
  * @param key 공고번호와 공고차수.
  * @returns 계약요청 및 계약 식별자 목록.
- * @throws 업무 진행 내역을 조회할 수 없거나 연결된 상세 수집에서 점검을 확인한 경우.
+ * @throws 연결된 상세 수집에서 점검을 확인한 경우.
  */
-async function collectNoticeContractLinks(key: NoticeKey) {
-  const rows = await fetchWorkProgress(key);
+async function collectNoticeContractLinks(key: NoticeKey, rows: Record<string, unknown>[]) {
   const requests = contractRequestKeys(rows, key);
   const contracts = contractKeys(rows, key);
   const outcomes = await Promise.allSettled([
@@ -126,7 +127,8 @@ async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["p
 }
 
 /**
- * 공고 상세, 문서 목록과 공지사항을 수집하고, 연결된 미수집 발주계획, 사전규격, 계약요청, 계약현황과 개찰결과를 저장한다.
+ * 업무 진행 내역으로 상세 API를 선택하고 상세, 문서와 계약 연결을 수집한다.
+ * 일반 공고는 공지사항, 발주계획, 사전규격과 개찰결과도 수집한다.
  * 일반 부가 조회 오류는 허용하며, 점검을 확인하면 공고 행을 저장할 호출자에게 오류를 전달한다.
  * 독립적으로 완료된 관련 자료는 저장될 수 있다.
  * @param key 공고번호와 차수.
@@ -139,7 +141,14 @@ export async function collectNotice(
   methodCode: string,
 ): Promise<{ notice: Notice; openingReport: OpeningCollectionReport }> {
   const collectedAt = new Date().toISOString();
-  const payload = await postG2b(
+  const workProgress = await fetchWorkProgress(key).catch((error) => {
+    const maintenance = findMaintenance(error);
+    if (maintenance) throw maintenance;
+    // 일반 오류에서는 업무구분을 알 수 없어 기존 상세 조회를 시도한다.
+    return undefined;
+  });
+  const isEtc = workProgress?.some((row) => row?.prcmBsneSeCd === etcNoticeBusinessCode);
+  const payload = isEtc ? await fetchEtcNotice(key) : await postG2b(
     "/pn/pnp/pnpe/ItemBidPbac/selectItemAnncMngV.do",
     submissionPrefix + "selectItemAnncMngV",
     {
@@ -151,31 +160,47 @@ export async function collectNotice(
       },
     },
   );
-  const detail = payload?.dmItemMap;
+  const detail = isEtc ? etcNoticeDetail(payload) : payload.dmItemMap;
+  // 기타 상세의 별도 BM 번호는 BK 번호로 요청한 공고의 저장 키와 다르다.
+  const number = isEtc ? detail?.bidPbancUntyNo : detail?.bidPbancNo;
+  const revision = isEtc ? detail?.bidPbancUntyOrd : detail?.bidPbancOrd;
   if (
-    detail?.bidPbancNo !== key.number ||
-    String(detail.bidPbancOrd).padStart(3, "0") !== key.revision ||
-    typeof detail.bidPbancNm !== "string" ||
+    number !== key.number ||
+    !/^\d{1,3}$/.test(String(revision)) ||
+    String(revision).padStart(3, "0") !== key.revision ||
+    (isEtc && detail?.prcmBsneSeCd !== etcNoticeBusinessCode) ||
+    typeof detail?.bidPbancNm !== "string" ||
     !detail.bidPbancNm.trim()
   ) {
     throw new Error("요청한 공고의 상세 응답을 받지 못했습니다.");
   }
   // 첨부 목록은 공고의 첨부 그룹만 조회하고, 제안요청은 상세 JS와 같이 협상계약에만 적용한다.
-  const orderPlanNumber = getNoticeOrderPlanNumber(payload);
-  const priorSpecNumber = getNoticePriorSpecNumber(payload);
+  const orderPlanNumber = isEtc ? undefined : getNoticeOrderPlanNumber(payload);
+  const priorSpecNumber = isEtc ? undefined : getNoticePriorSpecNumber(payload);
+  const group = isEtc ? noticeAttachmentGroup(payload) : detail.itemPbancUntyAtchFileNo?.trim();
+  const linkedRows = isEtc ? workProgress?.map((row) => {
+    // 기타 업무진행 행은 BK 번호 없이 상세의 BM 번호만 반환할 수 있다.
+    if (row && !row.bidPbancNo && typeof detail.untyBidPbancNo === "string" &&
+        detail.untyBidPbancNo && row.untyBidPbancNo === detail.untyBidPbancNo &&
+        /^\d{1,3}$/.test(String(row.untyBidPbancOrd)) &&
+        String(row.untyBidPbancOrd).padStart(3, "0") === String(detail.untyBidPbancOrd).padStart(3, "0")) {
+      return { ...row, bidPbancNo: key.number, bidPbancOrd: key.revision };
+    }
+    return row;
+  }) : workProgress;
   // 일반 부가 조회 오류는 공고 저장을 허용하지만, 점검이 하나라도 확인되면 공고 저장을 보류한다.
   const outcomes = await Promise.allSettled([
-    detail.itemPbancUntyAtchFileNo?.trim()
-      ? collectAttachments(detail.itemPbancUntyAtchFileNo, "notice")
+    group
+      ? collectAttachments(group, isEtc ? "etc-notice" : "notice")
       : undefined,
-    detail.scsbdMthdCd === "낙030005" &&
+    !isEtc && detail.scsbdMthdCd === "낙030005" &&
     detail.rfpNo?.trim() &&
     /^\d{1,3}$/.test(String(detail.rfpOrd))
       ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
       : undefined,
-    collectNoticeContractLinks(key),
-    collectNoticeOpeningResults(payload),
-    collectNoticePosts(key),
+    linkedRows ? collectNoticeContractLinks(key, linkedRows) : undefined,
+    isEtc ? { targetRevisions: [], succeededRevisions: [], failures: [] } : collectNoticeOpeningResults(payload),
+    isEtc ? undefined : collectNoticePosts(key),
     orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
     priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
   ]);

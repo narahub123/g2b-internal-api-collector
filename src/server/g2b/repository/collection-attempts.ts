@@ -80,7 +80,8 @@ const savedQueries: Record<CollectionSection, string> = {
   notices: `
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.title') AS title,
-      json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd') AS businessCode,
+      COALESCE(json_extract(data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),
+        json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd')) AS businessCode,
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel,
       data
     FROM notices`,

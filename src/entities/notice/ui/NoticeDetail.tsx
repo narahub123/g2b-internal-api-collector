@@ -16,6 +16,7 @@ import {
   relatedNoticeSectionTitle,
 } from "../model/notice-display";
 import type { Notice } from "../model/types";
+import { etcNoticeDetail, noticeDetail } from "../model/notice-detail";
 
 /**
  * 공고 필드값을 HTML 표시 정책에 따라 출력한다.
@@ -161,9 +162,9 @@ export function NoticeDetail({
     proposalFiles.map((file) => [file.seq, file.href] as const),
   );
   const { number, revision } = notice;
-  const detail = notice.payload.dmItemMap as
-    | Record<string, unknown>
-    | undefined;
+  const isEtc = Boolean(etcNoticeDetail(notice.payload));
+  const detail = noticeDetail(notice.payload);
+  const posts = isEtc ? undefined : notice.posts;
   const methodCode =
     typeof detail?.scsbdMthdCd === "string" ? detail.scsbdMthdCd : "";
 
@@ -197,14 +198,14 @@ export function NoticeDetail({
       <Accordion
         type="multiple"
         defaultValue={[
-          ...(notice.posts?.entries.length ? ["공지사항"] : []),
+          ...(posts?.entries.length ? ["공지사항"] : []),
           ...sections.map(({ title }) => title),
         ]}
         className="min-w-0 border-t"
       >
-        {notice.posts && (
+        {posts && (
           <NoticePostsSection
-            posts={notice.posts}
+            posts={posts}
             number={number}
             revision={revision}
           />
@@ -261,7 +262,7 @@ export function NoticeDetail({
                     </div>
                   );
                 })}
-                {title === relatedNoticeSectionTitle &&
+                {(title === relatedNoticeSectionTitle || (isEtc && title === "공고일반")) &&
                   contractLinks.map(({ label, links }) => (
                     <div
                       key={label}
@@ -284,7 +285,7 @@ export function NoticeDetail({
                     </div>
                   ))}
               </dl>
-              {section.nestedTable && (
+              {"nestedTable" in section && section.nestedTable && (
                 <div className="mt-4 grid gap-2">
                   <h3 className="text-sm font-semibold">
                     {section.nestedTable.title}
@@ -303,7 +304,7 @@ export function NoticeDetail({
               {title === "파일첨부" ? (
                 <AttachmentTable
                   files={attachmentFiles}
-                  showDocumentType
+                  showDocumentType={!isEtc}
                   getDownloadHref={(file) => attachmentHrefBySeq.get(file.seq)}
                 />
               ) : title === "제안요청정보" ? (

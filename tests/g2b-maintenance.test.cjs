@@ -37,6 +37,8 @@ const { parseContractListQuery } = require('../src/entities/contract/model/contr
 const { POST: postNotice } = require('../app/api/notices/route');
 const { POST: postOpeningResults } = require('../app/api/opening-results/[number]/[revision]/route');
 const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]/attachments/[seq]/route');
+const { collectNotice } = require('../src/features/collect-g2b/api/notices');
+const { getNoticeDisplay, getNoticeAttachmentFiles } = require('../src/entities/notice/model/notice-display');
 
 test('사용자 상세의 목록 복귀 주소는 같은 업무의 홈 조회 조건만 허용한다', () => {
   const { userDetailPath, userListReturnHref } = require('../src/_pages/g2b/config/routes');
@@ -84,6 +86,105 @@ function mockFetch(t, respond) {
     return respond(new URL(url).pathname, options);
   });
 }
+
+test('기타 공고는 업무진행을 한 번 조회하고 기타 상세와 공개 첨부를 수집한다', async (t) => {
+  const key = { number: 'R26BK01792130', revision: '000' };
+  const detail = {
+    bidPbancUntyNo: key.number, bidPbancUntyOrd: key.revision,
+    untyBidPbancNo: 'R26BM01014144', untyBidPbancOrd: '000',
+    prcmBsneSeCd: '09', bidPbancNm: '기타 공고', untyAtchFileNo: group,
+  };
+  const calls = [];
+  mockFetch(t, (path, options) => {
+    calls.push(path.split('/').at(-1));
+    const body = JSON.parse(options.body);
+    if (path.endsWith('/srchWorkPrgs.do'))
+      return success({ dlWorkPrgsL: [{ prcmBsneSeCd: '09' }] });
+    if (path.endsWith('/selectUntyBidPbancDtlInfo.do')) {
+      assert.equal(options.headers.submissionid, 'FIUA027_01_wframe_popupCnts_bidPbancWfrm_sbmBidPbacRqdc');
+      assert.equal(body.dlUntyBidPbancM.bidPbancUntyNo, key.number);
+      assert.equal(body.dlUntyBidPbancM.bidPbancOrd, key.revision);
+      assert.equal(body.dlUntyBidPbancM.prcmBsneSeCd, '09');
+      assert.equal(body.dlUntyBidPbancM.untyBidPbancNo, '');
+      return success({ dlUntyBidPbancM: detail });
+    }
+    assert.ok(path.endsWith('/selectUntyAtchFileList.do'), path);
+    assert.equal(body.dlUntyAtchFileM.tblNm, 'PBANC_UNTY_BID_PBANC');
+    assert.equal(body.dlUntyAtchFileM.colNm, 'UNTY_ATCH_FILE_NO');
+    return success({ dlUntyAtchFileL: Array.from({ length: 6 }, (_, index) => ({
+      untyAtchFileNo: group, atchFileSqno: index + 1,
+      orgnlAtchFileNm: '공고문.pdf', scrnIndtYn: index === 5 ? 'N' : 'Y',
+    })) });
+  });
+  const { notice, openingReport } = await collectNotice(key, '');
+  assert.deepEqual(calls, ['srchWorkPrgs.do', 'selectUntyBidPbancDtlInfo.do', 'selectUntyAtchFileList.do']);
+  assert.equal(notice.number, key.number);
+  assert.deepEqual(notice.payload.dlUntyBidPbancM, detail);
+  assert.deepEqual(openingReport.targetRevisions, []);
+  assert.deepEqual(getNoticeDisplay(notice.payload, notice.documents, () => undefined).map(({ title }) => title),
+    ['공고일반', '입찰집행', '기타', '파일첨부']);
+  const files = getNoticeAttachmentFiles(notice.payload, notice.documents);
+  assert.equal(files.length, 5);
+  assert.deepEqual(Object.fromEntries(new URL(files[0].href).searchParams), {
+    bidPbancNo: key.number, bidPbancOrd: key.revision, fileType: '', fileSeq: '1', prcmBsneSeCd: '09',
+  });
+});
+
+test('기타 공고는 번호·차수가 다르면 저장하지 않고 업무진행 점검 시 상세를 호출하지 않는다', async (t) => {
+  const key = { number: 'R26BK01792131', revision: '000' };
+  const request = () => new Request('http://localhost/api/notices', {
+    method: 'POST', body: JSON.stringify({ ...key, methodCode: '' }),
+  });
+  for (const override of [{ bidPbancUntyNo: 'R26BM01014144' }, { bidPbancUntyOrd: '001' }]) {
+    const fetchMock = mockFetch(t, (path) => {
+      if (path.endsWith('/srchWorkPrgs.do'))
+        return success({ dlWorkPrgsL: [{ prcmBsneSeCd: '09' }] });
+      assert.ok(path.endsWith('/selectUntyBidPbancDtlInfo.do'));
+      return success({ dlUntyBidPbancM: {
+        bidPbancUntyNo: key.number, bidPbancUntyOrd: key.revision,
+        prcmBsneSeCd: '09', bidPbancNm: '기타 공고', ...override,
+      } });
+    });
+    assert.equal((await postNotice(request())).status, 502);
+    assert.equal(fetchMock.mock.callCount(), 2);
+    fetchMock.mock.restore();
+  }
+  const fetchMock = mockFetch(t, (path) => {
+    assert.ok(path.endsWith('/srchWorkPrgs.do'));
+    return maintenancePage();
+  });
+  assert.equal((await postNotice(request())).status, 503);
+  assert.equal(fetchMock.mock.callCount(), 1);
+  assert.equal(await repository.find(key), null);
+});
+
+test('기타 첨부 목록 조회 실패 시 같은 그룹에 대해서만 기존 파일을 보존한다', async (t) => {
+  const key = { number: 'R26BK01792132', revision: '000' };
+  let currentGroup = group;
+  let attachmentsAvailable = true;
+  const attachments = { ErrorCode: 0, dlUntyAtchFileL: [] };
+  mockFetch(t, (path) => {
+    if (path.endsWith('/srchWorkPrgs.do'))
+      return success({ dlWorkPrgsL: [{ prcmBsneSeCd: '09' }] });
+    if (path.endsWith('/selectUntyBidPbancDtlInfo.do'))
+      return success({ dlUntyBidPbancM: {
+        bidPbancUntyNo: key.number, bidPbancUntyOrd: key.revision,
+        prcmBsneSeCd: '09', bidPbancNm: '기타 공고', untyAtchFileNo: currentGroup,
+      } });
+    assert.ok(path.endsWith('/selectUntyAtchFileList.do'));
+    return attachmentsAvailable ? Response.json(attachments) : new Response(null, { status: 500 });
+  });
+  const collect = () => postNotice(new Request('http://localhost/api/notices', {
+    method: 'POST', body: JSON.stringify({ ...key, methodCode: '' }),
+  }));
+  assert.equal((await collect()).status, 200);
+  attachmentsAvailable = false;
+  assert.equal((await collect()).status, 200);
+  assert.deepEqual((await repository.find(key)).documents.attachments, attachments);
+  currentGroup = '00000000-0000-0000-0000-000000000002';
+  assert.equal((await collect()).status, 200);
+  assert.equal((await repository.find(key)).documents.attachments, undefined);
+});
 
 function noticeRequest() {
   return new Request('http://localhost/api/notices', {
@@ -306,6 +407,33 @@ test('공고 수집은 연결된 계약 상세를 한 번 저장하고 재수집
   });
   assert.equal((await postNotice(noticeRequest())).status, 200);
   assert.deepEqual(requested, [contract]);
+});
+
+test('기타 업무진행의 BM 번호·차수로 연결 계약을 찾는다', async (t) => {
+  const key = { number: 'R26BK01792133', revision: '000' };
+  const contract = { number: 'NOTICE-ETC-CONTRACT', revision: '00' };
+  const detail = {
+    bidPbancUntyNo: key.number, bidPbancUntyOrd: key.revision,
+    untyBidPbancNo: 'R26BM01014144', untyBidPbancOrd: '000',
+    prcmBsneSeCd: '09', bidPbancNm: '기타 공고',
+  };
+  mockFetch(t, (path) => {
+    if (path.endsWith('/srchWorkPrgs.do')) {
+      const row = { ...linkedContract(contract.number), bidPbancNo: null, bidPbancOrd: null,
+        prcmBsneSeCd: '09', untyBidPbancNo: detail.untyBidPbancNo };
+      return success({ dlWorkPrgsL: [
+        { ...row, untyBidPbancOrd: '001', ctrtNo: 'OTHER-ETC-CONTRACT' },
+        { ...row, untyBidPbancOrd: '000' },
+      ] });
+    }
+    if (path.endsWith('/selectUntyBidPbancDtlInfo.do'))
+      return success({ dlUntyBidPbancM: detail });
+    assert.ok(path.includes('/UntySrch/'), path);
+    return contractDetail(contract.number, contract.revision);
+  });
+  const { notice } = await collectNotice(key, '');
+  assert.deepEqual(notice.contracts, [contract]);
+  assert.ok(repository.findContract(contract));
 });
 
 test('일치하는 계약이 없으면 공고 수집에서 계약 상세를 조회하지 않는다', async (t) => {
@@ -770,6 +898,20 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
     assert.equal(href.searchParams.get('sort'), 'deadline-asc');
     assert.equal(href.searchParams.get('business'), '03');
     assert.deepEqual(href.searchParams.getAll('region'), regions);
+    insert.run('R26BK01792130', JSON.stringify({
+      title: '기타 공고',
+      payload: { dlUntyBidPbancM: {
+        prcmBsneSeCd: '09', dmstNm: '기타 수요기관', pbancPstgDt: '202610260900',
+        slprRcptBgngDt: '202610270900', slprRcptDdlnDt: '202611040900', bgtAmt: '1000',
+      } },
+    }));
+    const updatedBusinesses = attempts.noticeList.businesses();
+    assert.ok(updatedBusinesses.some(({ value, label }) => value === '09' && label === '기타'));
+    const etc = attempts.noticeList.page(parseNoticeListQuery({
+      business: '09', field: 'agency', q: '기타 수요기관', postedTo: '2026-10-26',
+      submissionFrom: '2026-10-27', budgetFrom: '1000', sort: 'deadline-asc',
+    }, regions, updatedBusinesses));
+    assert.deepEqual(etc.rows.map(({ number, businessCode }) => [number, businessCode]), [['R26BK01792130', '09']]);
   } finally {
     databases.delete(db);
     db.close();
