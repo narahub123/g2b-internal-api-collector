@@ -147,6 +147,8 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
   });
 
   const recollect = () => collectAndSaveNotice({ ...noticeKey, methodCode: '' });
+  const history = repository.collectionAttempts;
+  const initialCounts = history.counts('order-plans');
   for (returnedNumber of [undefined, 'R26BK20926396']) {
     await recollect();
     assert.equal((await repository.find(noticeKey)).orderPlanNumber, undefined);
@@ -162,6 +164,15 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
   assert.equal(saved.orderPlanNumber, responseNumber);
   assert.equal(repository.findOrderPlan(responseNumber).attachments, undefined);
   assert.equal(repository.findOrderPlan(detail.oderPlanUntyNo), null);
+  assert.deepEqual(history.counts('order-plans'), {
+    total: initialCounts.total + 1, collected: initialCounts.collected + 1, uncollected: initialCounts.uncollected,
+  });
+  const failure = history.overview('order-plans').failures.find(({ number }) => number === responseNumber);
+  assert.equal(failure.hasData, true);
+  assert.deepEqual(history.retryTarget(failure.id), { section: 'order-plans', number: responseNumber });
+  assert.deepEqual(history.orderPlanList.page(parseOrderPlanListQuery({
+    field: 'number', q: detail.oderPlanUntyNo, status: 'uncollected',
+  }, [])).rows, []);
   const linkedNotices = () => repository.findNoticesForOrderPlan(responseNumber).map((row) => ({ ...row }));
   assert.deepEqual(linkedNotices(), [noticeKey]);
   assert.deepEqual(repository.findNoticesForOrderPlan(detail.oderPlanUntyNo), []);
@@ -176,8 +187,12 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
   assert.deepEqual(repository.findOrderPlan(responseNumber), collected);
   assert.equal(attachmentCalls, 2);
 
+  const anotherKey = { number: 'R26BK01824857', revision: '000' };
+  await repository.save({ ...(await repository.find(noticeKey)), ...anotherKey });
   detail.oderPlanUntyNo = 'P81202600BB1-00';
   await recollect();
+  assert.equal(history.retryTarget(failure.id), 'conflict');
+  assert.equal(history.counts('order-plans').uncollected, initialCounts.uncollected);
   const admin = await NoticeDetailPage({ params: Promise.resolve(noticeKey) });
   const user = await G2bDetailPage({
     section: 'notices', params: Promise.resolve(noticeKey), searchParams: Promise.resolve({}),
@@ -193,7 +208,7 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
     ...saved, ...legacyKey, orderPlanNumber: undefined,
     payload: { dmItemMap: { ...detail, oderPlanUntyNo: responseNumber } },
   });
-  assert.deepEqual(linkedNotices(), [noticeKey, legacyKey]);
+  assert.deepEqual(linkedNotices(), [noticeKey, legacyKey, anotherKey]);
   const orderPlanPage = await G2bDetailPage({
     section: 'order-plans', params: Promise.resolve({ number: responseNumber }), searchParams: Promise.resolve({}),
   });

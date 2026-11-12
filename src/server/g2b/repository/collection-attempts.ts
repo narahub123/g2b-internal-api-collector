@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { OpeningResultQuery } from "@/entities/opening-result/model/opening-result";
+import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import type { G2bCollectionCounts } from "./types";
 import { openNoticeList } from "./notice-list";
 import { openOrderPlanList } from "./order-plan-list";
@@ -61,6 +62,36 @@ export type CollectionListRow = TargetKey & ListMetadata & {
 };
 
 type RetryRow = { input: string; status: AttemptStatus; latestId: number };
+
+// 저장된 계획으로 연결되는 호출 번호만 합친다. 서로 다른 계획에 연결되면 원래 이력 번호를 유지한다.
+const orderPlanAttemptKeys = `
+  order_plan_links AS (
+    SELECT notice_order_plan_lookup(data) AS lookup_number,
+      json_extract(data, '$.orderPlanNumber') AS plan_number
+    FROM notices
+    WHERE json_type(data, '$.orderPlanNumber') = 'text'
+  ),
+  unique_order_plan_links AS (
+    SELECT lookup_number, MIN(plan_number) AS plan_number
+    FROM order_plan_links
+    WHERE lookup_number IS NOT NULL
+    GROUP BY lookup_number
+    HAVING COUNT(DISTINCT plan_number) = 1
+      AND MIN(plan_number) <> lookup_number
+  ),
+  order_plan_aliases AS (
+    SELECT lookup_number, plan_number
+    FROM unique_order_plan_links
+    JOIN order_plans ON order_plans.number = plan_number
+    WHERE NOT EXISTS (SELECT 1 FROM order_plans WHERE number = lookup_number)
+  ),
+  order_plan_attempt_keys AS (
+    SELECT attempt.id, COALESCE(alias.plan_number, attempt.number) AS number,
+      attempt.revision, attempt.opening_revision
+    FROM g2b_collection_attempts attempt
+    LEFT JOIN order_plan_aliases alias ON alias.lookup_number = attempt.number
+    WHERE attempt.section = 'order-plans'
+  )`;
 
 // 상세 화면과 같은 원본 필드에서 목록 제목과 업무구분을 읽는다.
 // 빈 문자열은 해당 업무에 없는 차수를 뜻한다.
@@ -131,6 +162,11 @@ const savedQueries: Record<CollectionSection, string> = {
  * @throws 스키마 초기화 또는 쿼리 준비에 실패한 경우.
  */
 export function openCollectionAttempts(db: DatabaseSync) {
+  db.function("notice_order_plan_lookup", { deterministic: true }, (data) => {
+    if (typeof data !== "string") return null;
+    const payload = JSON.parse(data)?.payload;
+    return payload ? getNoticeOrderPlanNumber(payload) ?? null : null;
+  });
   db.exec(`
     CREATE TABLE IF NOT EXISTS g2b_collection_attempts (
       id INTEGER PRIMARY KEY,
@@ -177,13 +213,24 @@ export function openCollectionAttempts(db: DatabaseSync) {
     ) AS latestId
     FROM g2b_collection_attempts attempt WHERE attempt.id = ?
   `);
+  const retryOrderPlan = db.prepare(`
+    WITH ${orderPlanAttemptKeys}
+    SELECT target.number, MAX(latest.id) AS latestId
+    FROM order_plan_attempt_keys target
+    JOIN order_plan_attempt_keys latest USING (number, revision, opening_revision)
+    WHERE target.id = ?
+    GROUP BY target.number
+  `);
   const summaries = new Map(Object.entries(savedQueries).map(([section, savedQuery]) => {
     // 두 화면에서 저장 자료와 시도 이력의 합집합을 동일한 기준으로 집계한다.
+    const orderPlans = section === "order-plans";
     const targets = `
-      WITH saved AS (${savedQuery}),
+      WITH ${orderPlans ? `${orderPlanAttemptKeys},` : ""} saved AS (${savedQuery}),
       latest AS (
-        SELECT MAX(id) AS id, number, revision, opening_revision FROM g2b_collection_attempts
-        WHERE section = ? GROUP BY number, revision, opening_revision
+        SELECT MAX(id) AS id, number, revision, opening_revision
+        FROM ${orderPlans ? "order_plan_attempt_keys" : "g2b_collection_attempts"}
+        WHERE ${orderPlans ? "? = 'order-plans'" : "section = ?"}
+        GROUP BY number, revision, opening_revision
       ),
       targets AS (
         SELECT number, revision, opening_revision FROM saved
@@ -242,15 +289,21 @@ export function openCollectionAttempts(db: DatabaseSync) {
     },
 
     /**
-     * 대상의 최신 실패·보류·미확인 이력에서 서버에 보존한 재수집 입력을 읽는다.
+     * 대상의 최신 실패·보류·미확인 이력에서 재수집 입력을 읽는다.
+     * 발주계획 호출 번호가 저장 번호로 연결되면 그 저장 번호로 직접 재수집한다.
      * @returns 없는 이력은 missing, 이미 성공했거나 새 시도가 시작됐으면 conflict.
      * @throws SQLite 조회나 저장 입력 역직렬화가 실패한 경우.
      */
     retryTarget(id: number): CollectionTarget | "missing" | "conflict" {
       const row = retry.get(id) as RetryRow | undefined;
       if (!row) return "missing";
-      if (row.latestId !== id || row.status === "succeeded") return "conflict";
-      return JSON.parse(row.input) as CollectionTarget;
+      if (row.status === "succeeded") return "conflict";
+      const target = JSON.parse(row.input) as CollectionTarget;
+      if (target.section === "order-plans") {
+        const resolved = retryOrderPlan.get(id) as { number: string; latestId: number } | undefined;
+        return resolved?.latestId === id ? { ...target, number: resolved.number } : "conflict";
+      }
+      return row.latestId === id ? target : "conflict";
     },
 
     /**
