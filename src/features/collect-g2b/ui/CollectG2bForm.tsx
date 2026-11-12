@@ -42,6 +42,37 @@ const settings = {
   methodCode?: boolean;
 }>;
 
+
+/**
+ * 다른 업무 번호 안내는 모바일에서 의미별로 세 줄로 표시한다.
+ * 그 외 오류는 기존 메시지 형식을 유지한다.
+ */
+function CollectionErrorMessage({ message }: { message: string }) {
+  const match = message.match(
+    /^(입력한 번호는 .+입니다\.) (.+입력해 주세요\.) (예시: .+)$/,
+  );
+
+  if (!match) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {message}
+      </p>
+    );
+  }
+
+  return (
+    <p role="alert" className="text-sm text-destructive">
+      <span className="sm:hidden">
+        <span className="block">{match[1]}</span>
+        <span className="block">{match[2]}</span>
+        <span className="block">{match[3]}</span>
+      </span>
+      <span className="hidden sm:inline">{message}</span>
+    </p>
+  );
+}
+
+
 /**
  * 업무에 필요한 식별자를 받아 기존 수집 API에 제출한다.
  * 업무별 번호 형식을 제출 전에 검사해 오입력이 수집 이력에 남는 것을 막는다.
@@ -133,7 +164,7 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
         )}
         <Button type="submit" disabled={pending}>{pending ? "수집 중…" : "수집 / 다시 수집"}</Button>
       </form>
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {error && <CollectionErrorMessage message={error} />}
     </Card>
   );
 }

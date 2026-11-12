@@ -364,7 +364,7 @@ test('수집 폼에서 다른 업무의 번호를 차단하고 정상 번호를 
 
   await submit();
   assert.equal(fetch.mock.callCount(), 0);
-  assert.equal(errors.at(-1), '입찰공고번호 형식을 확인하세요. 예시 R26BK00000001');
+  assert.equal(errors.at(-1), '입력한 번호는 사전규격등록번호입니다. 입찰공고번호를 입력해 주세요. 예시: R26BK00000001');
 
   fields.set('number', ' r26bk00000001 ');
   await submit();
