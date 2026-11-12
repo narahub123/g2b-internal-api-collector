@@ -1,3 +1,4 @@
+import { collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type { PriorSpec } from "@/entities/prior-spec/model/prior-spec";
 import { createG2bSession } from "@/shared/api/g2b/g2b-session";
@@ -6,7 +7,7 @@ import { attachmentGroup } from "@/shared/model/g2b/g2b-attachments";
 import { postG2b } from "./request";
 import { collectAttachments } from "./attachments";
 import { collectOnce } from "./collect-once";
-import { trackCollectionAttempt } from "./collection-attempt";
+import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
 
 /**
  * 사전규격 상세와 공개 첨부를 저장한다. 일반 수집은 저장된 본문이 있으면 미수집 첨부만 조회한다.
@@ -20,7 +21,7 @@ export async function collectPriorSpec(number: string, force = false) {
   return collectOnce(`prior-spec:${number}`, force, async () => {
     let spec: PriorSpec | null = force
       ? null
-      : repository.findPriorSpec(number);
+      : await trackCollectionLookup({ section: "prior-specs", number }, "사전규격", () => repository.findPriorSpec(number));
     const needsDetail = !spec;
     // 첨부 그룹이 없는 사전규격은 첨부 조회 없이 수집 완료로 취급한다.
     if (
@@ -29,7 +30,7 @@ export async function collectPriorSpec(number: string, force = false) {
         !attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo))
     )
       return;
-    return trackCollectionAttempt({ section: "prior-specs", number }, async () => {
+    return trackCollectionAttempt({ section: "prior-specs", number }, async (recordFailure) => {
       const request = await createG2bSession();
       if (!spec) {
         const collectedAt = new Date().toISOString();
@@ -47,19 +48,27 @@ export async function collectPriorSpec(number: string, force = false) {
           request,
         );
         if (payload?.dlBfSpecM?.bfSpecRegNo !== number) {
-          throw new Error("요청한 사전규격의 상세 응답을 받지 못했습니다.");
+          throw collectionValidationError("요청한 사전규격의 상세 응답을 받지 못했습니다.", "dlBfSpecM.bfSpecRegNo",
+            { number }, { number: payload?.dlBfSpecM?.bfSpecRegNo });
         }
         spec = { number, collectedAt, payload };
       }
       const group = attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo);
       const attachments = group
         ? await collectAttachments(group, "prior-spec", request).catch((error: unknown) => {
-            if (!findMaintenance(error) && !force && needsDetail) repository.savePriorSpec(spec);
+            if (!findMaintenance(error) && !force && needsDetail) {
+              try {
+                collectionStep("SQLite 사전규격 부분 저장", () => repository.savePriorSpec(spec));
+              } catch (saveError) {
+                recordFailure(error);
+                throw saveError;
+              }
+            }
             throw error;
           })
         : undefined;
       if (force || needsDetail || attachments)
-        repository.savePriorSpec({ ...spec, attachments });
+        collectionStep("SQLite 사전규격 저장", () => repository.savePriorSpec({ ...spec, attachments }));
     });
   });
 }

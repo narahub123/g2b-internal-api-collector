@@ -20,6 +20,7 @@ import {
 } from "./collection-count-labels";
 import { CollectionListItem } from "@/shared/ui/g2b/CollectionListItem";
 import { CollectionListLabel } from "@/shared/ui/g2b/CollectionListLabel";
+import { CollectionFailureDetails } from "./CollectionFailureDetails";
 
 const dateFormat = new Intl.DateTimeFormat("ko-KR", {
   dateStyle: "medium",
@@ -45,7 +46,7 @@ function targetKey({ number, revision, openingRevision }: TargetKey) {
 type DisplayRow = {
   item: TargetKey;
   savedItem?: Pick<CollectionOverview["saved"][number], "title" | "businessCode" | "businessLabel">;
-  failure?: Pick<CollectionOverview["failures"][number], "id" | "startedAt" | "status" | "error">;
+  failure?: Pick<CollectionOverview["failures"][number], "id" | "startedAt" | "status" | "error" | "diagnostics">;
 };
 
 /**
@@ -68,7 +69,7 @@ export async function CollectionListPage({
     item: row,
     savedItem: row.collectedAt !== null ? row : undefined,
     failure: row.id !== null && row.startedAt && row.status && row.status !== "succeeded"
-      ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error }
+      ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error, diagnostics: row.diagnostics }
       : undefined,
   }));
   const href = `${ADMIN_G2B_PATH}/${section}`;
@@ -167,6 +168,7 @@ function CollectionRows({ section, rows }: { section: CollectionSection; rows: D
                       {failure.error}
                     </p>
                   )}
+                  {failure.diagnostics && <CollectionFailureDetails diagnostics={failure.diagnostics} />}
                 </>
               )
             }

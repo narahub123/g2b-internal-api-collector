@@ -1,4 +1,5 @@
 import { readG2bResponse } from "@/shared/api/g2b/g2b-maintenance";
+import { collectionError } from "@/shared/api/g2b/collection-diagnostic";
 
 const origin = "https://www.g2b.go.kr";
 
@@ -32,6 +33,8 @@ export async function postG2b(
   request: G2bRequest = fetch,
   menuInfo = detailMenu,
 ) {
+  const timeoutMs = 15000;
+  const context = { request: { path, submissionId: submissionid, timeoutMs } };
   const response = await request(new URL(path, origin), {
     method: "POST",
     headers: {
@@ -44,15 +47,46 @@ export async function postG2b(
     body: JSON.stringify(input),
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(timeoutMs),
+  }).catch((error: unknown) => {
+    throw collectionError(error, { ...context, step: "API 요청" });
   });
-  const body = await readG2bResponse(response);
+  const responseInfo = { status: response.status, contentType: response.headers.get("content-type") ?? undefined };
+  const body = await readG2bResponse(response).catch((error: unknown) => {
+    throw collectionError(error, { ...context, response: responseInfo, step: "API 응답 읽기" });
+  });
+  let result;
+  try {
+    result = JSON.parse(body);
+  } catch (error) {
+    // HTTP 오류 페이지는 상태를 우선 기록하고, 정상 상태에서만 JSON 해석 실패를 기록한다.
+    if (response.ok) {
+      const position = error instanceof SyntaxError ? /\bposition (\d+)\b/.exec(error.message)?.[1] : undefined;
+      throw collectionError(error, {
+        ...context, response: responseInfo, step: "JSON 해석",
+        details: position === undefined ? undefined : { "오류 위치": Number(position) },
+      });
+    }
+  }
+  const errorCode = result?.ErrorCode;
+  const errorMessage = result?.ErrorMsg ?? result?.ErrorMessage;
+  const responseContext = {
+    ...context,
+    response: {
+      ...responseInfo,
+      errorCode: typeof errorCode === "string" || typeof errorCode === "number" ? errorCode : undefined,
+      errorMessage: typeof errorMessage === "string" ? errorMessage : undefined,
+    },
+  };
   if (response.status === 403)
-    throw new G2bAccessDenied(`나라장터 API 접근이 거부됐습니다: ${path}`);
+    throw collectionError(new G2bAccessDenied(`나라장터 API 접근이 거부됐습니다: ${path}`), { ...responseContext, step: "HTTP 응답" });
   if (!response.ok)
-    throw new Error(`나라장터 API 요청에 실패했습니다: ${path}`);
-  const result = JSON.parse(body);
-  if (String(result?.ErrorCode) !== "0")
-    throw new Error(`나라장터 API가 오류를 반환했습니다: ${path}`);
+    throw collectionError(new Error(`나라장터 API 요청에 실패했습니다: ${path}`), { ...responseContext, step: "HTTP 응답" });
+  if (String(errorCode) !== "0")
+    throw collectionError(new Error(`나라장터 API가 오류를 반환했습니다: ${path}`), {
+      ...responseContext,
+      step: errorCode === undefined ? "응답 검증" : "나라장터 업무 응답",
+      details: errorCode === undefined ? { "응답 필드": "ErrorCode" } : undefined,
+    });
   return result;
 }

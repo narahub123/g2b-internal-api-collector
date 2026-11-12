@@ -1,5 +1,6 @@
 import type { NoticeKey } from "@/entities/notice";
 import { postG2b } from "./request";
+import { collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 
 const workProgressMenu =
   '{"menuNo":"13677","menuCangVal":"FIUA009_01","bsneClsfCd":"%EC%97%85130020","scrnNo":"05665"}';
@@ -32,6 +33,6 @@ export async function fetchWorkProgress({
     workProgressMenu,
   );
   if (!Array.isArray(result.dlWorkPrgsL))
-    throw new Error("나라장터 업무 진행 응답 형식이 올바르지 않습니다.");
+    throw collectionValidationError("나라장터 업무 진행 응답 형식이 올바르지 않습니다.", "dlWorkPrgsL");
   return result.dlWorkPrgsL;
 }

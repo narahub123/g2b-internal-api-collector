@@ -1,3 +1,4 @@
+import { collectionStep, collectionError } from "@/shared/api/g2b/collection-diagnostic";
 import { getG2bRepository } from "@/server/g2b/repository";
 import {
   groupOpeningResultQueries,
@@ -19,7 +20,7 @@ import { createG2bSession } from "@/shared/api/g2b/g2b-session";
 import { throwIfMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 import { postG2b, type G2bRequest } from "./request";
 import { collectOnce } from "./collect-once";
-import { trackCollectionAttempt } from "./collection-attempt";
+import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
 
 const openingResultMenu =
   '{"menuNo":"01523","menuCangVal":"PBOC007_01","bsneClsfCd":"%EC%97%85130028","scrnNo":"02128"}';
@@ -88,7 +89,10 @@ async function collectOpeningNotice(
   ]);
   throwIfMaintenance(...outcomes);
   const [postponement, ...openingNotices] = outcomes.map((outcome) => {
-    if (outcome.status === "rejected") throw outcome.reason;
+    if (outcome.status === "rejected") throw new AggregateError(
+      outcomes.flatMap((entry) => entry.status === "rejected" ? [entry.reason] : []),
+      "개찰결과 공지사항 조회가 실패했습니다.",
+    );
     return outcome.value;
   });
   return openingNotices.reduce<OpeningResultNotice | null>(
@@ -118,7 +122,7 @@ export async function collectOpeningResult(
     `opening-result:${key.number}/${key.revision}/${key.openingRevision}`,
     force,
     async () => {
-      const saved = repository.findOpeningResult(key);
+      const saved = await trackCollectionLookup({ section: "opening-results", ...key, queries }, "개찰결과", () => repository.findOpeningResult(key));
       const previous = saved?.results ?? [];
       // 분류와 API 유형이 모두 같은 저장 결과만 수집 완료로 간주한다.
       const missing = queries.filter(
@@ -137,7 +141,7 @@ export async function collectOpeningResult(
       const needsPrice =
         Boolean(priceQuery) && (force || saved?.price === undefined);
       if (!missing.length && !needsNotice && !needsPrice) return;
-      return trackCollectionAttempt({ section: "opening-results", ...key, queries }, async () => {
+      return trackCollectionAttempt({ section: "opening-results", ...key, queries }, async (recordFailure) => {
         const request = await createG2bSession();
         const [resultOutcome, noticeOutcome, priceOutcome] = await Promise.all([
           Promise.allSettled(
@@ -152,7 +156,8 @@ export async function collectOpeningResult(
               );
               return {
                 query,
-                detail: openingResultDetail(config.endpoint, payload, key, query),
+                detail: collectionStep("개찰결과 응답 검증", () =>
+                  openingResultDetail(config.endpoint, payload, key, query)),
               };
             }),
           ),
@@ -172,15 +177,30 @@ export async function collectOpeningResult(
                   request,
                   openingResultPriceMenu,
                 );
-                return openingResultPriceFromResponse(payload, key, priceQuery);
+                return collectionStep("예정가격 응답 검증", () =>
+                  openingResultPriceFromResponse(payload, key, priceQuery));
               })().then(
                 (value) => ({ status: "fulfilled" as const, value }),
                 (reason: unknown) => ({ status: "rejected" as const, reason }),
               )
             : Promise.resolve({ status: "skipped" as const }),
         ]);
-        // 점검 중 일부 조회가 성공해도 해당 개찰차수의 기존 자료를 유지한다.
-        throwIfMaintenance(...resultOutcome, noticeOutcome, priceOutcome);
+        const failures = resultOutcome.flatMap((outcome, index) => outcome.status === "rejected"
+          ? [collectionError(new Error("개찰결과 분류 조회 실패", { cause: outcome.reason }), {
+              step: "개찰결과 조회", details: { "개찰 분류": missing[index].classification },
+            })]
+          : []);
+        const reasons = [...failures];
+        if (noticeOutcome.status === "rejected")
+          reasons.push(new Error("개찰결과 공지사항 조회 실패", { cause: noticeOutcome.reason }));
+        if (priceOutcome.status === "rejected")
+          reasons.push(new Error("개찰결과 예정가격 조회 실패", { cause: priceOutcome.reason }));
+        // 점검 중에는 저장을 보류하되 함께 실패한 조회도 보존한다.
+        try {
+          throwIfMaintenance(...resultOutcome, noticeOutcome, priceOutcome);
+        } catch {
+          throw new AggregateError(reasons, "나라장터 점검으로 개찰결과 저장을 보류했습니다.");
+        }
         const successes = resultOutcome.flatMap((result) =>
           result.status === "fulfilled" ? [result.value] : [],
         );
@@ -201,31 +221,28 @@ export async function collectOpeningResult(
           noticeOutcome.status === "fulfilled" ||
           priceOutcome.status === "fulfilled"
         ) {
-          repository.saveOpeningResult({
-            ...key,
-            collectedAt: new Date().toISOString(),
-            results: updated,
-            ...(noticeOutcome.status === "fulfilled"
-              ? { notice: noticeOutcome.value }
-              : saved?.notice !== undefined
-                ? { notice: saved.notice }
-                : {}),
-            ...(priceOutcome.status === "fulfilled"
-              ? { price: priceOutcome.value }
-              : saved?.price !== undefined
-                ? { price: saved.price }
-                : {}),
-          });
+          try {
+            collectionStep("SQLite 개찰결과 저장", () => repository.saveOpeningResult({
+              ...key,
+              collectedAt: new Date().toISOString(),
+              results: updated,
+              ...(noticeOutcome.status === "fulfilled"
+                ? { notice: noticeOutcome.value }
+                : saved?.notice !== undefined
+                  ? { notice: saved.notice }
+                  : {}),
+              ...(priceOutcome.status === "fulfilled"
+                ? { price: priceOutcome.value }
+                : saved?.price !== undefined
+                  ? { price: saved.price }
+                  : {}),
+            }));
+          } catch (error) {
+            reasons.forEach(recordFailure);
+            throw error;
+          }
         }
         // 일반 조회 오류는 성공 자료를 저장한 뒤 모아서 전달해 부분 실패를 알린다.
-        const failures = resultOutcome.filter(
-          (result): result is PromiseRejectedResult =>
-            result.status === "rejected",
-        );
-        const reasons = failures.map(({ reason }) => reason);
-        if (noticeOutcome.status === "rejected")
-          reasons.push(noticeOutcome.reason);
-        if (priceOutcome.status === "rejected") reasons.push(priceOutcome.reason);
         if (reasons.length) {
           throw new AggregateError(
             reasons,

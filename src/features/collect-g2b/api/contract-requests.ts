@@ -1,9 +1,10 @@
+import { collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 import { contractRequestRevision, type ContractRequestKey } from "@/entities/contract-request/model/contract-request";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { findMaintenance, throwIfMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 import { postG2b } from "./request";
 import { collectOnce } from "./collect-once";
-import { trackCollectionAttempt } from "./collection-attempt";
+import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
 import { unifiedSearchPath } from "./work-progress";
 
 // 품목 API의 요청 크기와 마지막 페이지 판정에 같은 기준을 사용한다.
@@ -66,15 +67,12 @@ async function collectContractRequestItems(
       page,
     );
     const rows = result.dlTotalSrchItemL;
-    if (
-      !Array.isArray(rows) ||
-      rows.some(
-        (row) =>
-          row?.ctrtDmndRcptNo !== key.number ||
-          contractRequestRevision(row.ctrtDmndRcptOrd) !== key.revision,
-      )
-    ) {
-      throw new Error("요청한 계약요청의 품목 응답을 받지 못했습니다.");
+    const invalidIndex = Array.isArray(rows) ? rows.findIndex((row) =>
+      row?.ctrtDmndRcptNo !== key.number || contractRequestRevision(row?.ctrtDmndRcptOrd) !== key.revision) : -1;
+    if (!Array.isArray(rows) || invalidIndex >= 0) {
+      const row = rows?.[invalidIndex];
+      throw collectionValidationError("요청한 계약요청의 품목 응답을 받지 못했습니다.", "dlTotalSrchItemL", key,
+        { number: row?.ctrtDmndRcptNo, revision: row?.ctrtDmndRcptOrd });
     }
     // API가 다음 페이지에도 같은 품목을 반환하면 중복 저장과 무한 조회를 막는다.
     const signature = JSON.stringify(rows.map(({ rowNum, ...item }) => item));
@@ -104,8 +102,8 @@ export async function collectContractRequest(
     `contract-request:${key.number}/${key.revision}`,
     force,
     async () => {
-      if (!force && repository.findContractRequest(key)) return;
-      return trackCollectionAttempt({ section: "contract-requests", ...key }, async () => {
+      if (!force && await trackCollectionLookup({ section: "contract-requests", ...key }, "계약요청", () => repository.findContractRequest(key))) return;
+      return trackCollectionAttempt({ section: "contract-requests", ...key }, async (recordFailure) => {
         const collectedAt = new Date().toISOString();
         // 상세에서 점검을 확인하면 진행 중인 품목 요청 이후에는 다음 페이지를 요청하지 않는다.
         let maintenance: ReturnType<typeof findMaintenance>;
@@ -118,6 +116,13 @@ export async function collectContractRequest(
             if (maintenance) throw maintenance;
           }),
         ]);
+        if (summary.status === "rejected" && items.status === "rejected") {
+          const preferred = findMaintenance(summary.reason) ?? findMaintenance(items.reason) ?? summary.reason;
+          for (const reason of new Set([summary.reason, items.reason])) {
+            if (reason !== preferred) recordFailure(reason);
+          }
+          throw preferred;
+        }
         throwIfMaintenance(summary, items);
         if (summary.status === "rejected") throw summary.reason;
         if (items.status === "rejected") throw items.reason;
@@ -129,14 +134,17 @@ export async function collectContractRequest(
               row?.bizNo === key.number &&
               contractRequestRevision(row.bizOrd) === key.revision,
           );
-        if (!detail)
-          throw new Error("요청한 계약요청의 상세 응답을 받지 못했습니다.");
-        repository.saveContractRequest({
+        if (!detail) {
+          const first = result.dlTotalSrchL?.[0];
+          throw collectionValidationError("요청한 계약요청의 상세 응답을 받지 못했습니다.", "dlTotalSrchL", key,
+            { number: first?.bizNo, revision: first?.bizOrd });
+        }
+        collectionStep("SQLite 계약요청 저장", () => repository.saveContractRequest({
           ...key,
           collectedAt,
           detail,
           items: items.value,
-        });
+        }));
       });
     },
   );

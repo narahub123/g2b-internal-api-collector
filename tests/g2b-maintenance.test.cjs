@@ -583,6 +583,14 @@ test('개찰차수의 점검은 부분 저장을 보류하고 일반 오류는 �
   );
   assert.equal(failure.status, 'failed');
   assert.equal(failure.hasData, true);
+  const diagnostics = JSON.parse(failure.diagnostics);
+  assert.equal(diagnostics.errors.length, 2);
+  assert.equal(diagnostics.errors[0].details['개찰 분류'], '2');
+  assert.equal(diagnostics.errors[0].cause.response.status, 500);
+  assert.match(diagnostics.errors[1].message, /예정가격/);
+  assert.equal(diagnostics.errors[1].cause.response.status, 500);
+  assert.match(diagnostics.errors[0].cause.stack, /request\.ts:\d+:\d+/);
+  assert.match(diagnostics.errors[1].cause.stack, /request\.ts:\d+:\d+/);
 });
 
 test('연기공고의 HTTP 200 점검 HTML은 다른 공지 오류보다 우선하며 개찰차수를 보존한다', async (t) => {
@@ -840,8 +848,21 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
       CREATE TABLE contract_requests (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
       CREATE TABLE contracts (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
       CREATE TABLE opening_results (number TEXT, revision TEXT, opening_revision TEXT, collected_at TEXT, data TEXT);
+      CREATE TABLE g2b_collection_attempts (
+        id INTEGER PRIMARY KEY, section TEXT, number TEXT, revision TEXT, opening_revision TEXT,
+        input TEXT, started_at TEXT, finished_at TEXT, status TEXT DEFAULT 'pending', error TEXT
+      );
+      INSERT INTO g2b_collection_attempts VALUES (
+        1, 'contracts', 'LEGACY-DIAGNOSTICS', '00', '', '{}', '2026-11-01', '2026-11-01', 'failed', '이전 오류'
+      );
     `);
     const attempts = openCollectionAttempts(db);
+    const [legacy] = attempts.overview('contracts').failures;
+    assert.equal(legacy.error, '이전 오류');
+    assert.equal(legacy.diagnostics, null);
+    const legacyRetry = attempts.start({ section: 'contracts', number: legacy.number, revision: '00' });
+    attempts.finish(legacyRetry, 'failed', '새 오류', { name: 'Error', code: 'ECONNRESET' });
+    assert.equal(JSON.parse(attempts.overview('contracts').failures[0].diagnostics).code, 'ECONNRESET');
     const insert = db.prepare("INSERT INTO notices VALUES (?, '000', '2026-11-01', ?)");
     for (let index = 1; index <= 23; index++) {
       const number = 'N' + String(index).padStart(2, '0');
@@ -916,4 +937,103 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
     databases.delete(db);
     db.close();
   }
+});
+
+test('수집 이력에서 네트워크 하위 원인과 각각의 스택을 확인한다', async () => {
+  const { trackCollectionAttempt } = require('../src/features/collect-g2b/api/collection-attempt');
+  const { postG2b } = require('../src/features/collect-g2b/api/request');
+  const target = { section: 'contracts', number: 'DIAGNOSTICS-RESET', revision: '00' };
+  const cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET', syscall: 'read' });
+  const error = new TypeError('fetch failed', { cause });
+  await assert.rejects(
+    trackCollectionAttempt(target, () => postG2b('/test.do', 'test', {}, async () => { throw error; })),
+    error,
+  );
+  const attempt = repository.collectionAttempts.overview('contracts').failures.find(({ number }) => number === target.number);
+  const diagnostics = JSON.parse(attempt.diagnostics);
+  assert.equal(diagnostics.request.path, '/test.do');
+  assert.equal(diagnostics.cause.code, 'ECONNRESET');
+  assert.match(diagnostics.stack, /TypeError: fetch failed/);
+  assert.match(diagnostics.cause.stack, /Error: read ECONNRESET/);
+});
+
+test('관리자 목록의 실패 진단은 업무 오류, HTTP 오류, JSON 파싱 원인을 표시한다', async () => {
+  const { createElement } = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { CollectionFailureDetails } = require('../src/_pages/admin/g2b/ui/CollectionFailureDetails');
+  const { trackCollectionAttempt } = require('../src/features/collect-g2b/api/collection-attempt');
+  const { postG2b } = require('../src/features/collect-g2b/api/request');
+  const cases = [
+    [Response.json({ ErrorCode: 'E-42', ErrorMsg: '품목 조회 권한 없음. Authorization: Bearer secret-value' }), 200, '나라장터 업무 응답'],
+    [new Response('<html>raw-private-body</html>', { status: 503 }), 503, 'HTTP 응답'],
+    [new Response('{"number": raw-private-body}', { headers: { 'Content-Type': 'application/json' } }), 200, 'JSON 해석'],
+    [new Response('{"number":"raw-private-body"}_', { headers: { 'Content-Type': 'application/json' } }), 200, 'JSON 해석'],
+  ];
+  for (const [index, [response, status, step]] of cases.entries()) {
+    const target = { section: 'contracts', number: 'DIAGRESPONSE' + index, revision: '00' };
+    await assert.rejects(trackCollectionAttempt(target, () => postG2b('/test.do', 'test', {}, async () => response)));
+    const query = parseContractListQuery({ status: 'uncollected', field: 'number', q: target.number }, []);
+    const row = repository.collectionAttempts.contractList.page(query).rows.find(({ number }) => number === target.number);
+    const diagnostic = JSON.parse(row.diagnostics);
+    assert.equal(diagnostic.step, step);
+    assert.equal(diagnostic.response.status, status);
+    assert.doesNotMatch(row.diagnostics, /secret-value|raw-private-body/);
+    const html = renderToStaticMarkup(createElement(CollectionFailureDetails, { diagnostics: row.diagnostics }));
+    assert.match(html, /<details[^>]*><summary[^>]*>원인 보기/);
+    assert.match(html, /스택 보기/);
+    assert.match(html, new RegExp(step));
+    if (index === 0) {
+      assert.equal(diagnostic.response.errorCode, 'E-42');
+      assert.match(html, /품목 조회 권한 없음/);
+    } else if (index === 1) {
+      assert.match(html, /서버 내부 원인 확인 불가/);
+    } else {
+      assert.equal(diagnostic.name, 'SyntaxError');
+      assert.equal(diagnostic.details?.['오류 위치'], index === 3 ? 29 : undefined);
+    }
+  }
+});
+
+test('계약현황의 응답 키 불일치와 실제 SQLite 저장 오류를 기록한다', async (t) => {
+  const { collectContract } = require('../src/features/collect-g2b/server');
+  const key = { number: 'DIAG-SQLITE', revision: '00' };
+  let number = 'DIAG-OTHER';
+  mockFetch(t, () => success({
+    dlCtrtMngLstM: { ctrtNo: number, ctrtChgOrd: 0 },
+    dlCtrtEtpsLstL: [], dlCtrtEtpsSvsLstL: [], dlCtrtItemLstL: [],
+  }));
+  const latest = () => JSON.parse(repository.collectionAttempts.overview('contracts').failures
+    .find((row) => row.number === key.number).diagnostics);
+  await assert.rejects(collectContract(key, true));
+  assert.equal(latest().details['기대한 번호'], key.number);
+  assert.equal(latest().details['응답 번호'], number);
+
+  number = key.number;
+  const db = [...databases][0];
+  db.exec(`CREATE TRIGGER diagnostic_contract_failure BEFORE INSERT ON contracts
+    WHEN NEW.number = 'DIAG-SQLITE' BEGIN SELECT RAISE(ABORT, 'diagnostic constraint'); END;`);
+  try {
+    await assert.rejects(collectContract(key, true), /diagnostic constraint/);
+    const diagnostic = latest();
+    assert.equal(diagnostic.step, 'SQLite 계약현황 저장');
+    assert.equal(diagnostic.code, 'ERR_SQLITE_ERROR');
+    assert.equal(typeof diagnostic.errcode, 'number');
+    assert.match(diagnostic.stack, /diagnostic constraint/);
+  } finally {
+    db.exec('DROP TRIGGER diagnostic_contract_failure');
+  }
+});
+
+test('진단 이력 저장도 실패하면 두 원인을 기록하고 원래 예외를 전달한다', async (t) => {
+  const { trackCollectionAttempt } = require('../src/features/collect-g2b/api/collection-attempt');
+  const target = { section: 'contracts', number: 'DIAGHISTORYFAIL', revision: '00' };
+  const collectError = new Error('connection reset');
+  const finishError = new Error('history write failed');
+  t.mock.method(repository.collectionAttempts, 'finish', () => { throw finishError; });
+  const log = t.mock.method(console, 'error', () => {});
+  await assert.rejects(trackCollectionAttempt(target, async () => { throw collectError; }), (error) => error === collectError);
+  assert.equal(log.mock.callCount(), 1);
+  const args = log.mock.calls[0].arguments;
+  assert.equal(args[4].message, collectError.message);
+  assert.equal(args[5].message, finishError.message);
 });

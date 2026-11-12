@@ -17,6 +17,7 @@ import { collectContract } from "./contracts";
 import { collectOrderPlan } from "./order-plans";
 import { collectPriorSpec } from "./prior-specs";
 import { fetchEtcNotice } from "./etc-notice";
+import { collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 
 // 공고 상세 화면의 submission 식별자 접두사.
 const submissionPrefix = "FIUA027_01_wframe_popupCnts_bidPbancWfrm_mainWframe_";
@@ -69,7 +70,7 @@ async function collectNoticeContractLinks(key: NoticeKey, rows: Record<string, u
  * 게시글의 일반 오류는 허용하되 점검을 확인하면 다음 게시글을 조회하지 않는다.
  * @throws 공지 목록 조회가 실패하거나 목록 또는 개별 게시글 조회에서 점검을 확인한 경우.
  */
-async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["posts"]>> {
+async function collectNoticePosts(key: NoticeKey, recordFailure?: (error: unknown) => void): Promise<NonNullable<Notice["posts"]>> {
   const prefix = "FIUA027_01_wframe_popupCnts_bidPbancWfrm_";
   const popupPrefix = prefix + "PNPE031_01_wframe_popupCnts_";
   const popupMenu = '{"menuNo":"12568","menuCangVal":"PNPE031_01","bsneClsfCd":"%EC%97%85130026","scrnNo":"07883"}';
@@ -99,7 +100,8 @@ async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["p
       );
       const metadata = noticePostRecord(detail.dlPstM);
       if (metadata.bbsNo !== bbsNo || String(metadata.pstNo) !== pstNo)
-        throw new Error("공지사항 상세 키가 일치하지 않습니다.");
+        throw collectionValidationError("공지사항 상세 키가 일치하지 않습니다.", "dlPstM",
+          { number: bbsNo, revision: pstNo }, { number: metadata.bbsNo, revision: metadata.pstNo });
       entry.detail = detail;
       const group = attachmentGroup(metadata.untyAtchFileNo);
       const [body, attachments] = await Promise.allSettled([
@@ -109,18 +111,22 @@ async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["p
         ).then((response) => {
           const data = noticePostRecord(response.dlPstCnM);
           if (data.bbsNo !== bbsNo || String(data.pstNo) !== pstNo)
-            throw new Error("공지사항 본문 키가 일치하지 않습니다.");
+            throw collectionValidationError("공지사항 본문 키가 일치하지 않습니다.", "dlPstCnM",
+              { number: bbsNo, revision: pstNo }, { number: data.bbsNo, revision: data.pstNo });
           return response;
         }),
         group ? collectAttachments(group, "notice-post") : undefined,
       ]);
       throwIfMaintenance(body, attachments);
       if (body.status === "fulfilled") entry.body = body.value;
+      else recordFailure?.(body.reason);
       if (attachments.status === "fulfilled") entry.attachments = attachments.value;
+      else recordFailure?.(attachments.reason);
     } catch (error) {
       const maintenance = findMaintenance(error);
       if (maintenance) throw maintenance;
       // 일반 상세 오류에서는 목록의 게시글 식별자를 보존하고 다음 게시글을 조회한다.
+      recordFailure?.(error);
     }
   }
   return { list, entries };
@@ -133,18 +139,21 @@ async function collectNoticePosts(key: NoticeKey): Promise<NonNullable<Notice["p
  * 독립적으로 완료된 관련 자료는 저장될 수 있다.
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
+ * @param recordFailure 본문 저장을 계속할 수 있는 부가 조회 실패를 이력에 남기는 콜백.
  * @returns 저장할 공고 원본과 이번 요청에서 처리한 개찰차수별 결과.
  * @throws 공고 상세 조회 또는 식별자 검증에 실패하거나 상세·부가 조회에서 점검을 확인한 경우.
  */
 export async function collectNotice(
   key: NoticeKey,
   methodCode: string,
+  recordFailure?: (error: unknown) => void,
 ): Promise<{ notice: Notice; openingReport: OpeningCollectionReport }> {
   const collectedAt = new Date().toISOString();
   const workProgress = await fetchWorkProgress(key).catch((error) => {
     const maintenance = findMaintenance(error);
     if (maintenance) throw maintenance;
     // 일반 오류에서는 업무구분을 알 수 없어 기존 상세 조회를 시도한다.
+    recordFailure?.(error);
     return undefined;
   });
   const isEtc = workProgress?.some((row) => row?.prcmBsneSeCd === etcNoticeBusinessCode);
@@ -172,7 +181,10 @@ export async function collectNotice(
     typeof detail?.bidPbancNm !== "string" ||
     !detail.bidPbancNm.trim()
   ) {
-    throw new Error("요청한 공고의 상세 응답을 받지 못했습니다.");
+    const detailField = isEtc ? "dlUntyBidPbancM" : "dmItemMap";
+    const field = typeof detail?.bidPbancNm !== "string" || !detail.bidPbancNm.trim()
+      ? `${detailField}.bidPbancNm` : detailField;
+    throw collectionValidationError("요청한 공고의 상세 응답을 받지 못했습니다.", field, key, { number, revision });
   }
   // 첨부 목록은 공고의 첨부 그룹만 조회하고, 제안요청은 상세 JS와 같이 협상계약에만 적용한다.
   const orderPlanNumber = isEtc ? undefined : getNoticeOrderPlanNumber(payload);
@@ -200,11 +212,16 @@ export async function collectNotice(
       : undefined,
     linkedRows ? collectNoticeContractLinks(key, linkedRows) : undefined,
     isEtc ? { targetRevisions: [], succeededRevisions: [], failures: [] } : collectNoticeOpeningResults(payload),
-    isEtc ? undefined : collectNoticePosts(key),
+    isEtc ? undefined : collectNoticePosts(key, recordFailure),
     orderPlanNumber ? collectOrderPlan(orderPlanNumber) : undefined,
     priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
   ]);
   const [attachments, proposal, contractLinks, openingResults, posts] = outcomes;
+  if (recordFailure) {
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected" && !findMaintenance(outcome.reason)) recordFailure(outcome.reason);
+    }
+  }
   if (openingResults.status === "rejected") throw openingResults.reason;
   const openingReport = openingResults.value;
   try {

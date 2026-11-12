@@ -6,6 +6,7 @@ import {
   type OpeningResultNotice,
   type OpeningResultPrice,
 } from "@/entities/opening-result/model/opening-result";
+import { collectionError, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 
 const prefix = "/pb/pbo/pboc/OnbsRslt/";
 const submissionPrefix =
@@ -87,7 +88,7 @@ export function openingResultDetail(
   query: OpeningResultQuery,
 ): Record<string, unknown> {
   const result = object(object(response)?.result);
-  if (!result) throw new Error(`${endpoint}: result 객체가 없습니다.`);
+  if (!result) throw collectionValidationError(`${endpoint}: result 객체가 없습니다.`, "result");
   if (endpoint === "selectOnbsRsltFbid") {
     const detail = object(result.bidPrgrs);
     if (
@@ -97,7 +98,7 @@ export function openingResultDetail(
       !sameRevision(detail.bidPrgrsOrd, key.openingRevision) ||
       String(detail.bidClsfNo) !== query.classification
     ) {
-      throw new Error(`${endpoint}: 요청한 유찰·입찰취소 결과가 아닙니다.`);
+      throw openingKeyError(`${endpoint}: 요청한 유찰·입찰취소 결과가 아닙니다.`, "result.bidPrgrs", key, query, detail);
     }
     return detail; // 구형 유찰 화면의 detail.prcsRsn 접근을 유지한다.
   }
@@ -111,7 +112,9 @@ export function openingResultDetail(
       !sameRevision(bidPrgrs.bidPrgrsOrd, key.openingRevision) ||
       String(bidPrgrs.bidClsfNo) !== query.classification
     ) {
-      throw new Error(`${endpoint}: 요청한 재입찰 결과가 아닙니다.`);
+      const message = `${endpoint}: 요청한 재입찰 결과가 아닙니다.`;
+      if (!Array.isArray(result.reBidInfo)) throw collectionValidationError(message, "result.reBidInfo");
+      throw openingKeyError(message, "result.bidPrgrs", key, query, bidPrgrs);
     }
     return result;
   }
@@ -123,13 +126,41 @@ export function openingResultDetail(
     bidInfo.bidPbancNo !== key.number ||
     !sameRevision(bidInfo.bidPbancOrd, key.revision)
   ) {
-    throw new Error(
-      `${endpoint}: 개찰완료 결과의 식별자 또는 필수 응답이 올바르지 않습니다.`,
-    );
+    const message = `${endpoint}: 개찰완료 결과의 식별자 또는 필수 응답이 올바르지 않습니다.`;
+    if (!object(result.etcData)) throw collectionValidationError(message, "result.etcData");
+    if (!Array.isArray(result.successBidInfo)) throw collectionValidationError(message, "result.successBidInfo");
+    throw collectionValidationError(message, "result.bidInfo", key, {
+      number: bidInfo?.bidPbancNo, revision: bidInfo?.bidPbancOrd,
+    });
   }
   // 개찰완료 API는 bidInfo에 개찰차수/분류번호가 없을 수 있다.
   // 요청 조건(query)을 결과와 함께 보존하며, 다른 차수로 단정하지 않는다.
   return result;
+}
+
+function openingKeyError(
+  message: string,
+  field: string,
+  key: OpeningResultKey,
+  query: OpeningResultQuery,
+  actual: Record<string, unknown> | undefined,
+) {
+  const details = {
+    "응답 필드": field,
+    "기대한 번호": key.number,
+    "기대한 차수": key.revision,
+    "기대한 개찰차수": key.openingRevision,
+    "기대한 분류": query.classification,
+    "응답 번호": identifier(actual?.bidPbancNo),
+    "응답 차수": identifier(actual?.bidPbancOrd),
+    "응답 개찰차수": identifier(actual?.bidPrgrsOrd),
+    "응답 분류": identifier(actual?.bidClsfNo),
+  };
+  return collectionError(new Error(message), { step: "응답 검증", details });
+}
+
+function identifier(value: unknown) {
+  return typeof value === "string" || typeof value === "number" ? value : "없음";
 }
 
 const openingNoticeBoardNo = "R23AB00000204";
@@ -186,7 +217,7 @@ export function openingResultNoticeFromResponse(
 ): OpeningResultNotice | null {
   const rows = object(response)?.dlPstL;
   if (!Array.isArray(rows)) {
-    throw new Error("개찰결과 공지사항 응답에 dlPstL 배열이 없습니다.");
+    throw collectionValidationError("개찰결과 공지사항 응답에 dlPstL 배열이 없습니다.", "dlPstL");
   }
   if (!rows.length) return null;
   const row = object(rows[0]);
@@ -196,9 +227,12 @@ export function openingResultNoticeFromResponse(
     typeof row.inptDt !== "string" ||
     typeof row.pstNm !== "string"
   ) {
-    throw new Error(
-      "개찰결과 공지사항 게시글의 필수 필드가 올바르지 않습니다.",
-    );
+    const field = !row ? "dlPstL[0]" : [
+      typeof row.pstNo !== "string" && typeof row.pstNo !== "number" ? "dlPstL[0].pstNo" : "",
+      typeof row.inptDt !== "string" ? "dlPstL[0].inptDt" : "",
+      typeof row.pstNm !== "string" ? "dlPstL[0].pstNm" : "",
+    ].filter(Boolean).join(", ");
+    throw collectionValidationError("개찰결과 공지사항 게시글의 필수 필드가 올바르지 않습니다.", field);
   }
   return {
     bbsNo: openingNoticeBoardNo,
@@ -285,9 +319,10 @@ export function openingResultPriceFromResponse(
     !sameRevision(pbancInfo.bidPrgrsOrd, key.openingRevision) ||
     String(pbancInfo.bidClsfNo) !== query.classification
   ) {
-    throw new Error(
-      "복수예비가격 및 예정가격 응답의 식별자 또는 목록이 올바르지 않습니다.",
-    );
+    const message = "복수예비가격 및 예정가격 응답의 식별자 또는 목록이 올바르지 않습니다.";
+    if (!Array.isArray(rsvePrceList) || !rsvePrceList.every((row) => object(row)))
+      throw collectionValidationError(message, "rsvePrceList");
+    throw openingKeyError(message, "pbancInfo", key, query, pbancInfo);
   }
   for (const field of [
     "bsisAmtInfo",
@@ -295,9 +330,7 @@ export function openingResultPriceFromResponse(
     "plrlRsvePrceCalcInfo",
   ] as const) {
     if (data?.[field] != null && !object(data[field])) {
-      throw new Error(
-        `복수예비가격 및 예정가격 응답의 ${field} 형식이 올바르지 않습니다.`,
-      );
+      throw collectionValidationError(`복수예비가격 및 예정가격 응답의 ${field} 형식이 올바르지 않습니다.`, field);
     }
   }
   return {

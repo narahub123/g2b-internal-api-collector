@@ -77,8 +77,9 @@ export function queryCollectionPage(db: DatabaseSync, targets: string, options: 
         SELECT (max(1, min(?, (selectedCount + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
       )
     )
-    SELECT paged.*, totals.total, totals.collected, totals.selectedCount
+    SELECT paged.*, totals.total, totals.collected, totals.selectedCount, diagnostic_attempt.diagnostics
     FROM totals LEFT JOIN paged ON TRUE
+    LEFT JOIN g2b_collection_attempts diagnostic_attempt ON diagnostic_attempt.id = paged.id
     ORDER BY sortValue ${ascending ? "ASC" : "DESC"} NULLS LAST, number, revision`;
   const rows = db
     .prepare(sql)

@@ -1,3 +1,4 @@
+import { collectionError, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 import { attachmentSources } from "@/shared/model/g2b/g2b-attachments";
 import { postG2b, type G2bRequest } from "./request";
 
@@ -17,11 +18,14 @@ export async function collectDocumentList(
   input: object,
   request?: G2bRequest,
 ) {
-  const result = await postG2b(path, submission, input, request);
+  const result = await postG2b(path, submission, input, request).catch((error: unknown) => {
+    throw collectionError(error, { step: "첨부 문서 조회" });
+  });
   if (!Array.isArray(result.dlUntyAtchFileL)) {
-    throw new Error(
+    throw collectionError(collectionValidationError(
       `나라장터 문서 목록 응답 형식이 올바르지 않습니다: ${path}`,
-    );
+      "dlUntyAtchFileL",
+    ), { step: "첨부 문서 응답 검증", request: { path, submissionId: submission } });
   }
   return result;
 }

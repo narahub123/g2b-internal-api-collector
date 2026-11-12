@@ -1,8 +1,9 @@
-import { contractSearchBody, parseContractResponse, type ContractKey } from "@/entities/contract/model/contract";
+import { collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
+import { contractRevision, contractSearchBody, parseContractResponse, type ContractKey } from "@/entities/contract/model/contract";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { postG2b } from "./request";
 import { collectOnce } from "./collect-once";
-import { trackCollectionAttempt } from "./collection-attempt";
+import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
 import { unifiedSearchPath } from "./work-progress";
 
 /**
@@ -18,7 +19,7 @@ export async function collectContract(key: ContractKey, force = false) {
     `contract:${key.number}/${key.revision}`,
     force,
     async () => {
-      if (!force && repository.findContract(key)) return;
+      if (!force && await trackCollectionLookup({ section: "contracts", ...key }, "계약현황", () => repository.findContract(key))) return;
       return trackCollectionAttempt({ section: "contracts", ...key }, async () => {
         const collectedAt = new Date().toISOString();
         const result = await postG2b(
@@ -27,9 +28,18 @@ export async function collectContract(key: ContractKey, force = false) {
           contractSearchBody(key),
         );
         const contract = parseContractResponse(key, result);
-        if (!contract)
-          throw new Error("요청한 계약현황의 상세 응답을 받지 못했습니다.");
-        repository.saveContract({ ...key, collectedAt, ...contract });
+        if (!contract) {
+          const detail = result?.dlCtrtMngLstM;
+          const message = "요청한 계약현황의 상세 응답을 받지 못했습니다.";
+          if (detail?.ctrtNo !== key.number || contractRevision(detail?.ctrtChgOrd) !== key.revision) {
+            throw collectionValidationError(message, "dlCtrtMngLstM", key, { number: detail?.ctrtNo, revision: detail?.ctrtChgOrd });
+          }
+          const fields = ["dlCtrtEtpsLstL", "dlCtrtEtpsSvsLstL", "dlCtrtItemLstL"];
+          const invalid = fields.filter((field) => !Array.isArray(result[field]) ||
+            result[field].some((row: unknown) => row === null || typeof row !== "object" || Array.isArray(row)));
+          throw collectionValidationError(message, invalid.join(", "));
+        }
+        collectionStep("SQLite 계약현황 저장", () => repository.saveContract({ ...key, collectedAt, ...contract }));
       });
     },
   );

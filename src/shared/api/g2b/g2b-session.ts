@@ -1,5 +1,6 @@
 import { CookieJar } from 'tough-cookie';
 import { readG2bResponse } from './g2b-maintenance';
+import { collectionError } from './collection-diagnostic';
 
 const homepage = new URL('https://www.g2b.go.kr/');
 // 익명 쿠키를 얻는 동안 명시적인 HTTP 리다이렉트만 같은 출처에서 따라간다.
@@ -28,8 +29,16 @@ export async function createG2bSession() {
   }
 
   let url = homepage;
+  const timeoutMs = 15000;
   for (let step = 0; step < 4; step++) {
-    const response = await request(url, { signal: AbortSignal.timeout(15000) });
+    const context = { step: '익명 세션 발급', request: { path: url.pathname, timeoutMs } };
+    const response = await request(url, { signal: AbortSignal.timeout(timeoutMs) }).catch((error: unknown) => {
+      throw collectionError(error, context);
+    });
+    const responseContext = {
+      ...context,
+      response: { status: response.status, contentType: response.headers.get('content-type') ?? undefined },
+    };
     const location = response.headers.get('Location');
     const next = redirectStatuses.has(response.status) && location ? new URL(location, url) : null;
     if (next?.origin === homepage.origin) {
@@ -38,7 +47,9 @@ export async function createG2bSession() {
       continue;
     }
     // 쿠키가 발급됐더라도 최종 본문이 점검 화면이면 API 요청을 시작하지 않는다.
-    await readG2bResponse(response);
+    await readG2bResponse(response).catch((error: unknown) => {
+      throw collectionError(error, responseContext);
+    });
     // 외부 출처로 이동하라는 응답에서도 나라장터가 이미 발급한 쿠키는 재사용할 수 있다.
     if ((response.ok || next) && (await jar.getCookies(homepage.href)).length) {
       return (apiUrl: URL, init: RequestInit) => {
@@ -48,7 +59,12 @@ export async function createG2bSession() {
         return request(apiUrl, { ...init, headers });
       };
     }
-    break;
+    throw collectionError(new Error('나라장터 익명 세션을 발급받지 못했습니다.'), {
+      ...responseContext, details: { '세션 실패 근거': '사용 가능한 익명 세션 응답을 받지 못했습니다.' },
+    });
   }
-  throw new Error('나라장터 익명 세션을 발급받지 못했습니다.');
+  throw collectionError(new Error('나라장터 익명 세션을 발급받지 못했습니다.'), {
+    step: '익명 세션 발급', request: { path: url.pathname, timeoutMs },
+    details: { '세션 실패 근거': '같은 출처 리다이렉트 허용 횟수를 초과했습니다.' },
+  });
 }

@@ -1,3 +1,4 @@
+import { collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { orderPlanAttachmentGroup } from "@/entities/order-plan/model/order-plan";
 import { createG2bSession } from "@/shared/api/g2b/g2b-session";
@@ -5,7 +6,7 @@ import { findMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 import { postG2b } from "./request";
 import { collectAttachments } from "./attachments";
 import { collectOnce } from "./collect-once";
-import { trackCollectionAttempt } from "./collection-attempt";
+import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
 
 /**
  * 발주계획 본문과 첨부 목록을 수집한다. 일반 수집은 저장된 본문을 재사용하고 누락된 첨부만 보충한다.
@@ -18,11 +19,11 @@ export async function collectOrderPlan(number: string, force = false) {
   const repository = getG2bRepository();
 
   return collectOnce(`order-plan:${number}`, force, async () => {
-    let plan = force ? null : repository.findOrderPlan(number);
+    let plan = force ? null : await trackCollectionLookup({ section: "order-plans", number }, "발주계획", () => repository.findOrderPlan(number));
     const needsDetail = !plan;
     // 저장된 본문이 있고 첨부 수집이 끝났거나 첨부 그룹이 없으면 중복 요청을 피한다.
     if (plan && (plan.attachments || !orderPlanAttachmentGroup(plan))) return;
-    return trackCollectionAttempt({ section: "order-plans", number }, async () => {
+    return trackCollectionAttempt({ section: "order-plans", number }, async (recordFailure) => {
       const request = await createG2bSession();
       if (!plan) {
         const collectedAt = new Date().toISOString();
@@ -33,7 +34,8 @@ export async function collectOrderPlan(number: string, force = false) {
           request,
         );
         if (payload?.dlOderPlanM?.oderPlanNo !== number) {
-          throw new Error("요청한 발주계획의 상세 응답을 받지 못했습니다.");
+          throw collectionValidationError("요청한 발주계획의 상세 응답을 받지 못했습니다.", "dlOderPlanM.oderPlanNo",
+            { number }, { number: payload?.dlOderPlanM?.oderPlanNo });
         }
         plan = { number, collectedAt, payload };
       }
@@ -41,18 +43,25 @@ export async function collectOrderPlan(number: string, force = false) {
       const attachments = group
         ? await collectAttachments(group, "order-plan", request).catch((error: unknown) => {
             // 일반 오류일 때만 새 본문을 남겨 다음 수집에서 첨부 조회를 이어간다.
-            if (!findMaintenance(error) && !force && needsDetail) repository.saveOrderPlan(plan);
+            if (!findMaintenance(error) && !force && needsDetail) {
+              try {
+                collectionStep("SQLite 발주계획 부분 저장", () => repository.saveOrderPlan(plan));
+              } catch (saveError) {
+                recordFailure(error);
+                throw saveError;
+              }
+            }
             throw error;
           })
         : undefined;
-      if (force) repository.replaceOrderPlan({ ...plan, attachments });
-      else if (needsDetail) repository.saveOrderPlan({ ...plan, attachments });
+      if (force) collectionStep("SQLite 발주계획 저장", () => repository.replaceOrderPlan({ ...plan, attachments }));
+      else if (needsDetail) collectionStep("SQLite 발주계획 저장", () => repository.saveOrderPlan({ ...plan, attachments }));
       else if (attachments)
-        repository.saveOrderPlanAttachments(
+        collectionStep("SQLite 발주계획 첨부 저장", () => repository.saveOrderPlanAttachments(
           number,
           plan.collectedAt,
           attachments,
-        );
+        ));
     });
   });
 }

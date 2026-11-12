@@ -6,6 +6,7 @@ import type { CollectNoticeInput } from "../model/input";
 import { trackCollectionAttempt } from "./collection-attempt";
 import { collectOnce } from "./collect-once";
 import { collectNotice } from "./notices";
+import { collectionError } from "@/shared/api/g2b/collection-diagnostic";
 
 /**
  * 공고와 관련 자료를 조회하고 이전 자료로 보완한 뒤 저장한다.
@@ -17,8 +18,8 @@ import { collectNotice } from "./notices";
 export async function collectAndSaveNotice(input: CollectNoticeInput) {
   const { number, revision, methodCode } = input;
   return collectOnce(JSON.stringify(["notice", number, revision]), true, () =>
-    trackCollectionAttempt({ section: "notices", ...input }, async () => {
-      const { notice, openingReport } = await collectNotice({ number, revision }, methodCode);
+    trackCollectionAttempt({ section: "notices", ...input }, async (recordFailure) => {
+      const { notice, openingReport } = await collectNotice({ number, revision }, methodCode, recordFailure);
       const repository = getG2bRepository();
       const documents = notice.documents;
       const isEtc = Boolean(etcNoticeDetail(notice.payload));
@@ -26,7 +27,9 @@ export async function collectAndSaveNotice(input: CollectNoticeInput) {
           (!isEtc && (!notice.posts || notice.posts.entries.some((post) => !post.body ||
             (!post.attachments && attachmentGroup(noticePostRecord(post.detail?.dlPstM).untyAtchFileNo)))))) {
         // 일시적인 문서 조회 실패 때문에 이전에 저장한 원본 목록을 잃지 않도록 한다.
-        const previous = await repository.find({ number, revision });
+        const previous = await repository.find({ number, revision }).catch((error: unknown) => {
+          throw collectionError(error, { step: "SQLite 이전 공고 조회" });
+        });
         if (documents) {
           for (const kind of documents.unavailable ?? []) {
             if (isEtc && kind === "attachments") {
@@ -53,7 +56,9 @@ export async function collectAndSaveNotice(input: CollectNoticeInput) {
           }
         }
       }
-      await repository.save(notice);
+      await repository.save(notice).catch((error: unknown) => {
+        throw collectionError(error, { step: "SQLite 공고 저장" });
+      });
       return openingReport;
     }),
   );

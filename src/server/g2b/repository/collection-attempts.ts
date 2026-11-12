@@ -8,6 +8,7 @@ import { openPriorSpecList } from "./prior-spec-list";
 import { openOpeningResultList } from "./opening-result-list";
 import { openContractList } from "./contract-list";
 import { cleanText } from "./collection-list-query";
+import type { CollectionDiagnostic } from "@/shared/api/g2b/collection-diagnostic";
 
 export type CollectionSection = keyof G2bCollectionCounts;
 
@@ -40,6 +41,7 @@ type FailedAttempt = TargetKey & {
   startedAt: string;
   status: Exclude<AttemptStatus, "succeeded">;
   error: string | null;
+  diagnostics: string | null;
   hasData: boolean;
 };
 
@@ -55,6 +57,7 @@ export type CollectionListRow = TargetKey & ListMetadata & {
   startedAt: string | null;
   status: AttemptStatus | null;
   error: string | null;
+  diagnostics: string | null;
 };
 
 type RetryRow = { input: string; status: AttemptStatus; latestId: number };
@@ -124,7 +127,7 @@ const savedQueries: Record<CollectionSection, string> = {
 
 /**
  * 업무별 저장 결과와 시도 이력을 같은 SQLite 연결에서 조회하고 갱신한다.
- * 기존 DB에서는 시도 테이블과 인덱스만 추가한다.
+ * 기존 시도 이력을 보존하며 누락된 진단 열을 추가한다.
  * @throws 스키마 초기화 또는 쿼리 준비에 실패한 경우.
  */
 export function openCollectionAttempts(db: DatabaseSync) {
@@ -139,17 +142,31 @@ export function openCollectionAttempts(db: DatabaseSync) {
       started_at TEXT NOT NULL,
       finished_at TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
-      error TEXT
+      error TEXT,
+      diagnostics TEXT
     );
     CREATE INDEX IF NOT EXISTS g2b_collection_attempts_target
       ON g2b_collection_attempts (section, number, revision, opening_revision, id DESC);
   `);
+  // 동시에 시작한 프로세스도 열 확인과 추가를 쓰기 트랜잭션에서 직렬화한다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('g2b_collection_attempts') WHERE name = 'diagnostics'").get()) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!db.prepare("SELECT 1 FROM pragma_table_info('g2b_collection_attempts') WHERE name = 'diagnostics'").get()) {
+        db.exec("ALTER TABLE g2b_collection_attempts ADD COLUMN diagnostics TEXT");
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   const insert = db.prepare(`
     INSERT INTO g2b_collection_attempts (section, number, revision, opening_revision, input, started_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
   const finish = db.prepare(`
-    UPDATE g2b_collection_attempts SET finished_at = ?, status = ?, error = ?
+    UPDATE g2b_collection_attempts SET finished_at = ?, status = ?, error = ?, diagnostics = ?
     WHERE id = ? AND status = 'pending'
   `);
   const retry = db.prepare(`
@@ -182,7 +199,7 @@ export function openCollectionAttempts(db: DatabaseSync) {
         saved.collected_at AS collectedAt, saved.title,
         CAST(saved.businessCode AS TEXT) AS businessCode, saved.businessLabel,
         attempt.id, attempt.started_at AS startedAt,
-        attempt.status, attempt.error
+        attempt.status, attempt.error, attempt.diagnostics
       FROM targets
       LEFT JOIN saved USING (number, revision, opening_revision)
       LEFT JOIN latest USING (number, revision, opening_revision)
@@ -220,8 +237,8 @@ export function openCollectionAttempts(db: DatabaseSync) {
      * 지정한 시도만 종료 처리한다. 다른 시도의 시작 순서와 결과는 보존된다.
      * @throws SQLite가 결과를 저장하지 못한 경우.
      */
-    finish(id: number, status: FinishedStatus, error: string | null = null): void {
-      finish.run(new Date().toISOString(), status, error, id);
+    finish(id: number, status: FinishedStatus, error: string | null = null, diagnostics?: CollectionDiagnostic): void {
+      finish.run(new Date().toISOString(), status, error, diagnostics ? JSON.stringify(diagnostics) : null, id);
     },
 
     /**
@@ -253,11 +270,11 @@ export function openCollectionAttempts(db: DatabaseSync) {
       const rows = summaries.get(section)!.overview.all(section) as CollectionListRow[];
       const saved: SavedTarget[] = [];
       const failures: FailedAttempt[] = [];
-      for (const { number, revision, openingRevision, collectedAt, title, businessCode, businessLabel, id, startedAt, status, error } of rows) {
+      for (const { number, revision, openingRevision, collectedAt, title, businessCode, businessLabel, id, startedAt, status, error, diagnostics } of rows) {
         const key = { number, revision, openingRevision };
         if (collectedAt !== null) saved.push({ ...key, collectedAt, title, businessCode, businessLabel });
         if (id !== null && startedAt !== null && status && status !== "succeeded") {
-          failures.push({ ...key, id, startedAt, status, error, hasData: collectedAt !== null });
+          failures.push({ ...key, id, startedAt, status, error, diagnostics, hasData: collectedAt !== null });
         }
       }
       failures.sort((first, second) => second.id - first.id);
