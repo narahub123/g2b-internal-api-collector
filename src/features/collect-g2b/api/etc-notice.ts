@@ -1,13 +1,16 @@
 import { etcNoticeBusinessCode } from "@/entities/notice/model/notice-detail";
 import type { NoticeKey } from "@/entities/notice";
 import { postG2b } from "./request";
+import { createG2bSession } from "@/shared/api/g2b/g2b-session";
 
 /**
  * 기타 공고 상세 화면의 데이터 맵을 재현해 원본 응답을 조회한다.
  * @param key 통합검색에서 사용한 공고번호와 차수.
+ * @param businessCode 목록에서 확인한 통합공고 업무구분. 생략하면 기존 기타 공고를 조회한다.
  * @throws 나라장터 통신, 점검 또는 업무 응답 오류가 발생한 경우.
  */
-export function fetchEtcNotice(key: NoticeKey) {
+export async function fetchEtcNotice(key: NoticeKey, businessCode?: string) {
+  const request = businessCode === undefined ? fetch : await createG2bSession();
   return postG2b(
     "/pn/pnp/pnpe/UntyBidPbanc/selectUntyBidPbancDtlInfo.do",
     "FIUA027_01_wframe_popupCnts_bidPbancWfrm_sbmBidPbacRqdc",
@@ -30,7 +33,7 @@ export function fetchEtcNotice(key: NoticeKey) {
         emrgPbancYn: "",
         rbidPrmsYn: "",
         bidCtrtMthdCd: "",
-        prcmBsneSeCd: etcNoticeBusinessCode,
+        prcmBsneSeCd: businessCode ?? etcNoticeBusinessCode,
         bgtAmt: "",
         bidPrspPrce: "",
         vatAmt: "",
@@ -115,5 +118,6 @@ export function fetchEtcNotice(key: NoticeKey) {
         bidPbancOrd: key.revision,
       },
     },
+    request,
   );
 }

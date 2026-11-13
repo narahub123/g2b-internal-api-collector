@@ -103,13 +103,14 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
         db.prepare(`UPDATE g2b_notice_jobs SET force = 1, status = 'pending', availableAt = 0,
           failures = CASE WHEN status = 'retry_wait' THEN 0 ELSE failures END, input = ? WHERE id = ?`)
           .run(JSON.stringify(merged), id);
-      } else if (input.title || input.methodCode) {
+      } else if (input.title || input.methodCode || input.lookup) {
         const prior = job(existing).input;
         const title = prior.title || input.title;
         const methodCode = prior.methodCode || input.methodCode;
-        if (title !== prior.title || methodCode !== prior.methodCode) {
+        const lookup = input.lookup ?? prior.lookup;
+        if (title !== prior.title || methodCode !== prior.methodCode || lookup !== prior.lookup) {
           db.prepare("UPDATE g2b_notice_jobs SET input = ? WHERE id = ?")
-            .run(JSON.stringify({ ...prior, title, methodCode }), id);
+            .run(JSON.stringify({ ...prior, title, methodCode, lookup }), id);
         }
       }
     } else {

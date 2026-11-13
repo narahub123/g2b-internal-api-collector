@@ -2,7 +2,6 @@ import { checkNoticeQueueMaintenance } from '@/features/collect-g2b/api/notice-q
 import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
 import { contractRevision, type ContractKey } from '@/entities/contract/model/contract';
 import { collectContract } from '@/features/collect-g2b/server';
-import { collectionNumberError } from '@/features/collect-g2b/model/number';
 
 /**
  * 차세대 TA 계약번호와 정규화된 변경차수로 계약현황을 다시 조회해 검증된 상세를 저장한다.
@@ -10,8 +9,7 @@ import { collectionNumberError } from '@/features/collect-g2b/model/number';
  */
 export async function POST(_request: Request, { params }: { params: Promise<ContractKey> }) {
   const key = await params;
-  const numberError = collectionNumberError('contracts', key.number);
-  if (numberError) return Response.json({ error: numberError }, { status: 400 });
+  if (!key.number.trim()) return Response.json({ error: "번호를 입력해 주세요." }, { status: 400 });
   if (contractRevision(key.revision) !== key.revision) {
     return Response.json({ error: '변경차수를 확인하세요.' }, { status: 400 });
   }

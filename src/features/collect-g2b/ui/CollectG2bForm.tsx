@@ -5,14 +5,12 @@ import { contractRequestRevision } from "@/entities/contract-request/model/contr
 import { contractRevision } from "@/entities/contract/model/contract";
 import type { NoticeKey } from "@/entities/notice";
 import type { CollectionSection } from "@/server/g2b/repository/collection-attempts";
-import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { waitForNoticeJob } from "../api/wait-for-notice-job";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
 import { contractApiPath, contractRequestApiPath, openingResultApiPath } from "../api/routes";
 import { parseCollectNoticeInput } from "../model/input";
-import { collectionNumberError } from "../model/number";
 
 // 기존 API가 요구하는 번호와 차수 형식으로 입력을 변환한다.
 const settings = {
@@ -97,12 +95,7 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
     event.preventDefault();
     if (pending) return;
     const fields = new FormData(event.currentTarget);
-    const number = g2bNumber(String(fields.get("number")).toUpperCase());
-    const numberError = collectionNumberError(section, number);
-    if (numberError) {
-      setError(numberError);
-      return;
-    }
+    const number = String(fields.get("number") ?? "").trim().toUpperCase();
     const revision = "normalizeRevision" in config ? config.normalizeRevision(fields.get("revision")) : "";
     if (!number || revision === undefined) {
       setError("번호와 차수 입력을 확인하세요.");
@@ -159,7 +152,7 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
     <Card className="p-5">
       <form onSubmit={submit} className="flex flex-wrap items-end gap-3">
         <label className="grid min-w-40 flex-[2] gap-1.5 text-sm font-medium">
-          {config.number}<Input name="number" required maxLength={30} />
+          {config.number}<Input name="number" required />
         </label>
         {"revision" in config && (
           <label className="grid min-w-24 flex-1 gap-1.5 text-sm font-medium">

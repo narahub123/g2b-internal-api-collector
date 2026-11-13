@@ -129,12 +129,51 @@ after(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-function mockFetch(t, respond) {
+function mockFetch(t, respond, noticeList = () => []) {
   return t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(new URL(url).origin, 'https://www.g2b.go.kr');
-    return respond(new URL(url).pathname, options);
+    const path = new URL(url).pathname;
+    if (path.endsWith('/selectBidPbacScrollTypeList.do')) return success({ result: noticeList(JSON.parse(options.body).dlBidPbancLstM) });
+
+    return respond(path, options);
   });
 }
+
+test('통합공고는 목록에서 원본 차수를 복원해 기존 실패 이력의 저장 키로 재수집한다', async (t) => {
+  const number = 'E012608144';
+  const input = { number, revision: '000', methodCode: '' };
+  const row = { bidPbancUntyNo: number, bidPbancUntyOrd: '00', untyBidPbancRegTyCd: '통050001', prcmBsneSeCd: '03' };
+  let listed = [row];
+  let detail = { ...row, bidPbancNm: '통합공고' };
+  mockFetch(t, (path, options) => {
+    if (path === '/') return session();
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+    assert.ok(path.endsWith('/selectUntyBidPbancDtlInfo.do'), path);
+    const map = JSON.parse(options.body).dlUntyBidPbancM;
+    assert.deepEqual([map.bidPbancUntyNo, map.bidPbancUntyOrd, map.prcmBsneSeCd], [number, '00', '03']);
+    return success({ dlUntyBidPbancM: detail });
+  }, ({ bidPbancNo, startIndex }) => bidPbancNo === number && startIndex === 1 ? listed : []);
+  listed = [row, row];
+  await assert.rejects(collectNotice(input, ''), /여러 개/);
+  listed = [row];
+  for (const invalid of [{}, { ...detail, bidPbancUntyOrd: '000' }]) {
+    detail = invalid;
+    await assert.rejects(collectNotice(input, ''), /상세 응답/);
+  }
+  detail = { ...row, bidPbancNm: '통합공고' };
+  const history = repository.collectionAttempts;
+  const id = history.start({ section: 'notices', ...input });
+  history.finish(id, 'failed');
+  const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
+  const response = await retry(new Request('http://localhost', { method: 'POST' }), {
+    params: Promise.resolve({ id: String(id) }),
+  });
+  assert.equal(response.status, 202);
+  const job = await acceptedJob(response);
+  assert.equal(job.status, 'succeeded');
+  assert.deepEqual((await repository.find(input)).payload.dlUntyBidPbancM, detail);
+  assert.equal(await repository.find({ number, revision: '00' }), null);
+});
 
 test('코드 99는 요청 번호와 일치하는 사전규격 상세만 저장한다', async (t) => {
   const number = 'TESTSPEC99';
@@ -295,6 +334,7 @@ test('기타 공고는 업무진행을 한 번 조회하고 기타 상세와 공
   };
   const calls = [];
   mockFetch(t, (path, options) => {
+    if (path === '/') return session();
     calls.push(path.split('/').at(-1));
     const body = JSON.parse(options.body);
     if (path.endsWith('/srchWorkPrgs.do'))
@@ -336,6 +376,7 @@ test('기타 공고는 번호·차수가 다르면 저장하지 않고 업무진
   });
   for (const override of [{ bidPbancUntyNo: 'R26BM01014144' }, { bidPbancUntyOrd: '001' }]) {
     const fetchMock = mockFetch(t, (path) => {
+      if (path === '/') return session();
       if (path.endsWith('/srchWorkPrgs.do'))
         return success({ dlWorkPrgsL: [{ prcmBsneSeCd: '09' }] });
       assert.ok(path.endsWith('/selectUntyBidPbancDtlInfo.do'));
@@ -345,15 +386,16 @@ test('기타 공고는 번호·차수가 다르면 저장하지 않고 업무진
       } });
     });
     assert.equal((await submitNotice(request())).status, 'retry_wait');
-    assert.equal(fetchMock.mock.callCount(), 2);
+    assert.equal(fetchMock.mock.callCount(), 4);
     fetchMock.mock.restore();
   }
   const fetchMock = mockFetch(t, (path) => {
+    if (path === '/') return session();
     assert.ok(path.endsWith('/srchWorkPrgs.do'));
     return maintenancePage();
   });
   assert.equal((await submitNotice(request())).status, 'pending');
-  assert.equal(fetchMock.mock.callCount(), 1);
+  assert.equal(fetchMock.mock.callCount(), 3);
   assert.equal(await repository.find(key), null);
 });
 
@@ -363,6 +405,7 @@ test('기타 첨부 목록 조회 실패 시 같은 그룹에 대해서만 기�
   let attachmentsAvailable = true;
   const attachments = { ErrorCode: 0, dlUntyAtchFileL: [] };
   mockFetch(t, (path) => {
+    if (path === '/') return session();
     if (path.endsWith('/srchWorkPrgs.do'))
       return success({ dlWorkPrgsL: [{ prcmBsneSeCd: '09' }] });
     if (path.endsWith('/selectUntyBidPbancDtlInfo.do'))
@@ -411,7 +454,7 @@ test('수집 이력은 기존 자료와 시도 대상을 합쳐 집계하고 늦
   assert.equal(history.overview('contracts').failures.length, 0);
 });
 
-test('수집 폼에서 다른 업무의 번호를 차단하고 정상 번호를 정규화해 제출한다', async (t) => {
+test('수집 폼에서 기존 번호 형식 밖의 공고를 제출한다', async (t) => {
   const { CollectG2bForm } = require('../src/features/collect-g2b/ui/CollectG2bForm');
   const errors = [];
   t.mock.method(require('react'), 'useRef', (current) => ({ current }));
@@ -420,7 +463,7 @@ test('수집 폼에서 다른 업무의 번호를 차단하고 정상 번호를 
     if (initial === '') errors.push(value);
   }]);
   const fields = new FormData();
-  fields.set('number', 'R26BD00000001');
+  fields.set('number', ' E012608144 ');
   fields.set('revision', '000');
   fields.set('methodCode', '');
   t.mock.method(globalThis, 'FormData', function () { return fields; });
@@ -434,54 +477,11 @@ test('수집 폼에서 다른 업무의 번호를 차단하고 정상 번호를 
   const submit = () => form.props.onSubmit({ preventDefault() {}, currentTarget: {} });
 
   await submit();
-  assert.equal(fetch.mock.callCount(), 0);
-  assert.equal(errors.at(-1), '입력한 번호는 사전규격등록번호입니다. 입찰공고번호를 입력해 주세요. 예시: R26BK00000001');
-
-  fields.set('number', ' r26bk00000001 ');
-  await submit();
   assert.equal(fetch.mock.callCount(), 1);
   assert.deepEqual(JSON.parse(fetch.mock.calls[0].arguments[1].body), {
-    number: 'R26BK00000001', revision: '000', methodCode: '',
+    number: 'E012608144', revision: '000', methodCode: '',
   });
-  assert.deepEqual(collected, [{ number: 'R26BK00000001', revision: '000' }]);
-});
-
-test('업무별 형식 오류는 직접 수집과 이력 재시도에서 조회나 기록 없이 400으로 끝난다', async (t) => {
-  const cases = [
-    ['notices', 'BK', postNotice],
-    ['opening-results', 'BK', postOpeningResults],
-    ['contracts', 'TA', require('../app/api/contracts/[number]/[revision]/route').POST],
-    ['order-plans', 'DD', require('../app/api/order-plans/[number]/route').POST],
-    ['prior-specs', 'BD', require('../app/api/prior-specs/[number]/route').POST],
-  ];
-  const calls = mockFetch(t, () => new Response(null, { status: 500 }));
-  const history = repository.collectionAttempts;
-  for (const [section, code, post] of cases) {
-    const before = history.overview(section);
-    const wrongStage = code === 'BD' ? 'BK' : 'BD';
-    for (const number of [`R26${wrongStage}00000001`, `R26${code}0000001`, `R26${code}0000000A`]) {
-      const params = { number, revision: section === 'contracts' ? '00' : '000' };
-      const response = await post(new Request('http://localhost', {
-        method: 'POST', body: JSON.stringify({ ...params, methodCode: '' }),
-      }), { params: Promise.resolve(params) });
-      assert.equal(response.status, 400, `${section}: ${number}`);
-      assert.match((await response.json()).error, new RegExp(`R26${code}00000001`));
-    }
-    assert.deepEqual(history.overview(section), before);
-    assert.deepEqual(history.counts(section), before.counts);
-  }
-  const target = { section: 'notices', number: 'R26BD00000001', revision: '000', methodCode: '' };
-  const id = history.start(target);
-  history.finish(id, 'failed');
-  const before = history.overview('notices');
-  const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
-  const response = await retry(new Request('http://localhost', { method: 'POST' }), {
-    params: Promise.resolve({ id: String(id) }),
-  });
-  assert.equal(response.status, 400);
-  assert.match((await response.json()).error, /R26BK00000001/);
-  assert.deepEqual(history.overview('notices'), before);
-  assert.equal(calls.mock.callCount(), 0);
+  assert.deepEqual(collected, [{ number: 'E012608144', revision: '000' }]);
 });
 
 test('여섯 업무의 미저장 실패를 기록하고 이력의 입력으로 재수집한다', async (t) => {
@@ -802,6 +802,8 @@ test('일반 API 오류는 재시도 대기로 처리하고 정상 공고는 저
   }
   calls.mock.mockImplementation(async (url) => {
     const path = new URL(url).pathname;
+    if (path === '/') return session();
+    if (path.endsWith('/selectBidPbacScrollTypeList.do')) return success({ result: [] });
     if (path.endsWith('/selectItemAnncMngV.do')) return noticeDetail();
     if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
     if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
@@ -816,6 +818,7 @@ test('일반 API 오류는 재시도 대기로 처리하고 정상 공고는 저
 function mockNoticeContracts(t, rows, respondToContract) {
   const requested = [];
   mockFetch(t, (path, options) => {
+    if (path === '/') return session();
     if (path.endsWith('/selectItemAnncMngV.do')) return noticeDetail();
     if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: rows });
     if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
@@ -863,6 +866,7 @@ test('기타 업무진행의 BM 번호·차수로 연결 계약을 찾는다', a
     prcmBsneSeCd: '09', bidPbancNm: '기타 공고',
   };
   mockFetch(t, (path) => {
+    if (path === '/') return session();
     if (path.endsWith('/srchWorkPrgs.do')) {
       const row = { ...linkedContract(contract.number), bidPbancNo: null, bidPbancOrd: null,
         prcmBsneSeCd: '09', untyBidPbancNo: detail.untyBidPbancNo };

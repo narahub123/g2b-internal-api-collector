@@ -19,6 +19,8 @@ import { collectOrderPlan } from "./order-plans";
 import { collectPriorSpec } from "./prior-specs";
 import { fetchEtcNotice } from "./etc-notice";
 import { collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
+import { findNoticeLookup } from "./notice-period";
+import type { NoticeLookup } from "../model/input";
 
 // 공고 상세 화면의 submission 식별자 접두사.
 const submissionPrefix = "FIUA027_01_wframe_popupCnts_bidPbancWfrm_mainWframe_";
@@ -144,6 +146,7 @@ async function collectNoticePosts(key: NoticeKey, recordFailure?: (error: unknow
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
  * @param recordFailure 본문 저장을 계속할 수 있는 부가 조회 실패를 이력에 남기는 콜백.
+ * @param lookup 기간 목록에서 확보한 원본 차수와 상세 경로 선택 정보.
  * @returns 저장할 공고 원본과 이번 요청에서 처리한 개찰차수별 결과.
  * @throws 공고 상세 조회 또는 식별자 검증에 실패하거나 상세·부가 조회에서 점검을 확인한 경우.
  */
@@ -151,18 +154,25 @@ export async function collectNotice(
   key: NoticeKey,
   methodCode: string,
   recordFailure?: (error: unknown) => void,
+  lookup?: NoticeLookup,
 ): Promise<{ notice: Notice; openingReport: OpeningCollectionReport }> {
   const collectedAt = new Date().toISOString();
-  const workProgress = await fetchWorkProgress(key).catch((error) => {
+  const metadata = lookup ?? await findNoticeLookup(key);
+  const unified = metadata?.registrationType === "통050001" ? metadata : undefined;
+  const requestKey = unified ? { ...key, revision: unified.rawRevision } : key;
+  const workProgress = await fetchWorkProgress(requestKey).catch((error) => {
     const maintenance = findMaintenance(error);
     if (maintenance) throw maintenance;
     // 일반 오류에서는 업무구분을 알 수 없어 기존 상세 조회를 시도한다.
     recordFailure?.(error);
     return undefined;
   });
-  const isEtc = workProgress?.some((row) => row?.prcmBsneSeCd === etcNoticeBusinessCode);
-  const isFrcp = workProgress?.some((row) => row?.prcmBsneSeCd === frcpNoticeBusinessCode);
-  const raw = isEtc ? await fetchEtcNotice(key) : isFrcp ? await fetchFrcpNotice(key, methodCode) : await postG2b(
+  const isEtc = Boolean(unified) || (metadata ? metadata.businessCode === etcNoticeBusinessCode :
+    workProgress?.some((row) => row?.prcmBsneSeCd === etcNoticeBusinessCode));
+  const isFrcp = metadata ? metadata.businessCode === frcpNoticeBusinessCode :
+    workProgress?.some((row) => row?.prcmBsneSeCd === frcpNoticeBusinessCode);
+  const raw = unified ? await fetchEtcNotice(requestKey, unified.businessCode) :
+    isEtc ? await fetchEtcNotice(key) : isFrcp ? await fetchFrcpNotice(key, methodCode) : await postG2b(
     "/pn/pnp/pnpe/ItemBidPbac/selectItemAnncMngV.do",
     submissionPrefix + "selectItemAnncMngV",
     {
@@ -184,7 +194,8 @@ export async function collectNotice(
     number !== key.number ||
     !/^\d{1,3}$/.test(String(revision)) ||
     String(revision).padStart(3, "0") !== key.revision ||
-    (isEtc && detail?.prcmBsneSeCd !== etcNoticeBusinessCode) ||
+    (unified && String(revision) !== unified.rawRevision) ||
+    (isEtc && detail?.prcmBsneSeCd !== (unified?.businessCode ?? etcNoticeBusinessCode)) ||
     typeof detail?.bidPbancNm !== "string" ||
     !detail.bidPbancNm.trim()
   ) {

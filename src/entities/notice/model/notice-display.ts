@@ -401,7 +401,16 @@ function etcNoticeSections(detail: RecordValue) {
  * @returns 일반 공고의 유효한 번호와 차수 목록. 기타 공고의 관련공고 목록은 별도 형식을 사용한다.
  */
 export function getRelatedNoticeKeys(payload: RecordValue) {
-  if (etcNoticeDetail(payload)) return [];
+  const unified = etcNoticeDetail(payload);
+  if (unified) {
+    return Array.isArray(unified.relaPbancList) ? unified.relaPbancList.flatMap((item) => {
+      const { bidPbancUntyNo, bidPbancUntyOrd } = record(item);
+      const number = displayValue(bidPbancUntyNo);
+      const revision = displayValue(bidPbancUntyOrd);
+      return number && revision && /^\d{1,3}$/.test(revision)
+        ? [{ number, revision: revision.padStart(3, "0") }] : [];
+    }) : [];
+  }
   const value = record(payload.dmItemMap).relaPbancNo;
   // 공고번호 자체에 하이픈이 포함될 수 있으므로 끝의 세 자리를 차수로 분리한다.
   return typeof value === "string"

@@ -14,7 +14,7 @@ import { findMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFailure: (error: unknown) => void) {
   const { number, revision, methodCode } = input;
   return trackCollectionAttempt({ section: "notices", number, revision, methodCode }, async (recordFailure) => {
-    const { notice, openingReport } = await collectNotice({ number, revision }, methodCode, recordFailure);
+    const { notice, openingReport } = await collectNotice({ number, revision }, methodCode, recordFailure, input.lookup);
     const repository = getG2bRepository();
     const documents = notice.documents;
     const isEtc = Boolean(etcNoticeDetail(notice.payload));

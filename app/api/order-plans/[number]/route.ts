@@ -1,5 +1,4 @@
 import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
-import { collectionNumberError } from '@/features/collect-g2b/model/number';
 import { collectPlanAndEnqueueNotices, QueueRegistrationError } from '@/features/collect-g2b/api/notice-queue-service';
 
 /**
@@ -9,8 +8,7 @@ import { collectPlanAndEnqueueNotices, QueueRegistrationError } from '@/features
  */
 export async function POST(_request: Request, { params }: { params: Promise<{ number: string }> }) {
   const { number } = await params;
-  const numberError = collectionNumberError('order-plans', number);
-  if (numberError) return Response.json({ error: numberError }, { status: 400 });
+  if (!number.trim()) return Response.json({ error: "번호를 입력해 주세요." }, { status: 400 });
   try {
     await collectPlanAndEnqueueNotices(number);
     return Response.json({ number });

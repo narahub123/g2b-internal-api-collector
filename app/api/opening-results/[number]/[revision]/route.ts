@@ -9,7 +9,6 @@ import { acceptNoticeJob, checkNoticeQueueMaintenance } from "@/features/collect
 import { collectOpeningGroups, type OpeningCollectionReport } from "@/features/collect-g2b/api/opening-results";
 import { parseCollectNoticeInput } from "@/features/collect-g2b/model/input";
 import { maintenanceResponse } from "@/shared/api/g2b/g2b-maintenance";
-import { collectionNumberError } from "@/features/collect-g2b/model/number";
 
 /**
  * 현재 공고에서 생성한 개찰결과 조회 조건에 기존 저장 자료의 누락된 분류를 보충한다.
@@ -61,8 +60,7 @@ export async function POST(
   { params }: { params: Promise<NoticeKey> },
 ) {
   const key = await params;
-  const numberError = collectionNumberError("opening-results", key.number);
-  if (numberError) return Response.json({ error: numberError }, { status: 400 });
+  if (!key.number.trim()) return Response.json({ error: "번호를 입력해 주세요." }, { status: 400 });
   if (!/^\d{3}$/.test(key.revision)) {
     return Response.json({ error: "공고차수를 확인하세요." }, { status: 400 });
   }

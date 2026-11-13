@@ -1,6 +1,5 @@
 import { getG2bRepository } from "@/server/g2b/repository";
 import { isCollectionAttemptActive } from "@/features/collect-g2b/api/collection-attempt";
-import { collectionNumberError } from "@/features/collect-g2b/model/number";
 import {
   collectContract,
   collectContractRequest,
@@ -32,8 +31,6 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     return Response.json({ error: "수집 상태가 바뀌었거나 수집이 진행 중입니다." }, { status: 409 });
   }
 
-  const numberError = collectionNumberError(target.section, target.number);
-  if (numberError) return Response.json({ error: numberError }, { status: 400 });
 
   if (target.section !== "notices" && target.section !== "order-plans") await checkNoticeQueueMaintenance();
   try {

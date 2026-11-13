@@ -2,7 +2,6 @@ import { checkNoticeQueueMaintenance } from '@/features/collect-g2b/api/notice-q
 import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
 import { contractRequestRevision, type ContractRequestKey } from '@/entities/contract-request/model/contract-request';
 import { collectContractRequest } from '@/features/collect-g2b/server';
-import { g2bNumber } from '@/shared/model/g2b/g2b-number';
 
 /**
  * 정규화된 접수번호와 차수로 계약요청 상세와 전체 품목을 다시 수집해 함께 저장한다.
@@ -10,7 +9,7 @@ import { g2bNumber } from '@/shared/model/g2b/g2b-number';
  */
 export async function POST(_request: Request, { params }: { params: Promise<ContractRequestKey> }) {
   const key = await params;
-  if (g2bNumber(key.number) !== key.number || contractRequestRevision(key.revision) !== key.revision) {
+  if (!key.number.trim() || contractRequestRevision(key.revision) !== key.revision) {
     return Response.json({ error: '계약요청접수번호와 차수를 확인하세요.' }, { status: 400 });
   }
   await checkNoticeQueueMaintenance();

@@ -3,7 +3,8 @@ import { decodeHTML } from "entities";
 import { collectionError } from "@/shared/api/g2b/collection-diagnostic";
 import { readG2bResponse } from "@/shared/api/g2b/g2b-maintenance";
 import { createG2bSession } from "@/shared/api/g2b/g2b-session";
-import { parseCollectNoticeInput, type CollectNoticeInput } from "../model/input";
+import { parseCollectNoticeInput, type CollectNoticeInput, type NoticeLookup } from "../model/input";
+import type { NoticeKey } from "@/entities/notice";
 
 // 입찰공고 목록 화면에서 관찰한 내부 API 주소와 요청 식별자다. 상세 조회 API와 구분한다.
 const origin = "https://www.g2b.go.kr";
@@ -169,7 +170,44 @@ function parseRow(value: unknown) {
   const minute = match ? minuteValue(match[1].replaceAll("/", "-") + "T" + match[2]) : NaN;
   if (!Number.isFinite(minute)) throw new Error("입찰공고 목록의 게시 시각이 올바르지 않습니다.");
   const title = typeof row.bidPbancNm === "string" ? row.bidPbancNm : "";
-  return { target: { ...input, title }, minute, key: `${input.number}/${input.revision}` };
+  return { target: { ...input, title, lookup: readLookup(row) }, minute, key: `${input.number}/${input.revision}` };
+}
+
+function readLookup(row: Record<string, unknown>): NoticeLookup | undefined {
+  const { untyBidPbancRegTyCd, prcmBsneSeCd, bidPbancUntyOrd } = row;
+  if (typeof untyBidPbancRegTyCd === "string" && untyBidPbancRegTyCd &&
+      typeof prcmBsneSeCd === "string" && prcmBsneSeCd && typeof bidPbancUntyOrd === "string") {
+    return { registrationType: untyBidPbancRegTyCd, businessCode: prcmBsneSeCd, rawRevision: bidPbancUntyOrd };
+  }
+}
+
+/**
+ * 정확한 번호와 저장 차수에 대응하는 목록 행에서 상세 경로 결정 정보를 복원한다.
+ * @returns 일치하는 공고가 없으면 undefined.
+ * @throws 목록 요청 실패, 반복 응답 또는 같은 차수에 여러 행이 일치하는 경우.
+ */
+export async function findNoticeLookup(key: NoticeKey): Promise<NoticeLookup | undefined> {
+  const readPage = createPageReader({ createSession: createG2bSession, wait });
+  let lookup: NoticeLookup | undefined;
+  let matched = false;
+  let startIndex = 1;
+  const seen = new Set<string>();
+  for (;;) {
+    const rows = await readPage("", startIndex, key.number) as Record<string, unknown>[];
+    if (!rows.length) return lookup;
+    const signature = JSON.stringify(rows);
+    if (seen.has(signature)) throw new Error("공고번호 조회에서 같은 페이지가 반복되었습니다.");
+    seen.add(signature);
+    for (const row of rows) {
+      const revision = row?.bidPbancUntyOrd;
+      if (row?.bidPbancUntyNo !== key.number || typeof revision !== "string" ||
+          !/^\d{1,3}$/.test(revision) || revision.padStart(3, "0") !== key.revision) continue;
+      if (matched) throw new Error("같은 공고번호와 차수의 목록 행이 여러 개입니다.");
+      matched = true;
+      lookup = readLookup(row);
+    }
+    startIndex += rows.length;
+  }
 }
 
 /**
@@ -188,9 +226,44 @@ export async function listNoticePeriodTargets(
   dependencies: Dependencies = { createSession: createG2bSession, wait },
 ): Promise<NoticePeriodTarget[]> {
   const { start, end } = validateNoticePeriod(startMinute, endMinute);
-
-  let request: Awaited<ReturnType<typeof createG2bSession>> | undefined;
+  const readPage = createPageReader(dependencies);
   const targets = new Map<string, NoticePeriodTarget>();
+
+  // 모든 날짜의 페이지를 정상적으로 끝까지 읽은 후에만 목록을 반환한다.
+  // 중간 실패 시 누적된 Map을 반환하지 않으므로 부분 대상이 큐로 넘어가지 않는다.
+  for (let day = Math.floor(start / dayMs) * dayMs; day <= end; day += dayMs) {
+    const date = new Date(day).toISOString().slice(0, 10).replaceAll("-", "");
+    const seenPages = new Set<string>();
+    let index = 1;
+    for (;;) {
+      const rows = (await readPage(date, index)).map((row, offset) => {
+        try {
+          return parseRow(row);
+        } catch (error) {
+          throw collectionError(error, {
+            step: "기간 수집 목록 행 검증", details: { "조회 일자": date, "응답 행": index + offset },
+          });
+        }
+      });
+      if (!rows.length) break;
+      // 행 번호나 순서가 바뀌어도 동일한 공고 집합을 다시 받으면 페이지 진행이 멈춘 것으로 본다.
+      const signature = rows.map(({ key }) => key).sort().join(",");
+      if (seenPages.has(signature)) {
+        throw new Error(`입찰공고 목록에서 같은 페이지가 반복되었습니다 (${date}, ${index}행).`);
+      }
+      seenPages.add(signature);
+      for (const { target, key, minute } of rows) {
+        if (minute >= start && minute <= end && !targets.has(key)) targets.set(key, target);
+      }
+      // nextRowYn은 종료 판정에 사용하지 않는다. 실제 반환된 행 수만큼 이동한다.
+      index += rows.length;
+    }
+  }
+  return [...targets.values()];
+}
+
+function createPageReader(dependencies: Dependencies) {
+  let request: Awaited<ReturnType<typeof createG2bSession>> | undefined;
 
   /**
    * 지정한 날짜의 한 페이지를 익명 세션으로 요청하고 업무 응답을 검증한다.
@@ -200,13 +273,13 @@ export async function listNoticePeriodTargets(
    * @returns 업무 코드 0으로 검증된 원본 목록 행.
    * @throws 재시도 소진, 점검 응답, 권한 오류 또는 응답 형식 오류를 호출자에게 전달한다.
    */
-  async function readPage(date: string, startIndex: number): Promise<unknown[]> {
+  return async function readPage(date: string, startIndex: number, number = ""): Promise<unknown[]> {
     const context = { step: "기간 수집 목록 조회", request: { path, submissionId, timeoutMs },
       details: { "조회 일자": date, "시작 행": startIndex } };
     let retries = 0;
     let refreshed = false;
     const body = JSON.stringify({ dlBidPbancLstM: {
-      ...searchConditions, fromBidDt: date, toBidDt: date, startIndex, endIndex: startIndex + pageSize - 1,
+      ...searchConditions, bidPbancNo: number, fromBidDt: date, toBidDt: date, startIndex, endIndex: startIndex + pageSize - 1,
     } });
     for (;;) {
       let response: Response;
@@ -253,37 +326,5 @@ export async function listNoticePeriodTargets(
       }
       return data.result;
     }
-  }
-
-  // 모든 날짜의 페이지를 정상적으로 끝까지 읽은 후에만 목록을 반환한다.
-  // 중간 실패 시 누적된 Map을 반환하지 않으므로 부분 대상이 큐로 넘어가지 않는다.
-  for (let day = Math.floor(start / dayMs) * dayMs; day <= end; day += dayMs) {
-    const date = new Date(day).toISOString().slice(0, 10).replaceAll("-", "");
-    const seenPages = new Set<string>();
-    let index = 1;
-    for (;;) {
-      const rows = (await readPage(date, index)).map((row, offset) => {
-        try {
-          return parseRow(row);
-        } catch (error) {
-          throw collectionError(error, {
-            step: "기간 수집 목록 행 검증", details: { "조회 일자": date, "응답 행": index + offset },
-          });
-        }
-      });
-      if (!rows.length) break;
-      // 행 번호나 순서가 바뀌어도 동일한 공고 집합을 다시 받으면 페이지 진행이 멈춘 것으로 본다.
-      const signature = rows.map(({ key }) => key).sort().join(",");
-      if (seenPages.has(signature)) {
-        throw new Error(`입찰공고 목록에서 같은 페이지가 반복되었습니다 (${date}, ${index}행).`);
-      }
-      seenPages.add(signature);
-      for (const { target, key, minute } of rows) {
-        if (minute >= start && minute <= end && !targets.has(key)) targets.set(key, target);
-      }
-      // nextRowYn은 종료 판정에 사용하지 않는다. 실제 반환된 행 수만큼 이동한다.
-      index += rows.length;
-    }
-  }
-  return [...targets.values()];
+  };
 }
