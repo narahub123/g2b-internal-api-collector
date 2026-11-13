@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { decodeHTMLStrict } from "entities";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { noticePath } from "@/_pages/admin/config/routes";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/ui/accordion";
@@ -118,8 +119,9 @@ export function NoticePeriodCollection() {
     void start(period);
   }
 
+  // 집계는 현재 총 대상을 먼저 보여 주고 최초 예정 건수를 뒤에 배치한다.
   const counts = run && [
-    ["최초 예정", run.initialCount], ["현재 총 대상", run.totalCount],
+    ["현재 총 대상", run.totalCount], ["최초 예정", run.initialCount],
     ["수집 완료", run.succeededCount], ["수집 실패", run.failedCount],
   ] as const;
 
@@ -173,13 +175,15 @@ export function NoticePeriodCollection() {
                 {counts.map(([label, count]) => (
                   <div key={label}>
                     <dt className="text-sm text-muted-foreground">{label}</dt>
-                    <dd className="font-semibold tabular-nums">{collectionCountFormat.format(count ?? 0)}건</dd>
+                    {/* 실패 건수만 오류 색상을 사용하고 다른 집계의 색상은 유지한다. */}
+                    <dd className={`font-semibold tabular-nums${label === "수집 실패" ? " text-destructive" : ""}`}>{collectionCountFormat.format(count ?? 0)}건</dd>
                   </div>
                 ))}
               </dl>
               <Accordion type="single" collapsible>
                 <AccordionItem value="notices">
-                  <AccordionTrigger>수집 공고 목록</AccordionTrigger>
+                  {/* 이 화면의 아코디언에만 클릭 커서와 밑줄 제거 스타일을 적용한다. */}
+                  <AccordionTrigger className="cursor-pointer hover:no-underline">수집 공고 목록</AccordionTrigger>
                   <AccordionContent>
                     {run.notices.length === 0 ? <p className="text-muted-foreground">수집 대상 공고가 없습니다.</p> : (
                       <ul className="divide-y">
@@ -187,7 +191,8 @@ export function NoticePeriodCollection() {
                           <li key={noticePath(notice)}>
                             <Link href={noticePath(notice)} prefetch={false}
                               className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 rounded-sm px-2 py-2 hover:bg-muted focus-visible:outline-ring sm:gap-4">
-                              <span className="truncate" title={notice.title}>{notice.title || "공고명 미확인"}</span>
+                              {/* 저장 원본은 유지하고 공고명 표시와 툴팁에만 HTML 문자 참조를 디코딩한다. */}
+                              <span className="truncate" title={decodeHTMLStrict(notice.title)}>{decodeHTMLStrict(notice.title) || "공고명 미확인"}</span>
                               <span className="tabular-nums">{notice.number}</span>
                               <span aria-label={`차수 ${notice.revision}`}>{notice.revision}</span>
                               <span className={notice.status === "failed" ? "text-destructive" : "text-muted-foreground"}>
