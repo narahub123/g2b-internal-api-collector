@@ -4,6 +4,129 @@ const assert = require('node:assert/strict');
 const { DatabaseSync } = require('node:sqlite');
 const { openNoticeQueue } = require('../src/server/g2b/repository/notice-queue.ts');
 
+test('기간 실행은 최초 건수를 고정하고 재시도와 연관 공고를 같은 실행으로 집계한다', () => {
+  const db = new DatabaseSync(':memory:');
+  const queue = openNoticeQueue(db);
+  const period = { startMinute: '2026-11-11T23:30', endMinute: '2026-11-11T23:59' };
+  const initial = { number: 'R26BK1', revision: '000', methodCode: '', title: '초기 공고' };
+  const related = { ...initial, revision: '001', title: '' };
+  const id = queue.enqueueRun(period, 'request-a');
+  assert.equal(queue.enqueueRun(period, 'request-a'), id);
+  assert.equal(queue.getRun(id).initialCount, null);
+  assert.equal(queue.claimRun().id, id);
+  queue.recover();
+  assert.equal(queue.claimRun().id, id);
+  queue.finishRun(id, { kind: 'targets', targets: [initial, initial] });
+  assert.equal(queue.getRun().initialCount, 1);
+  const parent = queue.claim(0);
+  queue.finish(parent.id, { kind: 'failure', error: '일시 오류', related: [related] }, 0);
+  assert.equal(queue.getRun(id).totalCount, 2);
+  assert.equal(queue.getRun(id).failedCount, 0);
+  const child = queue.claim(0);
+  queue.finish(child.id, { kind: 'success', related: [initial], result: { title: '연관 공고' } }, 0);
+  assert.equal(queue.getRun(id).notices[1].title, '연관 공고');
+  for (const now of [60000, 120000]) {
+    assert.equal(queue.claim(now).id, parent.id);
+    queue.finish(parent.id, { kind: 'failure', error: '실패' }, now);
+  }
+  const done = queue.getRun(id);
+  assert.deepEqual([done.status, done.initialCount, done.totalCount, done.succeededCount, done.failedCount],
+    ['completed', 1, 2, 1, 1]);
+  db.close();
+});
+
+test('목록 실패, 점검 대기, 정상 0건 및 등록 롤백을 구분한다', () => {
+  const db = new DatabaseSync(':memory:');
+  const queue = openNoticeQueue(db);
+  const period = { startMinute: '2026-11-11T23:30', endMinute: '2026-11-11T23:59' };
+  const id = queue.enqueueRun(period);
+  queue.claimRun();
+  queue.finishRun(id, { kind: 'maintenance', error: '점검' });
+  assert.equal(queue.getRun(id).pauseReason, 'maintenance');
+  assert.equal(queue.claimRun(), undefined);
+  queue.clearMaintenance(queue.maintenanceVersion());
+  queue.claimRun();
+  db.exec("CREATE TRIGGER fail_visit BEFORE INSERT ON g2b_notice_walk_visits BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+  assert.throws(() => queue.finishRun(id, { kind: 'targets', targets: [
+    { number: 'R26BK1', revision: '000', methodCode: '', title: '공고' },
+  ] }));
+  assert.equal(queue.getRun(id).initialCount, null);
+  assert.equal(queue.overview().jobs.length, 0);
+  queue.finishRun(id, { kind: 'failure', error: '목록 오류' });
+  assert.equal(queue.getRun(id).status, 'failed');
+  assert.equal(queue.getRun(id).failedCount, 0);
+  const emptyId = queue.enqueueRun(period);
+  queue.claimRun();
+  queue.finishRun(emptyId, { kind: 'targets', targets: [] });
+  assert.equal(queue.getRun(emptyId).status, 'completed');
+  assert.equal(queue.getRun(emptyId).initialCount, 0);
+  db.close();
+});
+
+test('기간 수집 API 접수 후 워커가 초기 공고와 연관 공고를 자동 처리한다', () => {
+  const { mkdtempSync, rmSync } = require('node:fs');
+  const { tmpdir } = require('node:os');
+  const { join } = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = mkdtempSync(join(tmpdir(), 'notice-period-worker-'));
+  const loader = require.resolve('../scripts/register-project-typescript.cjs');
+  const api = require.resolve('../app/api/g2b/notice-collection-runs/route.ts');
+  const byId = require.resolve('../app/api/g2b/notice-collection-runs/[id]/route.ts');
+  const worker = require.resolve('../src/features/collect-g2b/api/notice-worker.ts');
+  const code = `
+    const assert = require('node:assert/strict');
+    require(${JSON.stringify(loader)});
+    const { POST, GET } = require(${JSON.stringify(api)});
+    const byId = require(${JSON.stringify(byId)}).GET;
+    const { runNoticeWorker } = require(${JSON.stringify(worker)});
+    (async () => {
+      const period = { startMinute: '2026-11-11T23:30', endMinute: '2026-11-11T23:59' };
+      const post = (body) => POST(new Request('http://localhost', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'period-1' },
+        body: JSON.stringify(body),
+      }));
+      assert.equal((await POST(new Request('http://localhost', {
+        method: 'POST', body: JSON.stringify(period),
+      }))).status, 415);
+      assert.equal((await post({ ...period, endMinute: '2026-02-30T10:00' })).status, 400);
+      assert.equal(await GET().json(), null);
+      const accepted = await post(period);
+      assert.equal(accepted.status, 202);
+      const { id } = await accepted.json();
+      assert.equal(accepted.headers.get('Location'), '/api/g2b/notice-collection-runs/' + id);
+      assert.equal((await (await post(period)).json()).id, id);
+      assert.equal((await post({ ...period, endMinute: '2026-11-12T00:00' })).status, 409);
+      assert.equal((await GET().json()).status, 'pending');
+      assert.equal((await byId(null, { params: Promise.resolve({ id: '999' }) })).status, 404);
+
+      const stop = new AbortController();
+      const input = { number: 'R26BK1', revision: '000', methodCode: '', title: '최초 공고' };
+      const child = { ...input, revision: '001', title: '' };
+      let discoveries = 0;
+      await runNoticeWorker(stop.signal, async ({ input }) => {
+        if (input.revision === '000') return { kind: 'success', related: [child], result: {} };
+        stop.abort();
+        return { kind: 'internal_error', error: '상세 실패' };
+      }, async (start, end) => {
+        discoveries++;
+        assert.deepEqual([start, end], [period.startMinute, period.endMinute]);
+        return [input];
+      });
+      assert.equal(discoveries, 1);
+      const run = await (await byId(null, { params: Promise.resolve({ id: String(id) }) })).json();
+      assert.deepEqual([run.status, run.initialCount, run.totalCount, run.succeededCount, run.failedCount],
+        ['completed', 1, 2, 1, 1]);
+      assert.equal(run.notices[1].error, '상세 실패');
+    })().catch((error) => { console.error(error); process.exitCode = 1; });
+  `;
+  try {
+    const result = spawnSync(process.execPath, ['-e', code], { cwd: dir, encoding: 'utf8', timeout: 15000 });
+    assert.equal(result.status, 0, result.stderr || String(result.error));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('실패 지연, 강제 승격, 중단 복구와 완료 후속 등록', () => {
   const db = new DatabaseSync(':memory:');
   const queue = openNoticeQueue(db);

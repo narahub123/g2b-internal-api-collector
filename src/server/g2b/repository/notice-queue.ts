@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { NoticeJob, NoticeQueue, NoticeQueueInput } from "./notice-queue-types";
+import type { NoticeJob, NoticeQueue, NoticeQueueInput, NoticeRun, NoticeRunPeriod } from "./notice-queue-types";
 
 type JobRow = Omit<NoticeJob, "input" | "result" | "force"> & { input: string; result: string | null; force: number };
 
@@ -45,10 +45,20 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
       PRIMARY KEY(walk_id, number, revision)
     );
     CREATE INDEX IF NOT EXISTS g2b_notice_walk_jobs ON g2b_notice_walk_visits(job_id);
+    CREATE TABLE IF NOT EXISTS g2b_notice_runs (
+      id INTEGER PRIMARY KEY,
+      startMinute TEXT NOT NULL,
+      endMinute TEXT NOT NULL,
+      requestKey TEXT UNIQUE,
+      phase TEXT NOT NULL DEFAULT 'pending',
+      walkId INTEGER REFERENCES g2b_notice_walks(id),
+      initialCount INTEGER,
+      error TEXT
+    );
   `);
 
-  function transaction<T>(run: () => T): T {
-    db.exec("BEGIN IMMEDIATE");
+  function transaction<T>(run: () => T, write = true): T {
+    db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
     try {
       const result = run();
       db.exec("COMMIT");
@@ -93,6 +103,14 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
         db.prepare(`UPDATE g2b_notice_jobs SET force = 1, status = 'pending', availableAt = 0,
           failures = CASE WHEN status = 'retry_wait' THEN 0 ELSE failures END, input = ? WHERE id = ?`)
           .run(JSON.stringify(merged), id);
+      } else if (input.title || input.methodCode) {
+        const prior = job(existing).input;
+        const title = prior.title || input.title;
+        const methodCode = prior.methodCode || input.methodCode;
+        if (title !== prior.title || methodCode !== prior.methodCode) {
+          db.prepare("UPDATE g2b_notice_jobs SET input = ? WHERE id = ?")
+            .run(JSON.stringify({ ...prior, title, methodCode }), id);
+        }
       }
     } else {
       id = Number(db.prepare("INSERT INTO g2b_notice_jobs(number, revision, input, force) VALUES (?, ?, ?, ?)")
@@ -106,7 +124,77 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
     db.exec("UPDATE g2b_notice_queue SET generation = generation + 1, maintenance = generation + 1 WHERE id = 1");
   }
 
+  function createWalk() {
+    return Number(db.prepare("INSERT INTO g2b_notice_walks DEFAULT VALUES").run().lastInsertRowid);
+  }
+
   return {
+    enqueueRun(period, requestKey) {
+      return transaction(() => {
+        const existing = requestKey && db.prepare("SELECT id, startMinute, endMinute FROM g2b_notice_runs WHERE requestKey = ?").get(requestKey);
+        if (existing) {
+          if (existing.startMinute !== period.startMinute || existing.endMinute !== period.endMinute) {
+            throw new RangeError("같은 요청 키로 다른 기간을 접수할 수 없습니다.");
+          }
+          return Number(existing.id);
+        }
+        return Number(db.prepare("INSERT INTO g2b_notice_runs(startMinute, endMinute, requestKey) VALUES (?, ?, ?)")
+          .run(period.startMinute, period.endMinute, requestKey ?? null).lastInsertRowid);
+      });
+    },
+    claimRun() {
+      return transaction(() => {
+        const { manual, maintenance } = state();
+        if (manual || maintenance) return;
+        return db.prepare(`UPDATE g2b_notice_runs SET phase = 'discovering', error = NULL WHERE id = (
+          SELECT id FROM g2b_notice_runs WHERE phase = 'pending' ORDER BY id LIMIT 1
+        ) AND NOT EXISTS (SELECT 1 FROM g2b_notice_runs WHERE phase = 'discovering')
+        RETURNING id, startMinute, endMinute`).get() as (NoticeRunPeriod & { id: number }) | undefined;
+      });
+    },
+    finishRun(id, outcome) {
+      transaction(() => {
+        if (!db.prepare("SELECT id FROM g2b_notice_runs WHERE id = ? AND phase = 'discovering'").get(id)) return;
+        if (outcome.kind === "targets") {
+          const walk = createWalk();
+          for (const target of outcome.targets) attach(walk, target, false);
+          db.prepare(`UPDATE g2b_notice_runs SET phase = 'collecting', walkId = ?, error = NULL,
+            initialCount = (SELECT COUNT(*) FROM g2b_notice_walk_visits WHERE walk_id = ?) WHERE id = ?`)
+            .run(walk, walk, id);
+        } else {
+          if (outcome.kind === "maintenance") markMaintenance();
+          db.prepare("UPDATE g2b_notice_runs SET phase = ?, error = ? WHERE id = ?")
+            .run(outcome.kind === "maintenance" ? "pending" : "failed", outcome.error, id);
+        }
+      });
+    },
+    getRun(id) {
+      return transaction(() => {
+        const run = db.prepare(`SELECT id, startMinute, endMinute, phase, walkId, initialCount, error
+          FROM g2b_notice_runs WHERE id = COALESCE(?, (SELECT MAX(id) FROM g2b_notice_runs))`).get(id ?? null) as
+          (NoticeRunPeriod & { id: number; phase: NoticeRun["status"]; walkId: number | null; initialCount: number | null; error: string | null }) | undefined;
+        if (!run) return;
+        const notices = (db.prepare(`SELECT j.* FROM g2b_notice_walk_visits v JOIN g2b_notice_jobs j ON j.id = v.job_id
+          WHERE v.walk_id = ? ORDER BY v.rowid`).all(run.walkId) as JobRow[]).map((row) => {
+          const { input, result, status, error } = job(row);
+          const { number, revision, methodCode, title } = input;
+          return { number, revision, methodCode, title: title || result?.title || "", status, error };
+        });
+        const succeededCount = notices.filter(({ status }) => status === "succeeded").length;
+        const failedCount = notices.filter(({ status }) => status === "failed").length;
+        const status = run.phase === "collecting" && succeededCount + failedCount === notices.length ? "completed" : run.phase;
+        const { manual, maintenance } = state();
+        const pauseReason = status === "completed" || status === "failed" ? null :
+          maintenance ? "maintenance" : manual ? "manual" : null;
+        return { id: run.id, startMinute: run.startMinute, endMinute: run.endMinute, status, pauseReason,
+          initialCount: run.initialCount, totalCount: notices.length, succeededCount, failedCount, error: run.error, notices };
+      }, false);
+    },
+    hasActiveRuns() {
+      return Boolean(db.prepare(`SELECT 1 FROM g2b_notice_runs r WHERE r.phase IN ('pending', 'discovering')
+        OR EXISTS (SELECT 1 FROM g2b_notice_walk_visits v JOIN g2b_notice_jobs j ON j.id = v.job_id
+          WHERE v.walk_id = r.walkId AND j.status IN ('pending', 'running', 'retry_wait')) LIMIT 1`).get());
+    },
     enqueue(inputs, force, retryAttemptId) {
       return transaction(() => {
         if (!inputs.length) return [];
@@ -117,7 +205,7 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
             WHERE section = 'notices' AND number = ? AND revision = ? ORDER BY id DESC LIMIT 1`).get(number, revision);
           if (latest?.id !== retryAttemptId || latest.status === "succeeded") return [];
         }
-        const walk = Number(db.prepare("INSERT INTO g2b_notice_walks DEFAULT VALUES").run().lastInsertRowid);
+        const walk = createWalk();
         return inputs.map((input) => attach(walk, input, force));
       });
     },
@@ -187,6 +275,7 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
             .run(new Date().toISOString(), "수집 시도의 종료 결과를 확인할 수 없습니다.");
         }
         db.exec("UPDATE g2b_notice_jobs SET status = 'pending', availableAt = 0 WHERE status = 'running'");
+        db.exec("UPDATE g2b_notice_runs SET phase = 'pending' WHERE phase = 'discovering'");
       });
     },
     get(id) {

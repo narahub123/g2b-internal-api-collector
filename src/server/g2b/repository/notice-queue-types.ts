@@ -9,14 +9,34 @@ export type NoticeAttemptCompletion = {
   diagnostics?: CollectionDiagnostic;
 };
 
-export type NoticeQueueInput = CollectNoticeInput & { opening?: boolean };
+export type NoticeQueueInput = CollectNoticeInput & { opening?: boolean; title?: string };
 export type NoticeJobStatus = "pending" | "running" | "retry_wait" | "succeeded" | "failed";
 
 export type NoticeJobResult = {
+  title?: string;
   noticeSaved?: boolean;
   targetRevisions?: string[];
   succeededRevisions?: string[];
   failedRevisions?: string[];
+};
+
+/** 한국 현지 시각의 분 단위 조회 범위. */
+export type NoticeRunPeriod = { startMinute: string; endMinute: string };
+
+export type NoticeRunOutcome =
+  | { kind: "targets"; targets: (CollectNoticeInput & { title: string })[] }
+  | { kind: "failure" | "maintenance"; error: string };
+
+export type NoticeRun = NoticeRunPeriod & {
+  id: number;
+  status: "pending" | "discovering" | "collecting" | "completed" | "failed";
+  pauseReason: "manual" | "maintenance" | null;
+  initialCount: number | null;
+  totalCount: number;
+  succeededCount: number;
+  failedCount: number;
+  error: string | null;
+  notices: (CollectNoticeInput & { title: string; status: NoticeJobStatus; error: string | null })[];
 };
 
 export type NoticeJob = {
@@ -38,6 +58,16 @@ export type NoticeJobOutcome =
   | { kind: "maintenance"; error: string; result?: NoticeJobResult };
 
 export interface NoticeQueue {
+  /** 기간 탐색을 영속 접수한다. 같은 요청 키와 기간은 기존 실행 ID를 반환한다. */
+  enqueueRun(period: NoticeRunPeriod, requestKey?: string): number;
+  /** 중단 사유가 없을 때 대기 중인 기간 탐색 하나를 선점한다. */
+  claimRun(): (NoticeRunPeriod & { id: number }) | undefined;
+  /** 목록 결과와 초기 공고 작업을 한 트랜잭션으로 반영한다. */
+  finishRun(id: number, outcome: NoticeRunOutcome): void;
+  /** 실행과 소속 공고를 같은 읽기 시점에서 반환한다. ID 생략 시 최근 실행을 조회한다. */
+  getRun(id?: number): NoticeRun | undefined;
+  /** 점검 대기 중인 기간 실행이 있으면 워커의 정상 복귀 확인을 허용한다. */
+  hasActiveRuns(): boolean;
   /** 최초 탐색과 작업을 함께 등록하고 대상별 작업 ID를 반환한다. */
   enqueue(inputs: NoticeQueueInput[], force: boolean, retryAttemptId?: number): number[];
   /** 중단 사유가 없을 때 다음 작업을 선점한다. */

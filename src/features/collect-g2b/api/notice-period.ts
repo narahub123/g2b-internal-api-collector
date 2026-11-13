@@ -103,6 +103,19 @@ function minuteValue(value: string): number {
 }
 
 /**
+ * 외부 요청 전에 한국 현지 시각의 분 형식과 시작·종료 순서를 검증한다.
+ * @throws 존재하지 않는 날짜·시각이거나 종료가 시작보다 이르면 RangeError.
+ */
+export function validateNoticePeriod(startMinute: string, endMinute: string) {
+  const start = minuteValue(startMinute);
+  const end = minuteValue(endMinute);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+    throw new RangeError("수집 시작·종료 시각을 올바른 순서와 분 단위 형식으로 입력해 주세요.");
+  }
+  return { start, end };
+}
+
+/**
  * 서버가 보낸 Retry-After를 재요청 대기 시간으로 해석한다.
  * 초 단위 정수와 HTTP 날짜 형식을 허용하고 지난 날짜는 즉시 재시도하도록 0으로 맞춘다.
  * @param value Retry-After 헤더 원문.
@@ -174,11 +187,7 @@ export async function listNoticePeriodTargets(
   endMinute: string,
   dependencies: Dependencies = { createSession: createG2bSession, wait },
 ): Promise<NoticePeriodTarget[]> {
-  const start = minuteValue(startMinute);
-  const end = minuteValue(endMinute);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
-    throw new RangeError("수집 시작·종료 시각을 올바른 순서와 분 단위 형식으로 입력해 주세요.");
-  }
+  const { start, end } = validateNoticePeriod(startMinute, endMinute);
 
   let request: Awaited<ReturnType<typeof createG2bSession>> | undefined;
   const targets = new Map<string, NoticePeriodTarget>();

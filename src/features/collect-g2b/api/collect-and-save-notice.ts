@@ -91,6 +91,7 @@ export async function executeNoticeJob({ id, input, force, executions }: NoticeJ
     const report = collected?.openingReport;
     const result = {
       noticeSaved: true,
+      title: notice.title,
       targetRevisions: report?.targetRevisions ?? [],
       succeededRevisions: report?.succeededRevisions ?? [],
       failedRevisions: report?.failures.map(({ revision }) => revision) ?? [],
