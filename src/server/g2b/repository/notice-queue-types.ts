@@ -25,6 +25,7 @@ export type NoticeJob = {
 export type NoticeJobOutcome =
   | { kind: "success"; related: NoticeQueueInput[]; result: NoticeJobResult }
   | { kind: "failure"; error: string; result?: NoticeJobResult; related?: NoticeQueueInput[] }
+  | { kind: "internal_error"; error: string }
   | { kind: "maintenance"; error: string; result?: NoticeJobResult };
 
 export interface NoticeQueue {

@@ -99,31 +99,41 @@ test('큐 완료 기록 실패 시 같은 결과를 다시 기록하고 외부 �
   const code = `
     const assert = require('node:assert/strict');
     require(${JSON.stringify(loader)});
-    const queue = require(${JSON.stringify(repository)}).getG2bRepository().noticeQueue;
+    const { noticeQueue: queue, collectionAttempts } = require(${JSON.stringify(repository)}).getG2bRepository();
     const stop = new AbortController();
     const [id] = queue.enqueue([{ number: 'R26BK00000003', revision: '000', methodCode: '' }], true);
-    let executions = 0, writes = 0;
-    const execute = async () => {
-      executions++;
+    const [nextId] = queue.enqueue([{ number: 'R26BK00000005', revision: '000', methodCode: '' }], true);
+    const executions = [];
+    let writes = 0;
+    const execute = async (job) => {
+      executions.push(job.id);
+      if (job.id === id) {
+        collectionAttempts.start({ section: 'notices', ...job.input }, id);
+        throw new Error('injected execution error');
+      }
+      assert.equal(queue.get(id).status, 'failed');
       return { kind: 'success', related: [], result: { noticeSaved: true } };
     };
     const finish = queue.finish;
     queue.finish = (...args) => {
       if (++writes === 1) throw new Error('injected write error');
       finish(...args);
-      stop.abort();
+      if (args[0] === nextId) stop.abort();
     };
     require(${JSON.stringify(worker)}).runNoticeWorker(stop.signal, execute).then(() => {
-      assert.equal(executions, 1);
-      assert.equal(writes, 2);
-      assert.equal(queue.get(id).status, 'succeeded');
+      assert.deepEqual(executions, [id, nextId]);
+      assert.equal(writes, 3);
+      assert.equal(queue.get(id).status, 'failed');
       assert.equal(queue.get(id).failures, 0);
+      assert.equal(queue.get(nextId).status, 'succeeded');
+      assert.equal(collectionAttempts.overview('notices').failures[0].status, 'failed');
     }).catch((error) => { console.error(error); process.exitCode = 1; });
   `;
   try {
     const result = spawnSync(process.execPath, ['-e', code], { cwd: dir, encoding: 'utf8', timeout: 15000 });
     assert.equal(result.status, 0, result.stderr || String(result.error));
     assert.match(result.stderr, /"operation":"finish","jobId":1/);
+    assert.match(result.stderr, /"operation":"execute-job","jobId":1/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

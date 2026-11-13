@@ -140,9 +140,21 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
         const current = db.prepare("SELECT failures FROM g2b_notice_jobs WHERE id = ? AND status = 'running'").get(id);
         if (!current) return;
         const failures = Number(current.failures) + Number(outcome.kind === "failure");
-        const status = outcome.kind === "success" ? "succeeded" : outcome.kind === "maintenance" ? "pending" : failures >= 3 ? "failed" : "retry_wait";
+        let status: NoticeJob["status"];
+        switch (outcome.kind) {
+          case "success": status = "succeeded"; break;
+          case "maintenance": status = "pending"; break;
+          case "internal_error": status = "failed"; break;
+          case "failure": status = failures >= 3 ? "failed" : "retry_wait"; break;
+        }
         if (outcome.kind === "maintenance") markMaintenance();
-        if (outcome.kind !== "maintenance") {
+        if (outcome.kind === "internal_error" || outcome.kind === "maintenance") {
+          // 실행기가 종료하지 못한 시도만 정리하고 이전 진단과 완료 이력을 보존한다.
+          db.prepare(`UPDATE g2b_collection_attempts SET status = ?, finished_at = ?, error = ?
+            WHERE status = 'pending' AND job_id = ?`)
+            .run(outcome.kind === "maintenance" ? "deferred" : "failed", new Date(now).toISOString(), outcome.error, id);
+        }
+        if (outcome.kind === "success" || outcome.kind === "failure") {
           const walks = db.prepare("SELECT walk_id FROM g2b_notice_walk_visits WHERE job_id = ?").all(id);
           for (const { walk_id } of walks) {
             for (const input of outcome.related ?? []) attach(Number(walk_id), input, false);
@@ -151,7 +163,8 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
         // 종료 시 이미 예약된 강제 작업이 있으면 현재 작업은 일반 재시도 규칙을 그대로 따른다.
         db.prepare("UPDATE g2b_notice_jobs SET status = ?, failures = ?, availableAt = ?, error = ?, result = ? WHERE id = ?")
           .run(status, failures, status === "retry_wait" ? now + 60_000 : 0,
-            outcome.kind === "success" ? null : outcome.error, JSON.stringify(outcome.result ?? null), id);
+            outcome.kind === "success" ? null : outcome.error,
+            JSON.stringify(("result" in outcome ? outcome.result : null) ?? null), id);
       });
     },
     recover() {
