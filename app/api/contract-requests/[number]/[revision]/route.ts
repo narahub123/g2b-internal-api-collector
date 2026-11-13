@@ -1,3 +1,4 @@
+import { checkNoticeQueueMaintenance } from '@/features/collect-g2b/api/notice-queue-service';
 import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
 import { contractRequestRevision, type ContractRequestKey } from '@/entities/contract-request/model/contract-request';
 import { collectContractRequest } from '@/features/collect-g2b/server';
@@ -12,6 +13,7 @@ export async function POST(_request: Request, { params }: { params: Promise<Cont
   if (g2bNumber(key.number) !== key.number || contractRequestRevision(key.revision) !== key.revision) {
     return Response.json({ error: '계약요청접수번호와 차수를 확인하세요.' }, { status: 400 });
   }
+  await checkNoticeQueueMaintenance();
   try {
     await collectContractRequest(key, true);
     return Response.json(key);

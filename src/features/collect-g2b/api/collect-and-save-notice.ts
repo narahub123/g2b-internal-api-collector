@@ -2,33 +2,26 @@ import { getG2bRepository } from "@/server/g2b/repository";
 import { noticePostRecord } from "@/entities/notice/model/notice-posts";
 import { etcNoticeDetail, noticeAttachmentGroup } from "@/entities/notice/model/notice-detail";
 import { getRelatedNoticeKeys } from "@/entities/notice/model/notice-display";
-import type { Notice, NoticeKey } from "@/entities/notice/model/types";
+import type { Notice } from "@/entities/notice/model/types";
 import { getNoticeOrderPlanNumber, orderPlanNoticeReferences } from "@/entities/order-plan/model/order-plan";
 import { attachmentGroup } from "@/shared/model/g2b/g2b-attachments";
-import type { CollectNoticeInput } from "../model/input";
 import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
-import { collectOnce } from "./collect-once";
-import { collectNotice } from "./notices";
-import { collectOrderPlan } from "./order-plans";
-import { collectionError, collectionStep } from "@/shared/api/g2b/collection-diagnostic";
+import type { NoticeJob, NoticeJobOutcome, NoticeQueueInput } from "@/server/g2b/repository/notice-queue-types";
+import { collectNotice, NoticeCollectionDeferred } from "./notices";
+import { collectionError, collectionStep, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
 import { findMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 
-// 직접 수집과 자동 수집이 같은 번호·차수의 단건 작업을 공유한다.
-function noticeCollectionKey({ number, revision }: NoticeKey) {
-  return JSON.stringify(["notice", number, revision]);
-}
-
-function saveCollectedNotice(input: CollectNoticeInput, usePrevious: boolean) {
+function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFailure: (error: unknown) => void) {
   const { number, revision, methodCode } = input;
-  return trackCollectionAttempt({ section: "notices", ...input }, async (recordFailure) => {
+  return trackCollectionAttempt({ section: "notices", number, revision, methodCode }, async (recordFailure) => {
     const { notice, openingReport } = await collectNotice({ number, revision }, methodCode, recordFailure);
     const repository = getG2bRepository();
     const documents = notice.documents;
     const isEtc = Boolean(etcNoticeDetail(notice.payload));
     const missingPosts = !isEtc && (!notice.posts || notice.posts.entries.some((post) => !post.body ||
       (!post.attachments && attachmentGroup(noticePostRecord(post.detail?.dlPstM).untyAtchFileNo))));
-    if (usePrevious && (documents?.unavailable?.length || missingPosts ||
-        notice.contractRequests === undefined || notice.contracts === undefined)) {
+    if (documents?.unavailable?.length || missingPosts ||
+        notice.contractRequests === undefined || notice.contracts === undefined) {
       // 일시적인 문서 조회 실패 때문에 이전에 저장한 원본 목록을 잃지 않도록 한다.
       const previous = collectionStep("SQLite 이전 공고 조회", () =>
         repository.findUsableNotice(input));
@@ -61,86 +54,64 @@ function saveCollectedNotice(input: CollectNoticeInput, usePrevious: boolean) {
     await repository.save(notice).catch((error: unknown) => {
       throw collectionError(error, { step: "SQLite 공고 저장" });
     });
-    return { notice, openingReport };
-  });
-}
-
-function collectRequestedNotice(input: CollectNoticeInput) {
-  return collectOnce(noticeCollectionKey(input), true, () => saveCollectedNotice(input, true));
-}
-
-/**
- * 요청한 공고 한 건과 부가 자료를 저장하고 개찰차수별 수집 결과를 반환한다.
- * @param input 검증을 통과한 공고번호, 차수와 낙찰방법 코드.
- * @throws 나라장터 점검 또는 단건 공고 조회·저장에 실패한 경우.
- */
-export async function collectAndSaveNotice(input: CollectNoticeInput) {
-  return (await collectRequestedNotice(input)).openingReport;
-}
-
-async function collectRelatedNotices(root: Notice | string) {
-  const repository = getG2bRepository();
-  const visitedNotices = new Set<string>();
-  const visitedPlans = new Set<string>();
-  const queue: NoticeKey[] = [];
-
-  const enqueuePlanNotices = (number: string) => {
-    if (visitedPlans.has(number)) return;
-    visitedPlans.add(number);
-    const plan = repository.findOrderPlan(number);
-    if (!plan) return;
-    for (const reference of orderPlanNoticeReferences(plan)) queue.push(reference);
-  };
-  const enqueueNoticeLinks = (notice: Notice) => {
-    for (const reference of getRelatedNoticeKeys(notice.payload)) queue.push(reference);
-    // 공고 수집에서 확인한 실제 저장 번호를 우선 사용한다.
-    const planNumber = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
-    if (planNumber) enqueuePlanNotices(planNumber);
-  };
-
-  if (typeof root === "string") {
-    enqueuePlanNotices(root);
-  } else {
-    visitedNotices.add(noticeCollectionKey(root));
-    enqueueNoticeLinks(root);
-  }
-
-  // 다른 요청도 상대 공고의 단건 결과를 받을 수 있도록 탐색은 수집 잠금 밖에서 진행한다.
-  for (const key of queue) {
-    const collectionKey = noticeCollectionKey(key);
-    if (visitedNotices.has(collectionKey)) continue;
-    visitedNotices.add(collectionKey);
-    const relatedInput = { ...key, methodCode: "" };
-    try {
-      const result = await collectOnce<{ notice: Notice }>(collectionKey, false, async () => {
-        const saved = await trackCollectionLookup({ section: "notices", ...relatedInput }, "관련공고", () =>
-          repository.findUsableNotice(key));
-        if (saved) return { notice: saved };
-        return saveCollectedNotice(relatedInput, false);
-      });
-      enqueueNoticeLinks(result.notice);
-    } catch (error) {
-      if (findMaintenance(error)) break;
+    if (input.opening && !openingReport.targetRevisions.length) {
+      recordFailure(new Error("조회할 개찰결과 상세를 찾을 수 없습니다."));
     }
+    return { notice, openingReport };
+  }, { id: jobId, onPartialFailure });
+}
+
+/**
+ * 저장된 발주계획의 원본 공고 참조를 일반 탐색 입력으로 변환한다.
+ * @throws 저장된 발주계획을 읽지 못한 경우.
+ */
+export function relatedPlanInputs(number: string): NoticeQueueInput[] {
+  const plan = getG2bRepository().findOrderPlan(number);
+  return plan ? orderPlanNoticeReferences(plan).map((key) => ({ ...key, methodCode: "" })) : [];
+}
+
+function relatedInputs(notice: Notice): NoticeQueueInput[] {
+  const references = getRelatedNoticeKeys(notice.payload).map((key) => ({ ...key, methodCode: "" }));
+  const planNumber = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
+  return planNumber ? [...references, ...relatedPlanInputs(planNumber)] : references;
+}
+
+/**
+ * 선점된 공고 하나를 처리한다. 일반 탐색의 첫 시도는 저장된 정상 상세를 재사용한다.
+ * 부분 실패에도 저장된 자료와 개찰차수 보고서를 보존하여 같은 작업에서 다시 시도할 수 있게 한다.
+ */
+export async function executeNoticeJob({ id, input, force, executions }: NoticeJob): Promise<NoticeJobOutcome> {
+  const repository = getG2bRepository();
+  let partial: unknown;
+  try {
+    const target = { section: "notices" as const, number: input.number, revision: input.revision, methodCode: input.methodCode };
+    const saved = !force && executions === 1 ? await trackCollectionLookup(target, "관련공고", () => repository.findUsableNotice(input), id) : null;
+    const collected = saved ? undefined : await saveCollectedNotice(input, id, (error) => { partial = error; });
+    const notice = saved ?? collected.notice;
+    const report = collected?.openingReport;
+    const result = {
+      noticeSaved: true,
+      targetRevisions: report?.targetRevisions ?? [],
+      succeededRevisions: report?.succeededRevisions ?? [],
+      failedRevisions: report?.failures.map(({ revision }) => revision) ?? [],
+    };
+    const related = relatedInputs(notice);
+    const openingFailure = report?.failures[0]?.error;
+    if (partial || openingFailure || (input.opening && !result.targetRevisions.length)) {
+      const error = partial || openingFailure ? describeCollectionError(partial ?? openingFailure).message : "조회할 개찰결과 상세를 찾을 수 없습니다.";
+      return { kind: "failure", error, result, related };
+    }
+    return { kind: "success", result, related };
+  } catch (error) {
+    const maintenance = findMaintenance(error);
+    const report = error instanceof NoticeCollectionDeferred ? error.openingReport : undefined;
+    const result = {
+      noticeSaved: Boolean(await repository.find(input).catch(() => null)),
+      targetRevisions: report?.targetRevisions ?? [],
+      succeededRevisions: report?.succeededRevisions ?? [],
+      failedRevisions: report?.failures.map(({ revision }) => revision) ?? [],
+    };
+    return maintenance ? { kind: "maintenance", error: maintenance.message, result } :
+      { kind: "failure", error: describeCollectionError(error).message, result };
   }
-}
-
-/**
- * 요청한 공고를 저장한 뒤 공고 상세와 저장된 발주계획에 연결된 공고를 탐색한다.
- * 정상 저장 건은 재사용하며, 관련공고 수집에서 점검이 확인되면 이후 탐색을 중단한다.
- * @throws 최초 요청 공고의 수집·저장 또는 탐색에 필요한 최초 발주계획 조회에 실패한 경우.
- */
-export async function collectNoticeWithRelated(input: CollectNoticeInput) {
-  const { notice } = await collectRequestedNotice(input);
-  await collectRelatedNotices(notice);
-}
-
-/**
- * 요청한 발주계획을 다시 수집한 뒤 원본 공고 목록에서 연쇄 수집을 시작한다.
- * 공고가 같은 계획을 참조할 수 있으므로 계획 단건 저장이 끝난 뒤 공고를 처리한다.
- * @throws 요청한 발주계획의 수집·저장 또는 저장 결과 조회에 실패한 경우.
- */
-export async function collectOrderPlanWithRelated(number: string) {
-  const plan = await collectOrderPlan(number, true);
-  await collectRelatedNotices(plan.number);
 }

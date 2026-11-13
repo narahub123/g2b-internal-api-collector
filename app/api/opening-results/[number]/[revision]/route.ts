@@ -5,9 +5,8 @@ import {
   openingResultQueries,
   type OpeningResultQuery,
 } from "@/entities/opening-result/model/opening-result";
-import { collectAndSaveNotice } from "@/features/collect-g2b/server";
+import { acceptNoticeJob, checkNoticeQueueMaintenance } from "@/features/collect-g2b/api/notice-queue-service";
 import { collectOpeningGroups, type OpeningCollectionReport } from "@/features/collect-g2b/api/opening-results";
-import { NoticeCollectionDeferred } from "@/features/collect-g2b/api/notices";
 import { parseCollectNoticeInput } from "@/features/collect-g2b/model/input";
 import { maintenanceResponse } from "@/shared/api/g2b/g2b-maintenance";
 import { collectionNumberError } from "@/features/collect-g2b/model/number";
@@ -50,10 +49,10 @@ function responseDetails(report: OpeningCollectionReport | undefined, noticeSave
 }
 
 /**
- * 저장된 공고가 있으면 개찰결과를 다시 조회하고, 없으면 공고 전체 수집 과정에서 개찰결과를 확보한다.
+ * 저장된 공고가 있으면 개찰결과를 다시 조회하고, 없으면 공고 수집을 큐에 접수한다.
  * @param request 선택적으로 낙찰방법 코드를 JSON 본문에 전달한다. 기존 상세 버튼은 본문을 생략한다.
  * @param params 차세대 BK 공고번호와 세 자리 공고차수.
- * @returns 성공 시 공고 식별자와 차수별 결과. 입력 오류는 400, 개찰 대상 없음은 404,
+ * @returns 직접 조회 성공 시 공고 식별자와 차수별 결과, 공고 수집 접수 시 202와 작업 ID. 입력 오류는 400, 개찰 대상 없음은 404,
  * 수집 실패는 502, 점검은 503으로 응답한다.
  * @throws 저장된 공고나 개찰결과 조회에 실패한 경우.
  */
@@ -89,21 +88,12 @@ export async function POST(
   const notice = await repository.find(key);
   let report: OpeningCollectionReport;
   if (notice) {
+    await checkNoticeQueueMaintenance();
     const groups = groupOpeningResultQueries(openingResultQueries(notice.payload));
     mergeSavedQueries(groups, repository.listOpeningResults(key));
     report = await collectOpeningGroups(groups, true);
   } else {
-    try {
-      // 공고 수집 과정의 개찰 결과를 그대로 사용해 같은 차수를 다시 조회하지 않는다.
-      report = await collectAndSaveNotice(input);
-    } catch (error) {
-      const openingReport = error instanceof NoticeCollectionDeferred ? error.openingReport : undefined;
-      const details = responseDetails(openingReport, Boolean(await repository.find(key)));
-      return maintenanceResponse(error, details) ?? Response.json({
-        ...details,
-        error: "입찰공고를 수집하지 못했습니다. 공고 정보와 낙찰방법 코드를 확인하세요.",
-      }, { status: 502 });
-    }
+    return acceptNoticeJob({ ...input, opening: true });
   }
 
   const details = responseDetails(report, true);

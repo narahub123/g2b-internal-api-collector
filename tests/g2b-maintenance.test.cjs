@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { after, mock, test } = require('node:test');
+const { after, beforeEach, mock, test } = require('node:test');
 const { readFileSync, mkdtempSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
@@ -87,6 +87,40 @@ const execMock = mock.method(DatabaseSync.prototype, 'exec', function (sql) {
 });
 process.chdir(tempDir);
 const repository = getG2bRepository();
+const { executeNoticeJob } = require('../src/features/collect-g2b/server');
+const queue = repository.noticeQueue;
+
+beforeEach(() => {
+  const db = new DatabaseSync(join(tempDir, '.data', 'notices.sqlite'));
+  sqliteExec.call(db, 'DELETE FROM g2b_notice_walk_visits; DELETE FROM g2b_notice_walks; DELETE FROM g2b_notice_jobs; UPDATE g2b_notice_queue SET manual = 0, maintenance = 0');
+  db.close();
+});
+
+async function drainNoticeJobs() {
+  for (let job; (job = queue.claim(Date.now())); ) {
+    queue.finish(job.id, await executeNoticeJob(job), Date.now());
+  }
+}
+
+async function acceptedJob(response) {
+  assert.equal(response.status, 202);
+  const { jobId } = await response.json();
+  await drainNoticeJobs();
+  return queue.get(jobId);
+}
+
+async function submitNotice(request) {
+  return acceptedJob(await postNotice(request));
+}
+
+async function collectSingleNotice(input, allowPartial = false) {
+  const [id] = queue.enqueue([input], true);
+  const job = queue.claim(Date.now());
+  assert.equal(job.id, id);
+  const outcome = await executeNoticeJob(job);
+  queue.finish(id, outcome, Date.now());
+  if (!allowPartial && outcome.kind !== 'success') throw new Error(outcome.error);
+}
 after(() => {
   aliasHook.deregister();
   execMock.mock.restore();
@@ -129,7 +163,6 @@ test('코드 99는 요청 번호와 일치하는 사전규격 상세만 저장�
 });
 
 test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번호로 연결한다', async (t) => {
-  const { collectAndSaveNotice } = require('../src/features/collect-g2b/server');
   const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
   const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
   const { createElement } = require('react');
@@ -161,7 +194,7 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
       : success({ dlUntyAtchFileL: [] });
   });
 
-  const recollect = () => collectAndSaveNotice({ ...noticeKey, methodCode: '' });
+  const recollect = () => collectSingleNotice({ ...noticeKey, methodCode: '' }, true);
   const history = repository.collectionAttempts;
   const initialCounts = history.counts('order-plans');
   for (returnedNumber of [undefined, 'R26BK20926396']) {
@@ -290,7 +323,7 @@ test('기타 공고는 번호·차수가 다르면 저장하지 않고 업무진
         prcmBsneSeCd: '09', bidPbancNm: '기타 공고', ...override,
       } });
     });
-    assert.equal((await postNotice(request())).status, 502);
+    assert.equal((await submitNotice(request())).status, 'retry_wait');
     assert.equal(fetchMock.mock.callCount(), 2);
     fetchMock.mock.restore();
   }
@@ -298,7 +331,7 @@ test('기타 공고는 번호·차수가 다르면 저장하지 않고 업무진
     assert.ok(path.endsWith('/srchWorkPrgs.do'));
     return maintenancePage();
   });
-  assert.equal((await postNotice(request())).status, 503);
+  assert.equal((await submitNotice(request())).status, 'pending');
   assert.equal(fetchMock.mock.callCount(), 1);
   assert.equal(await repository.find(key), null);
 });
@@ -319,15 +352,15 @@ test('기타 첨부 목록 조회 실패 시 같은 그룹에 대해서만 기�
     assert.ok(path.endsWith('/selectUntyAtchFileList.do'));
     return attachmentsAvailable ? Response.json(attachments) : new Response(null, { status: 500 });
   });
-  const collect = () => postNotice(new Request('http://localhost/api/notices', {
+  const collect = () => submitNotice(new Request('http://localhost/api/notices', {
     method: 'POST', body: JSON.stringify({ ...key, methodCode: '' }),
   }));
-  assert.equal((await collect()).status, 200);
+  assert.equal((await collect()).status, 'succeeded');
   attachmentsAvailable = false;
-  assert.equal((await collect()).status, 200);
+  assert.equal((await collect()).status, 'retry_wait');
   assert.deepEqual((await repository.find(key)).documents.attachments, attachments);
   currentGroup = '00000000-0000-0000-0000-000000000002';
-  assert.equal((await collect()).status, 200);
+  assert.equal((await collect()).status, 'retry_wait');
   assert.equal((await repository.find(key)).documents.attachments, undefined);
 });
 
@@ -360,6 +393,8 @@ test('수집 이력은 기존 자료와 시도 대상을 합쳐 집계하고 늦
 test('수집 폼에서 다른 업무의 번호를 차단하고 정상 번호를 정규화해 제출한다', async (t) => {
   const { CollectG2bForm } = require('../src/features/collect-g2b/ui/CollectG2bForm');
   const errors = [];
+  t.mock.method(require('react'), 'useRef', (current) => ({ current }));
+  t.mock.method(require('react'), 'useEffect', () => {});
   t.mock.method(require('react'), 'useState', (initial) => [initial, (value) => {
     if (initial === '') errors.push(value);
   }]);
@@ -429,7 +464,7 @@ test('업무별 형식 오류는 직접 수집과 이력 재시도에서 조회�
 });
 
 test('여섯 업무의 미저장 실패를 기록하고 이력의 입력으로 재수집한다', async (t) => {
-  const { collectAndSaveNotice, collectContract, collectOpeningResult } = require('../src/features/collect-g2b/server');
+  const { collectContract, collectOpeningResult } = require('../src/features/collect-g2b/server');
   const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
   const orderPlanNumber = 'R26DD00000010';
   const priorSpecNumber = 'R26BD00000010';
@@ -465,7 +500,7 @@ test('여섯 업무의 미저장 실패를 기록하고 이력의 입력으로 �
     ['prior-specs', priorSpecNumber, () => collectPriorSpec(priorSpecNumber, true)],
     ['contract-requests', contractRequestNumber, () => collectContractRequest({ number: contractRequestNumber, revision: '000' }, true)],
     ['contracts', contractNumber, () => collectContract({ number: contractNumber, revision: '00' }, true)],
-    ['notices', notice.number, () => collectAndSaveNotice(notice)],
+    ['notices', notice.number, () => collectSingleNotice(notice)],
     ['opening-results', opening.number, () => collectOpeningResult(opening, queries, true)],
   ];
   const request = new Request('http://localhost', { method: 'POST' });
@@ -482,7 +517,8 @@ test('여섯 업무의 미저장 실패를 기록하고 이력의 입력으로 �
     unavailable = false;
     const context = { params: Promise.resolve({ id: String(failed.id) }) };
     const response = await retry(request, context);
-    assert.equal(response.status, 204, response.status === 204 ? section : await response.text());
+    if (section === 'notices') assert.equal((await acceptedJob(response)).status, 'succeeded');
+    else assert.equal(response.status, 204, response.status === 204 ? section : await response.text());
     const updated = history.overview(section);
     assert.deepEqual(history.counts(section), updated.counts, section);
     assert.ok(updated.saved.some((row) => row.number === number), section);
@@ -573,7 +609,8 @@ test('발주계획과 입찰공고 어느 쪽에서 시작해도 계획의 미�
             params: Promise.resolve({ number: planNumber }),
           })
         : await relatedNoticeRequest(a);
-      assert.equal(response.status, 200);
+      assert.equal(response.status, startFromPlan ? 200 : 202);
+      await drainNoticeJobs();
       assert.deepEqual(calls, [...(startFromPlan ? [] : [a]), planNumber, b, c]);
       assert.ok(await repository.find({ number: c, revision: '000' }));
     } finally {
@@ -595,7 +632,7 @@ test('관련공고 수집은 정상 저장 건을 거쳐 미수집 차수까지 
     calls.push(`${bidPbancNo}-${bidPbancOrd}`);
     return detail(bidPbancNo === a ? `${a}-000,${b}-000,${b}-000,${c}-000` : undefined);
   });
-  assert.equal((await relatedNoticeRequest(a)).status, 200);
+  assert.equal((await acceptedJob(await relatedNoticeRequest(a))).status, 'succeeded');
   assert.deepEqual(calls, [`${a}-000`, `${c}-000`, `${c}-001`]);
   assert.ok(start.mock.calls.every(({ arguments: [target] }) => target.number !== b));
   const { renderToStaticMarkup } = require('react-dom/server');
@@ -638,12 +675,12 @@ test('관련공고 수집은 손상된 상세를 복구하고 실패한 행을 �
     calls.push(bidPbancNo);
     if (bidPbancNo === failed) return retrying ? detail(`${retryChild}-000`) : new Response('', { status: 500 });
     if (bidPbancNo === failedShape) return new Response('', { status: 500 });
-    if (bidPbancNo === deferred) return maintenancePage();
+    if (bidPbancNo === deferred && !retrying) return maintenancePage();
     if (bidPbancNo === a) return detail([badJson, missing, mismatch, failed, failedShape, lookupError, next, deferred, skipped]
       .map((number) => `${number}-000`).join(','));
     return detail();
   });
-  assert.equal((await relatedNoticeRequest(a)).status, 200);
+  assert.equal((await acceptedJob(await relatedNoticeRequest(a))).status, 'succeeded');
   assert.deepEqual(calls, [a, badJson, missing, mismatch, failed, failedShape, next, deferred]);
   for (const number of [badJson, missing, mismatch, next]) {
     assert.equal((await repository.find({ number, revision })).payload.dmItemMap.bidPbancNo, number);
@@ -666,26 +703,27 @@ test('관련공고 수집은 손상된 상세를 복구하고 실패한 행을 �
   assert.equal(body.props.links.noticePath({ number: failed, revision }), undefined);
   const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
   retrying = true;
-  assert.equal((await retry(new Request('http://localhost', { method: 'POST' }), {
+  queue.clearMaintenance(queue.maintenanceVersion());
+  assert.equal((await acceptedJob(await retry(new Request('http://localhost', { method: 'POST' }), {
     params: Promise.resolve({ id: String(failedAttempt.id) }),
-  })).status, 204);
-  assert.deepEqual(calls.slice(-2), [failed, retryChild]);
+  }))).status, 'succeeded');
+  assert.ok(calls.lastIndexOf(failed) < calls.indexOf(retryChild));
+  assert.ok(calls.includes(skipped));
   assert.ok(await repository.find({ number: retryChild, revision }));
 });
 
-test('서로 참조하는 공고의 동시 직접 수집은 단건 저장만 공유한다', { timeout: 5000 }, async (t) => {
+test('서로 참조하는 공고의 동시 접수는 큐에서 순차 실행된다', { timeout: 5000 }, async (t) => {
   const a = 'R26BK00000621', b = 'R26BK00000622';
-  const bothStarted = Promise.withResolvers();
   const calls = [];
   mockRelatedNotices(t, async ({ bidPbancNo }, detail) => {
     calls.push(bidPbancNo);
-    if (calls.length === 2) bothStarted.resolve();
-    await bothStarted.promise;
     return detail(`${bidPbancNo === a ? b : a}-000`);
   });
   const responses = await Promise.all([relatedNoticeRequest(a), relatedNoticeRequest(b)]);
-  assert.deepEqual(responses.map(({ status }) => status), [200, 200]);
-  assert.deepEqual(calls.sort(), [a, b]);
+  assert.deepEqual(responses.map(({ status }) => status), [202, 202]);
+  assert.deepEqual(calls, []);
+  await drainNoticeJobs();
+  assert.deepEqual(calls, [a, b]);
 });
 
 test('명시적인 점검 화면만 판별한다', () => {
@@ -724,14 +762,14 @@ test('공고 부가 조회 점검은 기존 행을 보존하고 다음 게시글
     if (path.endsWith('/selectPst.do')) return maintenancePage();
     assert.fail(path);
   });
-  const response = await postNotice(noticeRequest());
-  assert.equal(response.status, 503);
-  assert.equal((await response.json()).code, 'g2b_maintenance');
+  const job = await submitNotice(noticeRequest());
+  assert.equal(job.status, 'pending');
+  assert.ok(queue.maintenanceVersion());
   assert.deepEqual(await repository.find(key), previous);
   assert.equal(calls.mock.calls.filter(({ arguments: [url] }) => new URL(url).pathname.endsWith('/selectPst.do')).length, 1);
 });
 
-test('일반 API 오류는 기존 502로 처리하고 정상 공고는 저장한다', async (t) => {
+test('일반 API 오류는 재시도 대기로 처리하고 정상 공고는 저장한다', async (t) => {
   const calls = mockFetch(t, () => new Response(null, { status: 503 }));
   for (const respond of [
     () => new Response(null, { status: 503 }),
@@ -739,7 +777,7 @@ test('일반 API 오류는 기존 502로 처리하고 정상 공고는 저장한
     () => { throw new DOMException('timeout', 'TimeoutError'); },
   ]) {
     calls.mock.mockImplementation(respond);
-    assert.equal((await postNotice(noticeRequest())).status, 502);
+    assert.equal((await submitNotice(noticeRequest())).status, 'retry_wait');
   }
   calls.mock.mockImplementation(async (url) => {
     const path = new URL(url).pathname;
@@ -748,7 +786,7 @@ test('일반 API 오류는 기존 502로 처리하고 정상 공고는 저장한
     if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
     assert.fail(path);
   });
-  assert.equal((await postNotice(noticeRequest())).status, 200);
+  assert.equal((await submitNotice(noticeRequest())).status, 'succeeded');
   const saved = await repository.find(key);
   assert.equal(saved.title, '새 공고');
   assert.notEqual(saved.collectedAt, collectedAt);
@@ -786,12 +824,12 @@ test('공고 수집은 연결된 계약 상세를 한 번 저장하고 재수집
   const rows = [linkedContract(contract.number), linkedContract(contract.number)];
   const requested = mockNoticeContracts(t, rows, contractDetail);
 
-  assert.equal((await postNotice(noticeRequest())).status, 200);
+  assert.equal((await submitNotice(noticeRequest())).status, 'succeeded');
   assert.deepEqual((await repository.find(key)).contracts, [contract]);
   assert.deepEqual(repository.findContract(contract)?.detail, {
     ctrtNo: contract.number, ctrtChgOrd: contract.revision,
   });
-  assert.equal((await postNotice(noticeRequest())).status, 200);
+  assert.equal((await submitNotice(noticeRequest())).status, 'succeeded');
   assert.deepEqual(requested, [contract]);
 });
 
@@ -827,7 +865,7 @@ test('일치하는 계약이 없으면 공고 수집에서 계약 상세를 조�
   const requested = mockNoticeContracts(t, rows, contractDetail);
   for (const additionalRows of [[], [linkedContract('OTHER-REVISION', '001')]]) {
     rows.push(...additionalRows);
-    assert.equal((await postNotice(noticeRequest())).status, 200);
+    assert.equal((await submitNotice(noticeRequest())).status, 'succeeded');
     assert.deepEqual((await repository.find(key)).contracts, []);
   }
   assert.deepEqual(requested, []);
@@ -840,7 +878,7 @@ test('계약 한 건의 조회 실패에도 공고와 정상 계약을 저장하
     number === failed.number ? new Response(null, { status: 500 }) : contractDetail(number, revision),
   );
 
-  assert.equal((await postNotice(noticeRequest())).status, 200);
+  assert.equal((await submitNotice(noticeRequest())).status, 'retry_wait');
   assert.deepEqual((await repository.find(key)).contracts, [failed, saved]);
   assert.equal(repository.findContract(failed), null);
   assert.equal(repository.findContract(saved)?.detail.ctrtNo, saved.number);
@@ -857,9 +895,9 @@ test('연결된 계약 상세의 점검 응답은 공고 저장을 보류한다'
   const number = 'NOTICE-CONTRACT-DEFER';
   mockNoticeContracts(t, [linkedContract(number)], maintenancePage);
 
-  const response = await postNotice(noticeRequest());
-  assert.equal(response.status, 503);
-  assert.equal((await response.json()).code, 'g2b_maintenance');
+  const job = await submitNotice(noticeRequest());
+  assert.equal(job.status, 'pending');
+  assert.ok(queue.maintenanceVersion());
   assert.deepEqual(await repository.find(key), previous);
   const attempt = repository.collectionAttempts.overview('contracts').failures
     .find((row) => row.number === number);
@@ -1031,6 +1069,9 @@ test('미저장 공고의 전체 수집 결과를 개찰 요청에 공유하고 
     const input = JSON.parse(options.body);
     if (path.endsWith('/selectItemAnncMngV.do')) {
       const { bidPbancNo, bidPbancOrd, scsbdMthdCd } = input.dmItemMap;
+      if (bidPbancNo === 'R26BK00000699') {
+        return success({ dmItemMap: { bidPbancNo, bidPbancOrd, bidPbancNm: '관련 공고' } });
+      }
       fetchedNotices.push({ bidPbancNo, scsbdMthdCd });
       await new Promise(setImmediate);
       return success({
@@ -1060,9 +1101,16 @@ test('미저장 공고의 전체 수집 결과를 개찰 요청에 공유하고 
   );
   const body = JSON.stringify({ methodCode: 'METHOD' });
   const responses = await Promise.all([requestOpening('R26BK00000021', body), requestOpening('R26BK00000021', body)]);
-  for (const response of responses) {
-    assert.equal(response.status, 502);
-    const result = await response.json();
+  const ids = await Promise.all(responses.map(async (response) => {
+    assert.equal(response.status, 202);
+    return (await response.json()).jobId;
+  }));
+  assert.equal(ids[0], ids[1]);
+  await drainNoticeJobs();
+  for (const id of ids) {
+    const job = queue.get(id);
+    assert.equal(job.status, 'retry_wait');
+    const result = job.result;
     assert.equal(result.noticeSaved, true);
     assert.deepEqual(result.targetRevisions, ['001', '002']);
     assert.deepEqual(result.succeededRevisions, ['001']);
@@ -1076,14 +1124,14 @@ test('미저장 공고의 전체 수집 결과를 개찰 요청에 공유하고 
   assert.equal((await requestOpening('R26BK00000021')).status, 200);
   assert.equal(fetchedNotices.length, 1);
   assert.deepEqual(fetchedOpenings.slice(2).sort(), ['001', '002']);
-  assert.equal((await requestOpening('R26BK00000022')).status, 200);
+  assert.equal((await acceptedJob(await requestOpening('R26BK00000022'))).status, 'succeeded');
 
-  const absent = await requestOpening('R26BK00000023');
-  assert.equal(absent.status, 404);
-  assert.equal((await absent.json()).noticeSaved, true);
-  const deferred = await requestOpening('R26BK00000024');
-  assert.equal(deferred.status, 503);
-  const result = await deferred.json();
+  const absent = await acceptedJob(await requestOpening('R26BK00000023'));
+  assert.equal(absent.status, 'retry_wait');
+  assert.equal(absent.result.noticeSaved, true);
+  const deferred = await acceptedJob(await requestOpening('R26BK00000024'));
+  assert.equal(deferred.status, 'pending');
+  const result = deferred.result;
   assert.equal(result.noticeSaved, false);
   assert.deepEqual(result.succeededRevisions, ['001']);
   assert.deepEqual(result.failedRevisions, ['002']);
@@ -1431,4 +1479,25 @@ test('진단 이력 저장도 실패하면 두 원인을 기록하고 원래 예
   const args = log.mock.calls[0].arguments;
   assert.equal(args[4].message, collectError.message);
   assert.equal(args[5].message, finishError.message);
+});
+
+test('큐 관리 API가 실행 중 수동 중단 요청을 저장하고 등록 오류는 503으로 반환한다', async (t) => {
+  const { GET, PATCH } = require('../app/api/g2b/notice-queue/route');
+  const response = await postNotice(noticeRequest());
+  assert.equal(response.status, 202);
+  const { jobId } = await response.json();
+  assert.equal(queue.claim(Date.now()).id, jobId);
+  const pause = await PATCH(new Request('http://localhost', { method: 'PATCH', body: '{"manual":true}' }));
+  assert.equal(pause.status, 204);
+  assert.equal((await GET().json()).active, jobId);
+  assert.equal((await GET().json()).manual, true);
+  queue.finish(jobId, { kind: 'success', related: [], result: {} }, Date.now());
+  assert.equal((await GET().json()).active, null);
+
+  const log = t.mock.method(console, 'error', () => {});
+  t.mock.method(queue, 'enqueue', () => { throw new Error('DB 쓰기 실패'); });
+  assert.equal((await postNotice(noticeRequest())).status, 503);
+  const entry = JSON.parse(log.mock.calls[0].arguments[0]);
+  assert.equal(entry.operation, 'enqueue');
+  assert.equal(entry.diagnostic.message, 'DB 쓰기 실패');
 });

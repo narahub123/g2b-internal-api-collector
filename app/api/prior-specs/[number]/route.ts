@@ -1,3 +1,4 @@
+import { checkNoticeQueueMaintenance } from '@/features/collect-g2b/api/notice-queue-service';
 import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
 import { collectionNumberError } from '@/features/collect-g2b/model/number';
 import { collectPriorSpec } from '@/features/collect-g2b/server';
@@ -10,6 +11,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ nu
   const { number } = await params;
   const numberError = collectionNumberError('prior-specs', number);
   if (numberError) return Response.json({ error: numberError }, { status: 400 });
+  await checkNoticeQueueMaintenance();
   try {
     await collectPriorSpec(number, true);
     return Response.json({ number });

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { contractRequestRevision } from "@/entities/contract-request/model/contract-request";
 import { contractRevision } from "@/entities/contract/model/contract";
 import type { NoticeKey } from "@/entities/notice";
 import type { CollectionSection } from "@/server/g2b/repository/collection-attempts";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
+import { waitForNoticeJob } from "../api/wait-for-notice-job";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
@@ -88,6 +89,9 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
   const config = settings[section];
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [jobId, setJobId] = useState<number>();
+  const requestController = useRef<AbortController>(null);
+  useEffect(() => () => requestController.current?.abort(), []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -115,9 +119,12 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
     const body = section === "notices" ? noticeInput : section === "opening-results" ? { methodCode } : undefined;
     setError("");
     setPending(true);
+    const controller = new AbortController();
+    requestController.current = controller;
     try {
       const response = await fetch(config.endpoint(key), {
         method: "POST",
+        signal: controller.signal,
         ...(body && { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
       });
       if (!response.ok) {
@@ -132,15 +139,18 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
         onFailure();
         return;
       }
+      await waitForNoticeJob(response, setJobId, controller.signal);
       try {
         await onCollected(key);
       } catch {
         setError("수집은 완료됐지만 목록을 갱신하지 못했습니다. 페이지를 새로고침해 주세요.");
       }
-    } catch {
-      setError("수집 요청을 완료하지 못했습니다. 다시 시도해 주세요.");
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setError(error instanceof Error ? error.message : "수집 요청을 완료하지 못했습니다.");
       onFailure();
     } finally {
+      setJobId(undefined);
       setPending(false);
     }
   }
@@ -164,6 +174,7 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
         )}
         <Button type="submit" disabled={pending}>{pending ? "수집 중…" : "수집 / 다시 수집"}</Button>
       </form>
+      {jobId && <p role="status" className="text-sm">수집 작업 {jobId} 접수됨</p>}
       {error && <CollectionErrorMessage message={error} />}
     </Card>
   );

@@ -1,3 +1,4 @@
+import { checkNoticeQueueMaintenance } from '@/features/collect-g2b/api/notice-queue-service';
 import { maintenanceResponse } from '@/shared/api/g2b/g2b-maintenance';
 import { contractRevision, type ContractKey } from '@/entities/contract/model/contract';
 import { collectContract } from '@/features/collect-g2b/server';
@@ -14,6 +15,7 @@ export async function POST(_request: Request, { params }: { params: Promise<Cont
   if (contractRevision(key.revision) !== key.revision) {
     return Response.json({ error: '변경차수를 확인하세요.' }, { status: 400 });
   }
+  await checkNoticeQueueMaintenance();
   try {
     await collectContract(key, true);
     return Response.json(key);

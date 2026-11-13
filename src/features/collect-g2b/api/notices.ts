@@ -54,7 +54,7 @@ async function collectProposal(
  * @returns 계약요청 및 계약 식별자 목록.
  * @throws 연결된 상세 수집에서 점검을 확인한 경우.
  */
-async function collectNoticeContractLinks(key: NoticeKey, rows: Record<string, unknown>[]) {
+async function collectNoticeContractLinks(key: NoticeKey, rows: Record<string, unknown>[], recordFailure?: (error: unknown) => void) {
   const requests = contractRequestKeys(rows, key);
   const contracts = contractKeys(rows, key);
   const outcomes = await Promise.allSettled([
@@ -62,6 +62,9 @@ async function collectNoticeContractLinks(key: NoticeKey, rows: Record<string, u
     ...contracts.map((contract) => collectContract(contract)),
   ]);
   throwIfMaintenance(...outcomes);
+  for (const outcome of outcomes) {
+    if (outcome.status === "rejected") recordFailure?.(outcome.reason);
+  }
   return { contractRequests: requests, contracts };
 }
 
@@ -210,7 +213,7 @@ export async function collectNotice(
     /^\d{1,3}$/.test(String(detail.rfpOrd))
       ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
       : undefined,
-    linkedRows ? collectNoticeContractLinks(key, linkedRows) : undefined,
+    linkedRows ? collectNoticeContractLinks(key, linkedRows, recordFailure) : undefined,
     isEtc ? { targetRevisions: [], succeededRevisions: [], failures: [] } : collectNoticeOpeningResults(payload),
     isEtc ? undefined : collectNoticePosts(key, recordFailure),
     orderPlanLookupNumber ? collectOrderPlan(orderPlanLookupNumber, false, { fromNotice: true }) : undefined,
@@ -233,7 +236,10 @@ export async function collectNotice(
   } catch (error) {
     throw new NoticeCollectionDeferred(openingReport, error);
   }
-  if (openingReport.failures.length) console.error("개찰결과 수집 실패:", openingReport.failures);
+  if (openingReport.failures.length) {
+    console.error("개찰결과 수집 실패:", openingReport.failures);
+    for (const { error } of openingReport.failures) recordFailure?.(error);
+  }
   // 문서 조회 오류가 공고 상세와 다른 문서의 저장을 막지 않도록 실패 종류를 따로 기록한다.
   const documents: NonNullable<Notice["documents"]> = {
     attachments:
