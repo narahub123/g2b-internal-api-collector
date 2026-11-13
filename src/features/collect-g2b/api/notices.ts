@@ -2,6 +2,7 @@ import { contractRequestKeys } from "@/entities/contract-request/model/contract-
 import { contractKeys } from "@/entities/contract/model/contract";
 import type { Notice, NoticeKey } from "@/entities/notice";
 import { etcNoticeBusinessCode, etcNoticeDetail, noticeAttachmentGroup } from "@/entities/notice/model/notice-detail";
+import { fetchFrcpNotice, frcpNoticeBusinessCode } from "./frcp-notice";
 import { noticePostRecord, noticePostRows, type NoticePost } from "@/entities/notice/model/notice-posts";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";
@@ -160,7 +161,8 @@ export async function collectNotice(
     return undefined;
   });
   const isEtc = workProgress?.some((row) => row?.prcmBsneSeCd === etcNoticeBusinessCode);
-  const payload = isEtc ? await fetchEtcNotice(key) : await postG2b(
+  const isFrcp = workProgress?.some((row) => row?.prcmBsneSeCd === frcpNoticeBusinessCode);
+  const raw = isEtc ? await fetchEtcNotice(key) : isFrcp ? await fetchFrcpNotice(key, methodCode) : await postG2b(
     "/pn/pnp/pnpe/ItemBidPbac/selectItemAnncMngV.do",
     submissionPrefix + "selectItemAnncMngV",
     {
@@ -172,6 +174,8 @@ export async function collectNotice(
       },
     },
   );
+  // 전용 응답 원본을 보존하면서 일반 공고의 표시·연결 조회가 공통 데이터 맵을 사용하게 한다.
+  const payload = !isEtc && isFrcp ? { ...raw, dmItemMap: raw.dlBidPbancM } : raw;
   const detail = isEtc ? etcNoticeDetail(payload) : payload.dmItemMap;
   // 기타 상세의 별도 BM 번호는 BK 번호로 요청한 공고의 저장 키와 다르다.
   const number = isEtc ? detail?.bidPbancUntyNo : detail?.bidPbancNo;
@@ -184,7 +188,7 @@ export async function collectNotice(
     typeof detail?.bidPbancNm !== "string" ||
     !detail.bidPbancNm.trim()
   ) {
-    const detailField = isEtc ? "dlUntyBidPbancM" : "dmItemMap";
+    const detailField = isEtc ? "dlUntyBidPbancM" : isFrcp ? "dlBidPbancM" : "dmItemMap";
     const field = typeof detail?.bidPbancNm !== "string" || !detail.bidPbancNm.trim()
       ? `${detailField}.bidPbancNm` : detailField;
     throw collectionValidationError("요청한 공고의 상세 응답을 받지 못했습니다.", field, key, { number, revision });

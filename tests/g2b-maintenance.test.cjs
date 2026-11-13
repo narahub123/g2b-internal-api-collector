@@ -265,6 +265,27 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
   assert.ok(orderPlanBody.props.notices.some(({ number }) => number === noticeKey.number));
 });
 
+test('업무구분 22는 전용 상세 경로를 사용하고 원본과 기존 표시용 데이터 맵을 제공한다', async (t) => {
+  const key = { number: 'R26BK01827103', revision: '001' };
+  const detail = { bidPbancNo: key.number, bidPbancOrd: key.revision, bidPbancNm: '외부시설물 설치공사' };
+  mockFetch(t, (path, options) => {
+    if (path === '/') return new Response('', { headers: { 'Set-Cookie': 'test-session=1; Path=/' } });
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [{ prcmBsneSeCd: '22' }] });
+    if (path.endsWith('/selectFrcpBidPbacDtlInfo.do')) {
+      const input = JSON.parse(options.body).dlBidPbancM;
+      assert.deepEqual([input.bidPbancNo, input.bidPbancOrd, input.prcmBsneSeCd, input.scsbdMthdCd],
+        [key.number, key.revision, '22', '낙030001']);
+      return success({ dlBidPbancM: detail });
+    }
+    assert.ok(!path.endsWith('/selectItemAnncMngV.do'));
+    return success({ dlNtcPstL: [] });
+  });
+  const { notice } = await collectNotice(key, '낙030001');
+  assert.equal(notice.title, detail.bidPbancNm);
+  assert.deepEqual(notice.payload.dlBidPbancM, detail);
+  assert.deepEqual(notice.payload.dmItemMap, detail);
+});
+
 test('기타 공고는 업무진행을 한 번 조회하고 기타 상세와 공개 첨부를 수집한다', async (t) => {
   const key = { number: 'R26BK01792130', revision: '000' };
   const detail = {
