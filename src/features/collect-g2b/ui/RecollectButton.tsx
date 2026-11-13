@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { waitForNoticeJob } from "../api/wait-for-notice-job";
 import { Button } from "@/shared/ui/button";
 import { RefreshCw } from "lucide-react";
 
@@ -33,6 +34,9 @@ export function RecollectButton({
   const [submitting, setSubmitting] = useState(false);
   const [refreshing, startTransition] = useTransition();
   const [error, setError] = useState("");
+  const [jobId, setJobId] = useState<number>();
+  const requestController = useRef<AbortController>(null);
+  useEffect(() => () => requestController.current?.abort(), []);
   const busy = submitting || refreshing;
   const label = busy ? "수집 중…" : initial ? "수집" : "재수집";
 
@@ -42,10 +46,13 @@ export function RecollectButton({
    */
   async function recollect() {
     setSubmitting(true);
+    const controller = new AbortController();
+    requestController.current = controller;
     setError("");
     try {
       const response = await fetch(endpoint, {
         method: "POST",
+        signal: controller.signal,
         ...(requestBody && {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(requestBody),
@@ -55,13 +62,16 @@ export function RecollectButton({
         const data = await response.json().catch(() => null);
         throw new Error(data?.error || "수집 요청에 실패했습니다.");
       }
+      await waitForNoticeJob(response, setJobId, controller.signal);
       startTransition(() => router.refresh());
     } catch (error) {
+      if (controller.signal.aborted) return;
       setError(
         error instanceof Error ? error.message : "수집 요청에 실패했습니다.",
       );
       if (refreshOnError) startTransition(() => router.refresh());
     } finally {
+      setJobId(undefined);
       setSubmitting(false);
     }
   }
@@ -86,6 +96,7 @@ export function RecollectButton({
         )}
         <span className={compact ? "sm:hidden" : undefined}>{label}</span>
       </Button>
+      {jobId && <p role="status" className="text-sm">수집 작업 {jobId} 접수됨</p>}
       {error && (
         <p role="alert" className="max-w-36 text-xs text-destructive">
           {error}

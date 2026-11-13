@@ -9,6 +9,7 @@ import type { PriorSpec } from '@/entities/prior-spec/model/prior-spec';
 import type { Notice, NoticeKey, NoticeSummary } from '@/entities/notice/model/types';
 import { etcNoticeDetail } from '@/entities/notice/model/notice-detail';
 import type { G2bCollectionCounts, G2bRepository } from './types';
+import { openNoticeQueue } from './notice-queue';
 import { openCollectionAttempts } from './collection-attempts';
 
 // 저장 키와 업무별 상세 응답의 번호·차수가 일치해야 재사용할 수 있다.
@@ -163,6 +164,7 @@ export function openG2bRepository(): G2bRepository {
 
   return {
     collectionAttempts: openCollectionAttempts(db),
+    noticeQueue: openNoticeQueue(db),
     /**
      * 수집 중에도 업무별 건수가 같은 읽기 시점을 기준으로 집계되도록 한 문장으로 조회한다.
      * @throws SQLite가 집계 쿼리 실행에 실패한 경우.

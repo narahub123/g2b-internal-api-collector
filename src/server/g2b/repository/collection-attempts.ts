@@ -198,9 +198,21 @@ export function openCollectionAttempts(db: DatabaseSync) {
       throw error;
     }
   }
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('g2b_collection_attempts') WHERE name = 'job_id'").get()) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!db.prepare("SELECT 1 FROM pragma_table_info('g2b_collection_attempts') WHERE name = 'job_id'").get()) {
+        db.exec("ALTER TABLE g2b_collection_attempts ADD COLUMN job_id INTEGER");
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   const insert = db.prepare(`
-    INSERT INTO g2b_collection_attempts (section, number, revision, opening_revision, input, started_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO g2b_collection_attempts (section, number, revision, opening_revision, input, started_at, job_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const finish = db.prepare(`
     UPDATE g2b_collection_attempts SET finished_at = ?, status = ?, error = ?, diagnostics = ?
@@ -267,10 +279,11 @@ export function openCollectionAttempts(db: DatabaseSync) {
     contractList: openContractList(db, summaries.get("contracts")!.targets),
     /**
      * 외부 조회 직전에 입력과 시작 시각을 기록한다.
+     * @param jobId 공고 워커가 시작한 경우 연결할 영속 작업 ID.
      * @returns 종료 결과를 기록하거나 재시도할 때 쓰는 시도 ID.
      * @throws SQLite가 이력 행을 저장하지 못한 경우.
      */
-    start(target: CollectionTarget): number {
+    start(target: CollectionTarget, jobId?: number): number {
       return Number(insert.run(
         target.section,
         target.number,
@@ -278,6 +291,7 @@ export function openCollectionAttempts(db: DatabaseSync) {
         "openingRevision" in target ? target.openingRevision : "",
         JSON.stringify(target),
         new Date().toISOString(),
+        jobId ?? null,
       ).lastInsertRowid);
     },
 

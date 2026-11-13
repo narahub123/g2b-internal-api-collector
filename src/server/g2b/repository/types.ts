@@ -17,6 +17,7 @@ export type G2bCollectionCounts = {
 };
 
 export interface G2bRepository {
+  noticeQueue: import("./notice-queue-types").NoticeQueue;
   collectionAttempts: ReturnType<typeof openCollectionAttempts>;
   /**
    * 여섯 업무의 저장 행 수를 같은 시점 기준으로 조회한다.

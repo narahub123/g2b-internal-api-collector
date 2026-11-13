@@ -4,5 +4,5 @@ export { collectContractRequest } from "./api/contract-requests";
 export { collectOrderPlan } from "./api/order-plans";
 export { collectPriorSpec } from "./api/prior-specs";
 export { collectNotice } from "./api/notices";
-export { collectAndSaveNotice, collectNoticeWithRelated, collectOrderPlanWithRelated } from "./api/collect-and-save-notice";
+export { executeNoticeJob, relatedPlanInputs } from "./api/collect-and-save-notice";
 export { parseCollectNoticeInput } from "./model/input";

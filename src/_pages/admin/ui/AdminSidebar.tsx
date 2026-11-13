@@ -24,6 +24,7 @@ import {
 } from "@/shared/ui/sidebar";
 import { ADMIN_NAVIGATION } from "../config/navigation";
 
+/** 현재 관리자 경로를 표시하고 나라장터 업무와 공고 큐로 이동한다. */
 export function AdminSidebar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -73,6 +74,14 @@ export function AdminSidebar() {
                           </SidebarMenuSubItem>
                         );
                       })}
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild isActive={pathname === g2b.noticeQueue.href}>
+                          <Link href={g2b.noticeQueue.href} onNavigate={() => setOpen(false)}
+                            aria-current={pathname === g2b.noticeQueue.href ? "page" : undefined}>
+                            {g2b.noticeQueue.label}
+                          </Link>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
                     </SidebarMenuSub>
                   </SidebarMenuItem>
                 </SidebarMenu>
