@@ -2,11 +2,11 @@ import Link from "next/link";
 import type { CollectionSection } from "@/server/g2b/repository/collection-attempts";
 import { loadCollectionList } from "@/server/g2b/repository/load-collection-list";
 import { G2B_LABEL, G2B_SECTIONS } from "@/shared/config/g2b-sections";
-import { cn } from "@/shared/lib/utils";
 import { formatCollectionIdentifier, type CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 import { CollectionListItem } from "@/shared/ui/g2b/CollectionListItem";
 import { CollectionListLabel } from "@/shared/ui/g2b/CollectionListLabel";
 import { CollectionQueryView } from "@/shared/ui/g2b/CollectionQueryView";
+import { G2bSectionNav } from "@/shared/ui/g2b/G2bSectionNav";
 import { userDetailPath } from "../config/routes";
 
 // 저장 건수와 무관하게 목록 조회가 구현된 단계만 공통 업무 순서대로 노출한다.
@@ -23,7 +23,11 @@ function isAvailableSection(value: unknown): value is CollectionSection {
   return typeof value === "string" && Object.hasOwn(availableSections, value);
 }
 
-const sections = Object.keys(G2B_SECTIONS).filter(isAvailableSection);
+const sectionItems = Object.keys(G2B_SECTIONS).filter(isAvailableSection).map((section) => ({
+  section,
+  label: G2B_SECTIONS[section],
+  href: `/?section=${section}`,
+}));
 
 /**
  * 업무 탭과 저장된 나라장터 자료를 표시한다. 단계가 생략되거나 미지원이면 입찰공고를 조회한다.
@@ -42,22 +46,7 @@ export async function G2bHomePage({ searchParams }: { searchParams: Promise<Coll
   return (
     <main className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-8 sm:px-6">
       <h1 className="text-2xl font-semibold">{G2B_LABEL}</h1>
-      <nav aria-label="나라장터 업무 단계" className="flex flex-wrap gap-2 border-b pb-3">
-        {sections.map((item) => (
-          <Link
-            key={item}
-            href={`/?section=${item}`}
-            prefetch={false}
-            aria-current={section === item ? "page" : undefined}
-            className={cn(
-              "rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring",
-              section === item ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            {G2B_SECTIONS[item]}
-          </Link>
-        ))}
-      </nav>
+      <G2bSectionNav items={sectionItems} activeSection={section} />
       <section aria-labelledby="g2b-list-heading" className="grid min-w-0 gap-4">
         <h2 id="g2b-list-heading" className="text-xl font-semibold">{G2B_SECTIONS[section]}</h2>
         <CollectionQueryView

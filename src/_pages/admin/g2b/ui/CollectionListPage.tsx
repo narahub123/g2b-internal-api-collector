@@ -11,6 +11,8 @@ import type {
 import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
+import { G2bSectionNav } from "@/shared/ui/g2b/G2bSectionNav";
+import { ADMIN_NAVIGATION } from "../../config/navigation";
 import { ADMIN_G2B_PATH, collectionDetailPaths } from "../../config/routes";
 import { CollectionQueryView } from "@/shared/ui/g2b/CollectionQueryView";
 import { CollectionForm } from "./CollectionForm";
@@ -86,6 +88,7 @@ export async function CollectionListPage({
           </Link>
         </Button>
       </header>
+      <G2bSectionNav items={ADMIN_NAVIGATION.g2b.sections} activeSection={section} />
       <CollectionForm section={section} />
       <nav
         aria-label="수집 상태로 필터링"
