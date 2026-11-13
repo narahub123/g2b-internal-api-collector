@@ -32,6 +32,10 @@ test('기간 실행은 최초 건수를 고정하고 재시도와 연관 공고�
   const done = queue.getRun(id);
   assert.deepEqual([done.status, done.initialCount, done.totalCount, done.succeededCount, done.failedCount],
     ['completed', 1, 2, 1, 1]);
+  assert.deepEqual(queue.findRunNotice(initial.number, initial.revision), {
+    ...initial, status: 'failed', error: '실패',
+  });
+  assert.equal(queue.findRunNotice(initial.number, '999'), undefined);
   db.close();
 });
 

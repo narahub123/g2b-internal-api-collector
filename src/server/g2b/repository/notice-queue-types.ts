@@ -66,6 +66,8 @@ export interface NoticeQueue {
   finishRun(id: number, outcome: NoticeRunOutcome): void;
   /** 실행과 소속 공고를 같은 읽기 시점에서 반환한다. ID 생략 시 최근 실행을 조회한다. */
   getRun(id?: number): NoticeRun | undefined;
+  /** 저장된 상세가 없는 공고의 최근 기간 수집 결과를 조회한다. */
+  findRunNotice(number: string, revision: string): NoticeRun["notices"][number] | undefined;
   /** 점검 대기 중인 기간 실행이 있으면 워커의 정상 복귀 확인을 허용한다. */
   hasActiveRuns(): boolean;
   /** 최초 탐색과 작업을 함께 등록하고 대상별 작업 ID를 반환한다. */

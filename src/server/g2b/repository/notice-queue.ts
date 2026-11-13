@@ -128,6 +128,12 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
     return Number(db.prepare("INSERT INTO g2b_notice_walks DEFAULT VALUES").run().lastInsertRowid);
   }
 
+  function runNotice(row: JobRow): NoticeRun["notices"][number] {
+    const { input, result, status, error } = job(row);
+    const { number, revision, methodCode, title } = input;
+    return { number, revision, methodCode, title: title || result?.title || "", status, error };
+  }
+
   return {
     enqueueRun(period, requestKey) {
       return transaction(() => {
@@ -175,11 +181,7 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
           (NoticeRunPeriod & { id: number; phase: NoticeRun["status"]; walkId: number | null; initialCount: number | null; error: string | null }) | undefined;
         if (!run) return;
         const notices = (db.prepare(`SELECT j.* FROM g2b_notice_walk_visits v JOIN g2b_notice_jobs j ON j.id = v.job_id
-          WHERE v.walk_id = ? ORDER BY v.rowid`).all(run.walkId) as JobRow[]).map((row) => {
-          const { input, result, status, error } = job(row);
-          const { number, revision, methodCode, title } = input;
-          return { number, revision, methodCode, title: title || result?.title || "", status, error };
-        });
+          WHERE v.walk_id = ? ORDER BY v.rowid`).all(run.walkId) as JobRow[]).map(runNotice);
         const succeededCount = notices.filter(({ status }) => status === "succeeded").length;
         const failedCount = notices.filter(({ status }) => status === "failed").length;
         const status = run.phase === "collecting" && succeededCount + failedCount === notices.length ? "completed" : run.phase;
@@ -189,6 +191,14 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
         return { id: run.id, startMinute: run.startMinute, endMinute: run.endMinute, status, pauseReason,
           initialCount: run.initialCount, totalCount: notices.length, succeededCount, failedCount, error: run.error, notices };
       }, false);
+    },
+    findRunNotice(number, revision) {
+      const row = db.prepare(`SELECT j.* FROM g2b_notice_jobs j
+        JOIN g2b_notice_walk_visits v ON v.job_id = j.id
+        JOIN g2b_notice_runs r ON r.walkId = v.walk_id
+        WHERE v.number = ? AND v.revision = ? ORDER BY r.id DESC LIMIT 1`)
+        .get(number, revision) as JobRow | undefined;
+      return row && runNotice(row);
     },
     hasActiveRuns() {
       return Boolean(db.prepare(`SELECT 1 FROM g2b_notice_runs r WHERE r.phase IN ('pending', 'discovering')

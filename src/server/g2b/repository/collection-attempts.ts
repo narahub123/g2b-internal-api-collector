@@ -322,6 +322,18 @@ export function openCollectionAttempts(db: DatabaseSync) {
     },
 
     /**
+     * 같은 공고·차수의 최신 시도가 실패했을 때 화면에 표시할 진단을 반환한다.
+     * @throws SQLite에서 수집 이력을 읽지 못한 경우.
+     */
+    latestNoticeFailure(number: string, revision: string) {
+      const row = db.prepare(`SELECT status, error, diagnostics FROM g2b_collection_attempts
+        WHERE section = 'notices' AND number = ? AND revision = ?
+        ORDER BY id DESC LIMIT 1`).get(number, revision) as
+        { status: string; error: string | null; diagnostics: string | null } | undefined;
+      return row?.status === "failed" ? row : undefined;
+    },
+
+    /**
      * 목록 본문을 읽지 않고 랜딩 카드의 전체·수집·미수집 건수를 조회한다.
      * @throws SQLite가 수집 건수를 집계하지 못한 경우.
      */
