@@ -96,10 +96,12 @@ test('큐 완료 기록 실패 시 같은 결과를 다시 기록하고 외부 �
   const loader = require.resolve('../scripts/register-project-typescript.cjs');
   const worker = require.resolve('../src/features/collect-g2b/api/notice-worker.ts');
   const repository = require.resolve('../src/server/g2b/repository/index.ts');
+  const tracker = require.resolve('../src/features/collect-g2b/api/collection-attempt.ts');
   const code = `
     const assert = require('node:assert/strict');
     require(${JSON.stringify(loader)});
     const { noticeQueue: queue, collectionAttempts } = require(${JSON.stringify(repository)}).getG2bRepository();
+    const { trackCollectionAttempt } = require(${JSON.stringify(tracker)});
     const stop = new AbortController();
     const [id] = queue.enqueue([{ number: 'R26BK00000003', revision: '000', methodCode: '' }], true);
     const [nextId] = queue.enqueue([{ number: 'R26BK00000005', revision: '000', methodCode: '' }], true);
@@ -112,6 +114,9 @@ test('큐 완료 기록 실패 시 같은 결과를 다시 기록하고 외부 �
         throw new Error('injected execution error');
       }
       assert.equal(queue.get(id).status, 'failed');
+      await trackCollectionAttempt({ section: 'notices', ...job.input }, async () => {});
+      const pending = collectionAttempts.overview('notices').failures.find((attempt) => attempt.number === job.input.number);
+      assert.equal(pending.status, 'pending');
       return { kind: 'success', related: [], result: { noticeSaved: true } };
     };
     const finish = queue.finish;
@@ -126,6 +131,7 @@ test('큐 완료 기록 실패 시 같은 결과를 다시 기록하고 외부 �
       assert.equal(queue.get(id).status, 'failed');
       assert.equal(queue.get(id).failures, 0);
       assert.equal(queue.get(nextId).status, 'succeeded');
+      assert.equal(collectionAttempts.overview('notices').failures.length, 1);
       assert.equal(collectionAttempts.overview('notices').failures[0].status, 'failed');
     }).catch((error) => { console.error(error); process.exitCode = 1; });
   `;
@@ -150,13 +156,21 @@ test('저장 직후 중단된 작업과 미종료 이력만 복구하고 일반 
   const [id] = queue.enqueue([input], true);
   queue.claim(0);
   queue.finish(id, { kind: 'failure', error: 'API 오류' }, 0);
+  const [waiting] = queue.enqueue([{ ...input, revision: '002' }], true);
+  queue.claim(0);
+  queue.finish(waiting, { kind: 'failure', error: 'API 오류' }, 30_000);
+  db.prepare("INSERT INTO g2b_collection_attempts VALUES (?, 'pending', NULL, NULL)").run(waiting);
+  db.exec("INSERT INTO g2b_collection_attempts VALUES (NULL, 'pending', NULL, NULL)");
   queue.claim(60_000);
   db.prepare("INSERT INTO g2b_collection_attempts VALUES (?, 'pending', NULL, NULL)").run(id);
   db.prepare("INSERT INTO notices VALUES (?)").run(input.number);
   queue.recover();
   assert.equal(queue.get(id).status, 'pending');
   assert.equal(queue.get(id).failures, 1);
-  assert.equal(db.prepare('SELECT status FROM g2b_collection_attempts').get().status, 'deferred');
+  assert.equal(db.prepare('SELECT status FROM g2b_collection_attempts WHERE job_id = ?').get(id).status, 'deferred');
+  assert.equal(db.prepare('SELECT status FROM g2b_collection_attempts WHERE job_id = ?').get(waiting).status, 'deferred');
+  assert.equal(db.prepare('SELECT status FROM g2b_collection_attempts WHERE job_id IS NULL').get().status, 'pending');
+  assert.equal(queue.get(waiting).status, 'retry_wait');
   assert.equal(queue.claim(60_000).id, id);
   db.prepare("INSERT OR IGNORE INTO notices VALUES (?)").run(input.number);
   queue.finish(id, { kind: 'success', related: [{ ...input, revision: '001' }], result: {} }, 60_000);
@@ -164,5 +178,42 @@ test('저장 직후 중단된 작업과 미종료 이력만 복구하고 일반 
   assert.equal(queue.get(id).status, 'succeeded');
   assert.equal(queue.claim(60_000).input.revision, '001');
   assert.equal(db.prepare('SELECT COUNT(*) AS total FROM notices').get().total, 1);
+  db.close();
+});
+
+test('Attempt 종료와 후속 등록은 Job 상태와 함께 롤백되고 재시도에서 한 번만 반영된다', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`
+    CREATE TABLE g2b_collection_attempts (
+      id INTEGER PRIMARY KEY, job_id INTEGER, status TEXT, finished_at TEXT, error TEXT, diagnostics TEXT
+    );
+  `);
+  const queue = openNoticeQueue(db);
+  const input = { number: 'R26BK00000006', revision: '000', methodCode: '' };
+  const [id] = queue.enqueue([input], true);
+  queue.claim(0);
+  db.prepare("INSERT INTO g2b_collection_attempts (id, job_id, status) VALUES (1, ?, 'pending'), (2, ?, 'pending')").run(id, id);
+  const finishedAt = new Date(0).toISOString();
+  const attempts = [
+    { id: 1, status: 'failed', error: '원래 오류', diagnostics: { name: 'Error', message: '원래 진단' }, finishedAt },
+    { id: 2, status: 'succeeded', error: null, finishedAt },
+  ];
+  const outcome = { kind: 'failure', error: '부분 실패', related: [{ ...input, revision: '001' }] };
+  const read = () => db.prepare('SELECT status, diagnostics FROM g2b_collection_attempts ORDER BY id').all();
+  for (const table of ['g2b_collection_attempts', 'g2b_notice_jobs']) {
+    db.exec(`CREATE TRIGGER fail_write BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'injected'); END`);
+    assert.throws(() => queue.finish(id, outcome, 0, attempts), /injected/);
+    assert.deepEqual(read().map((row) => row.status), ['pending', 'pending']);
+    assert.equal(queue.get(id).status, 'running');
+    assert.equal(queue.overview().jobs.length, 1);
+    db.exec('DROP TRIGGER fail_write');
+  }
+  queue.finish(id, outcome, 0, attempts);
+  queue.finish(id, outcome, 0, attempts);
+  assert.deepEqual(read().map((row) => row.status), ['failed', 'succeeded']);
+  assert.deepEqual(JSON.parse(read()[0].diagnostics), attempts[0].diagnostics);
+  assert.equal(queue.get(id).status, 'retry_wait');
+  assert.equal(queue.get(id).failures, 1);
+  assert.equal(queue.overview().jobs.length, 2);
   db.close();
 });

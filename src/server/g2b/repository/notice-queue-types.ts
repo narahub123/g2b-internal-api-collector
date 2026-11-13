@@ -1,4 +1,13 @@
 import type { CollectNoticeInput } from "@/features/collect-g2b/model/input";
+import type { CollectionDiagnostic } from "@/shared/api/g2b/collection-diagnostic";
+
+export type NoticeAttemptCompletion = {
+  id: number;
+  status: "succeeded" | "failed" | "deferred";
+  finishedAt: string;
+  error: string | null;
+  diagnostics?: CollectionDiagnostic;
+};
 
 export type NoticeQueueInput = CollectNoticeInput & { opening?: boolean };
 export type NoticeJobStatus = "pending" | "running" | "retry_wait" | "succeeded" | "failed";
@@ -34,7 +43,7 @@ export interface NoticeQueue {
   /** 중단 사유가 없을 때 다음 작업을 선점한다. */
   claim(now: number): NoticeJob | undefined;
   /** 실행 결과와 후속 탐색 작업을 한 트랜잭션에 반영한다. */
-  finish(id: number, outcome: NoticeJobOutcome, now: number): void;
+  finish(id: number, outcome: NoticeJobOutcome, now: number, attempts?: readonly NoticeAttemptCompletion[]): void;
   /** 독점 워커 실행권 획득 후 미완료 작업과 시도를 정리한다. */
   recover(): void;
   /** 영속 작업 상태와 결과를 조회한다. */

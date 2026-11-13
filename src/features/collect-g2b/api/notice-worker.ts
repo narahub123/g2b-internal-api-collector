@@ -1,7 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { acquireNoticeWorkerLock } from "@/server/g2b/repository/notice-worker-lock";
-import type { NoticeJobOutcome } from "@/server/g2b/repository/notice-queue-types";
+import type { NoticeAttemptCompletion, NoticeJobOutcome } from "@/server/g2b/repository/notice-queue-types";
+import { withNoticeAttemptCompletions } from "./collection-attempt";
 import { findMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 import { executeNoticeJob } from "./collect-and-save-notice";
 import { logNoticeQueueError } from "./notice-queue-service";
@@ -37,8 +38,9 @@ export async function runNoticeWorker(signal: AbortSignal, execute = executeNoti
       }
 
       let outcome: NoticeJobOutcome;
+      const attempts: NoticeAttemptCompletion[] = [];
       try {
-        outcome = await execute(job);
+        outcome = await withNoticeAttemptCompletions(job.id, attempts, () => execute(job));
       } catch (error) {
         const maintenance = findMaintenance(error);
         if (maintenance) {
@@ -54,7 +56,7 @@ export async function runNoticeWorker(signal: AbortSignal, execute = executeNoti
       const completedAt = Date.now();
       for (;;) {
         try {
-          if (queue.get(job.id)?.status === "running") queue.finish(job.id, outcome, completedAt);
+          if (queue.get(job.id)?.status === "running") queue.finish(job.id, outcome, completedAt, attempts);
           break;
         } catch (error) {
           logNoticeQueueError("finish", error, job.id);

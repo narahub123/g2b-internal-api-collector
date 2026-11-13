@@ -135,10 +135,19 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
         return row && job(row);
       });
     },
-    finish(id, outcome, now) {
+    finish(id, outcome, now, attempts = []) {
       transaction(() => {
         const current = db.prepare("SELECT failures FROM g2b_notice_jobs WHERE id = ? AND status = 'running'").get(id);
         if (!current) return;
+        if (attempts.length) {
+          const finishAttempt = db.prepare(`UPDATE g2b_collection_attempts
+            SET status = ?, finished_at = ?, error = ?, diagnostics = ?
+            WHERE id = ? AND job_id = ? AND status = 'pending'`);
+          for (const attempt of attempts) {
+            finishAttempt.run(attempt.status, attempt.finishedAt, attempt.error,
+              attempt.diagnostics ? JSON.stringify(attempt.diagnostics) : null, attempt.id, id);
+          }
+        }
         const failures = Number(current.failures) + Number(outcome.kind === "failure");
         let status: NoticeJob["status"];
         switch (outcome.kind) {
@@ -173,6 +182,9 @@ export function openNoticeQueue(db: DatabaseSync): NoticeQueue {
           db.prepare(`UPDATE g2b_collection_attempts SET status = 'deferred', finished_at = ?, error = ?
             WHERE status = 'pending' AND job_id IN (SELECT id FROM g2b_notice_jobs WHERE status = 'running')`)
             .run(new Date().toISOString(), "워커 종료로 수집이 중단되었습니다.");
+          db.prepare(`UPDATE g2b_collection_attempts SET status = 'deferred', finished_at = ?, error = ?
+            WHERE status = 'pending' AND job_id IN (SELECT id FROM g2b_notice_jobs WHERE status <> 'running')`)
+            .run(new Date().toISOString(), "수집 시도의 종료 결과를 확인할 수 없습니다.");
         }
         db.exec("UPDATE g2b_notice_jobs SET status = 'pending', availableAt = 0 WHERE status = 'running'");
       });

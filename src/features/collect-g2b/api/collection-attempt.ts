@@ -1,13 +1,19 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type { CollectionTarget } from "@/server/g2b/repository/collection-attempts";
+import type { NoticeAttemptCompletion } from "@/server/g2b/repository/notice-queue-types";
 import { reportCollectionMaintenance } from "./notice-queue-diagnostics";
 import { findMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 import { collectionError, collectionStep, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
 
 const activeAttempts = new Set<number>();
 // 공고의 병렬 부가 수집도 같은 워커 Job에 연결한다.
-const activeNoticeJob = new AsyncLocalStorage<number>();
+const activeNoticeJob = new AsyncLocalStorage<{ id: number; attempts: NoticeAttemptCompletion[] }>();
+
+/** 공고 실행 전체와 부가 수집을 같은 작업에 연결하고 종료 기록을 완료 트랜잭션에 전달한다. */
+export function withNoticeAttemptCompletions<T>(id: number, attempts: NoticeAttemptCompletion[], execute: () => Promise<T>) {
+  return activeNoticeJob.run({ id, attempts }, execute);
+}
 
 /**
  * 실제 외부 조회부터 저장까지 한 번의 시도로 기록한다.
@@ -22,9 +28,10 @@ export async function trackCollectionAttempt<Result>(
 ) {
   let history: ReturnType<typeof getG2bRepository>["collectionAttempts"];
   let id: number;
+  const context = activeNoticeJob.getStore();
   try {
     history = getG2bRepository().collectionAttempts;
-    id = history.start(target, job?.id ?? activeNoticeJob.getStore());
+    id = history.start(target, context?.id ?? job?.id);
   } catch (error) {
     console.error("[수집 이력 시작 실패]", target.section, target.number,
       describeCollectionError(collectionError(error, { step: "SQLite 수집 이력 시작" })));
@@ -35,13 +42,20 @@ export async function trackCollectionAttempt<Result>(
   const recordFailure = (error: unknown) => {
     partial.push(error);
   };
+  const finish = (status: NoticeAttemptCompletion["status"], error: string | null = null, diagnostics?: NoticeAttemptCompletion["diagnostics"]) => {
+    if (context) {
+      context.attempts.push({ id, status, finishedAt: new Date().toISOString(), error, diagnostics });
+    } else {
+      history.finish(id, status, error, diagnostics);
+    }
+  };
   const finishFailure = (error: unknown, errors: unknown[], status: "failed" | "deferred") => {
     if (!job && activeNoticeJob.getStore() === undefined) reportCollectionMaintenance(error);
     const diagnostics = describeCollectionError(errors.length
       ? new AggregateError([...errors, error], "나라장터 수집 중 여러 작업이 실패했습니다.")
       : error);
     try {
-      history.finish(id, status, (findMaintenance(error)?.message ?? diagnostics.message)?.slice(0, 300), diagnostics);
+      finish(status, (findMaintenance(error)?.message ?? diagnostics.message)?.slice(0, 300), diagnostics);
     } catch (writeError) {
       console.error("[수집 실패 및 이력 저장 실패]", target.section, target.number, id, diagnostics,
         describeCollectionError(collectionError(writeError, { step: "SQLite 수집 이력 종료" })));
@@ -50,7 +64,7 @@ export async function trackCollectionAttempt<Result>(
   try {
     let result: Result;
     try {
-      result = await (job ? activeNoticeJob.run(job.id, () => collect(recordFailure)) : collect(recordFailure));
+      result = await collect(recordFailure);
     } catch (error) {
       finishFailure(error, partial, findMaintenance(error) ? "deferred" : "failed");
       throw error;
@@ -60,7 +74,7 @@ export async function trackCollectionAttempt<Result>(
       finishFailure(error, [], "failed");
       job?.onPartialFailure(error);
     } else {
-      history.finish(id, "succeeded");
+      finish("succeeded");
     }
     return result;
   } finally {
