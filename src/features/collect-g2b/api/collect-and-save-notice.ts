@@ -1,5 +1,6 @@
 import { getG2bRepository } from "@/server/g2b/repository";
-import { noticePostRecord } from "@/entities/notice/model/notice-posts";
+import { mergeNoticeBaseAmount } from "@/entities/notice/model/base-amount";
+import { mergeNoticePosts, noticePostRecord } from "@/entities/notice/model/notice-posts";
 import { etcNoticeDetail, noticeAttachmentGroup, privateNoticeResult } from "@/entities/notice/model/notice-detail";
 import { getRelatedNoticeKeys } from "@/entities/notice/model/notice-display";
 import type { Notice } from "@/entities/notice/model/types";
@@ -25,7 +26,10 @@ function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFa
     const missingPrivateCodes = isPrivate && !notice.privateCodeNames;
     const missingPosts = !isEtc && !isPrivate && (!notice.posts || notice.posts.entries.some((post) => !post.body ||
       (!post.attachments && attachmentGroup(noticePostRecord(post.detail?.dlPstM).untyAtchFileNo))));
-    if (documents?.unavailable?.length || missingPosts || missingPrivatePosts || missingPrivateCodes ||
+    const missingBaseAmount = notice.baseAmount && (notice.baseAmount.unavailable?.length ||
+      notice.baseAmount.posts?.entries.some((post) => !post.body ||
+        (!post.attachments && attachmentGroup(noticePostRecord(post.detail?.dlPstM).untyAtchFileNo))));
+    if (documents?.unavailable?.length || missingPosts || missingBaseAmount || missingPrivatePosts || missingPrivateCodes ||
         notice.contractRequests === undefined || notice.contracts === undefined) {
       // 일시적인 문서 조회 실패 때문에 이전에 저장한 원본 목록을 잃지 않도록 한다.
       const previous = collectionStep("SQLite 이전 공고 조회", () =>
@@ -74,19 +78,9 @@ function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFa
           }
         }
       }
-      if (!isEtc && !isPrivate && !notice.posts) {
-        notice.posts = previous?.posts;
-      } else if (notice.posts) {
-        for (const post of notice.posts.entries) {
-          const saved = previous?.posts?.entries.find(({ bbsNo, pstNo }) => bbsNo === post.bbsNo && pstNo === post.pstNo);
-          if (!saved) continue;
-          post.detail ??= saved.detail;
-          post.body ??= saved.body;
-          // 다른 첨부 그룹으로 변경된 공지에는 예전 파일을 표시하지 않는다.
-          const group = attachmentGroup(noticePostRecord(post.detail?.dlPstM).untyAtchFileNo);
-          const savedGroup = attachmentGroup(noticePostRecord(saved.detail?.dlPstM).untyAtchFileNo);
-          if (group && group === savedGroup) post.attachments ??= saved.attachments;
-        }
+      if (!isEtc && !isPrivate) notice.posts = mergeNoticePosts(notice.posts, previous?.posts);
+      if (missingBaseAmount && notice.baseAmount && previous?.baseAmount) {
+        notice.baseAmount = mergeNoticeBaseAmount(notice.baseAmount, previous.baseAmount);
       }
     }
     await repository.save(notice).catch((error: unknown) => {

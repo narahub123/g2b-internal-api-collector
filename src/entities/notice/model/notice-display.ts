@@ -1,4 +1,5 @@
 import { openingResultQuery } from "@/entities/opening-result/model/opening-result";
+import { noticeBaseAmountRows } from "./base-amount";
 import type { Notice } from "./types";
 import { etcNoticeDetail, noticeAttachmentGroup, privateNoticeResult } from "./notice-detail";
 import { publicAttachmentFiles } from "@/shared/model/g2b/g2b-attachments";
@@ -785,9 +786,7 @@ export function getNoticeDisplay(
     {
       ...table(
         "기초금액공개",
-        detail.pnprDcsnMthoCd === "예050001"
-          ? []
-          : baseAmounts.map((row, index) => ({
+        noticeBaseAmountRows(payload).map((row, index) => ({
               ...row,
               no: index + 1,
               baseAmountDetail: "기초금액조회",

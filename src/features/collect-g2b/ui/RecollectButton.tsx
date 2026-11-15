@@ -11,7 +11,7 @@ import { RefreshCw } from "lucide-react";
  * 실패 목록에서는 새 실패 이력을 반영하도록 실패 시에도 페이지를 갱신할 수 있다.
  *
  * 재수집 중에는 중복 요청을 막기 위해 버튼을 비활성화하며, 요청 실패 시 오류를 표시한다.
- * `compact`는 제목 영역의 반응형 버튼에 사용하며, 기본값은 기존 텍스트 버튼을 유지한다.
+ * `compact`에서는 진행·오류 안내를 버튼 아래에 겹쳐 표시해 제목과 작업 버튼의 위치를 유지한다.
  *
  * @param props 수집 요청 주소, 최초 수집 여부, 선택적 요청 본문 및 버튼 표시 방식
  * @returns 수집 진행 상태와 실패 메시지를 포함한 재수집 버튼
@@ -38,7 +38,8 @@ export function RecollectButton({
   const requestController = useRef<AbortController>(null);
   useEffect(() => () => requestController.current?.abort(), []);
   const busy = submitting || refreshing;
-  const label = busy ? "수집 중…" : initial ? "수집" : "재수집";
+  const actionLabel = initial ? "수집" : "재수집";
+  const label = busy ? "수집 중…" : actionLabel;
 
   /**
    * 수집 API에 POST 요청을 보내고 성공 시 페이지를 갱신한다.
@@ -77,7 +78,7 @@ export function RecollectButton({
   }
 
   return (
-    <div className="grid shrink-0 gap-1">
+    <div className={compact ? "relative shrink-0" : "grid shrink-0 gap-1"}>
       <Button
         type="button"
         variant="outline"
@@ -94,13 +95,19 @@ export function RecollectButton({
             className={`size-4 shrink-0 ${busy ? "animate-spin" : ""}`}
           />
         )}
-        <span className={compact ? "sm:hidden" : undefined}>{label}</span>
+        <span className={compact ? "sm:hidden" : undefined}>{compact ? actionLabel : label}</span>
       </Button>
-      {jobId && <p role="status" className="text-sm">수집 작업 {jobId} 접수됨</p>}
-      {error && (
-        <p role="alert" className="max-w-36 text-xs text-destructive">
-          {error}
-        </p>
+      {(jobId || error) && (
+        <div className={compact
+          ? "absolute top-full left-1/2 z-10 mt-1 w-max max-w-52 -translate-x-1/2 rounded-md border bg-popover px-2 py-1.5 text-popover-foreground shadow-sm"
+          : "grid gap-1"}>
+          {jobId && <p role="status" className="text-sm">수집 작업 {jobId} 접수됨</p>}
+          {error && (
+            <p role="alert" className="max-w-36 wrap-anywhere text-xs text-destructive">
+              {error}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

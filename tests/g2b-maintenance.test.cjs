@@ -1634,3 +1634,73 @@ test('큐 관리 API가 실행 중 수동 중단 요청을 저장하고 등록 �
   assert.equal(entry.operation, 'enqueue');
   assert.equal(entry.diagnostic.message, 'DB 쓰기 실패');
 });
+
+test('기초금액과 전용 공지를 공고 수집 시 저장하고 재수집 실패 및 정상 제거를 구분한다', async (t) => {
+  const input = { number: 'R26BK01789731', revision: '000', methodCode: '' };
+  const identity = { bidPbancNo: input.number, bidPbancOrd: input.revision };
+  const postKey = { bbsNo: 'R23AB00000204', pstNo: '17211' };
+  const group = '12345678-1234-1234-1234-123456789abc';
+  const attachment = { untyAtchFileNo: group, atchFileSqno: '1', scrnIndtYn: 'Y',
+    dwnldPrmsYn: 'Y', orgnlAtchFileNm: '공지.hwp', atchFilePathNm: '/data/Attachfiles/public/notice.hwp' };
+  const baseResult = {
+    bidInfo: { ...identity, prcmBsneSeCd: '01', bidPbancNm: '테스트 기초금액' },
+    baseEstiPrice: {}, listBaseEstiPrice: [{ ...identity, bidClsfNo: '1', bsamt: 28600000 }],
+  };
+  let hideButton = false;
+  let failBase = false;
+  let omitPost = false;
+  let baseCalls = 0;
+  t.mock.method(console, 'error', () => {});
+  mockFetch(t, (path, options) => {
+    if (path === '/') return session();
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+    const body = JSON.parse(options.body);
+    if (path.endsWith('/selectItemAnncMngV.do')) return success({
+      dmItemMap: { ...baseResult.bidInfo, pnprDcsnMthoCd: hideButton ? '예050001' : '예050003' },
+      dmItemBaseAmtList: [{ baseAmt: 28600000 }],
+    });
+    if (path.endsWith('/selectBaseAmtDtlPopup.do')) {
+      baseCalls++;
+      assert.deepEqual(body.dlBsisAmtM, { ...identity, sign: '', sign2: '', sign3: '' });
+      return failBase ? new Response(null, { status: 502 }) : success({ result: baseResult });
+    }
+    if (path.endsWith('/selectNtcPstList.do')) {
+      const map = body.dlPstM;
+      if (!map.clsfPritmSqno) return success({ dlPstL: [] });
+      assert.deepEqual(map, { bbsNo: postKey.bbsNo, clsfPritmSqno: '1721', odn1ColCn: input.number, odn2ColCn: input.revision });
+      return success({ dlPstL: omitPost ? [] : [{ ...postKey, pstNm: '기초금액 안내' }] });
+    }
+    if (path.endsWith('/selectPst.do')) return success({ dlPstM: { ...postKey, untyAtchFileNo: group } });
+    if (path.endsWith('/selectPstCn.do')) return success({ dlPstCnM: { ...postKey, bulkPstCn: '<p>안내</p>' } });
+    if (path.endsWith('/selectUntyAtchFileList.do')) return success({ dlUntyAtchFileL: [attachment] });
+    assert.fail(path);
+  });
+  await collectSingleNotice(input);
+  const saved = await repository.find(input);
+  assert.deepEqual(saved.baseAmount.detail.result, baseResult);
+  assert.equal(saved.posts.entries.length, 0);
+  assert.equal(saved.baseAmount.posts.entries[0].body.dlPstCnM.bulkPstCn, '<p>안내</p>');
+
+  const { downloadNoticePost } = require('../src/features/download-g2b-attachment/server/notice-post-handler');
+  // 조회 워커의 SQLite에 있는 원본만 첨부 다운로드에 사용한다.
+  const download = (source) => downloadNoticePost(
+    new Request('http://localhost/post-download?' + new URLSearchParams({ ...postKey, seq: '1', ...source })),
+    { params: Promise.resolve(input) },
+  );
+  assert.equal((await download({ source: 'base-amount' })).status, 302);
+  assert.equal((await download()).status, 404);
+
+  failBase = true;
+  omitPost = true;
+  await collectSingleNotice(input, true);
+  const retried = await repository.find(input);
+  assert.deepEqual(retried.baseAmount.detail.result, baseResult);
+  assert.deepEqual(retried.baseAmount.retained, ['detail']);
+  assert.equal(retried.baseAmount.posts.entries.length, 0);
+  assert.equal((await download({ source: 'base-amount' })).status, 404);
+
+  hideButton = true;
+  await collectSingleNotice(input);
+  assert.equal((await repository.find(input)).baseAmount, undefined);
+  assert.equal(baseCalls, 2);
+});

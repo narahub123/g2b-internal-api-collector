@@ -16,17 +16,18 @@ import {
 } from "../model/notice-posts";
 import type { NoticeKey } from "../model/types";
 
-/** 저장된 공지 목록 순서대로 게시글과 내부 상세 섹션을 표시한다. */
+/** 저장된 순서대로 공지를 표시하고, 기초금액 공지는 전용 저장 자료의 첨부로 연결한다. */
 export function NoticePostsSection({
   posts,
   number,
   revision,
-}: NoticeKey & { posts: NoticePosts }) {
+  source,
+}: NoticeKey & { posts: NoticePosts; source?: "base-amount" }) {
   const rows = noticePostRows(posts.list);
   if (!rows.length) return null;
 
   return (
-    <DetailAccordionSection title="공지사항">
+    <DetailAccordionSection title="공지사항" heading={source === "base-amount" ? "h3" : "h2"}>
       <Accordion
         type="multiple"
         className="min-w-0 [&_[data-slot=accordion-trigger]]:wrap-anywhere"
@@ -113,7 +114,7 @@ export function NoticePostsSection({
                       <AttachmentTable
                         files={files}
                         getDownloadHref={({ seq }) =>
-                          `/api/notices/${encodeURIComponent(number)}/${encodeURIComponent(revision)}/post-download?${new URLSearchParams({ bbsNo, pstNo, seq })}`
+                          `/api/notices/${encodeURIComponent(number)}/${encodeURIComponent(revision)}/post-download?${new URLSearchParams({ bbsNo, pstNo, seq, ...(source && { source }) })}`
                         }
                       />
                     </DetailAccordionSection>
