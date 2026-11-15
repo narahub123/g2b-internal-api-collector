@@ -3,7 +3,10 @@ import Link from "next/link";
 import { formatCollectionIdentifier } from "@/shared/model/g2b/collection-list-query";
 import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
+import { CollectionListSelection, CollectionRowCheckbox } from "@/features/delete-g2b/ui/CollectionListSelection";
+import { getG2bRepository } from "@/server/g2b/repository";
 import { loadCollectionList } from "@/server/g2b/repository/load-collection-list";
+import type { CollectionDeletionTarget } from "@/server/g2b/repository/collection-deletion";
 import type {
   CollectionOverview,
   CollectionSection,
@@ -47,6 +50,7 @@ function targetKey({ number, revision, openingRevision }: TargetKey) {
 
 type DisplayRow = {
   item: TargetKey;
+  deletionTarget?: CollectionDeletionTarget;
   savedItem?: Pick<CollectionOverview["saved"][number], "title" | "businessCode" | "businessLabel">;
   failure?: Pick<CollectionOverview["failures"][number], "id" | "startedAt" | "status" | "error" | "diagnostics">;
 };
@@ -67,15 +71,23 @@ export async function CollectionListPage({
   const paginated = loadCollectionList(section, params);
   const { counts } = paginated.result;
   const selected = paginated.query.status;
-  const rows = paginated.result.rows.map((row): DisplayRow => ({
-    item: row,
-    savedItem: row.collectedAt !== null ? row : undefined,
-    failure: row.id !== null && row.startedAt && row.status && row.status !== "succeeded"
-      ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error, diagnostics: row.diagnostics }
-      : undefined,
-  }));
+  const deletion = getG2bRepository().collectionDeletion;
+  const rows = paginated.result.rows.map((row): DisplayRow => {
+    const { target, blocked } = deletion.snapshot(section, row);
+    // 화면을 조회한 뒤 다른 프로세스가 원본이나 이력을 바꿨다면 새 버전을 대신 제출하지 않는다.
+    const eligible = !blocked && row.status !== "pending" &&
+      (row.collectedAt !== null || row.status === "failed" || row.status === "deferred") &&
+      target.collectedAt === row.collectedAt && target.attemptId === row.id && target.attemptStartedAt === row.startedAt;
+    return {
+      item: row,
+      deletionTarget: eligible ? target : undefined,
+      savedItem: row.collectedAt !== null ? row : undefined,
+      failure: row.id !== null && row.startedAt && row.status && row.status !== "succeeded"
+        ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error, diagnostics: row.diagnostics }
+        : undefined,
+    };
+  });
   const href = `${ADMIN_G2B_PATH}/${section}`;
-  const items = <CollectionRows section={section} rows={rows} />;
 
   return (
     <section className="grid min-w-0 gap-6">
@@ -128,13 +140,19 @@ export async function CollectionListPage({
           ? { section: paginated.section, regions: paginated.regions }
           : { section: paginated.section })}
       >
-        {items}
+        <CollectionListSelection
+          key={paginated.href(href, paginated.query)}
+          section={section}
+          eligible={rows.flatMap(({ deletionTarget }) => deletionTarget ? [deletionTarget] : [])}
+        >
+          <CollectionRows section={section} rows={rows} />
+        </CollectionListSelection>
       </CollectionQueryView>
     </section>
   );
 }
 
-/** 저장 여부에 따라 상세 링크를 표시하고 최신 실패나 보류가 있으면 재수집을 제공한다. */
+/** 삭제 선택과 저장 상세 링크를 독립된 컨트롤로 표시하고 최신 실패나 보류에 재수집을 제공한다. */
 function CollectionRows({ section, rows }: { section: CollectionSection; rows: DisplayRow[] }) {
   return rows.length === 0 ? (
     <p className="text-sm text-muted-foreground">
@@ -142,16 +160,18 @@ function CollectionRows({ section, rows }: { section: CollectionSection; rows: D
     </p>
   ) : (
     <ul className="grid gap-2">
-      {rows.map(({ item, savedItem, failure }) => {
+      {rows.map(({ item, savedItem, failure, deletionTarget }) => {
         const key = targetKey(item);
+        const identifier = formatCollectionIdentifier(item);
         return (
           <CollectionListItem
             key={key}
             href={savedItem ? collectionDetailPaths[section](item) : undefined}
+            selection={<CollectionRowCheckbox identifier={identifier} disabled={!deletionTarget} />}
             action={
               failure && (
                 <RecollectButton
-                  endpoint={`/api/g2b/collection-attempts/${failure.id}/retry`}
+                  endpoint={`/api/g2b/collection-attempts/${failure.id}/retry?startedAt=${encodeURIComponent(failure.startedAt)}`}
                   refreshOnError
                 />
               )
@@ -177,7 +197,7 @@ function CollectionRows({ section, rows }: { section: CollectionSection; rows: D
             }
           >
             <CollectionListLabel
-              identifier={formatCollectionIdentifier(item)}
+              identifier={identifier}
               title={savedItem?.title}
               businessCode={savedItem?.businessCode}
               businessLabel={savedItem?.businessLabel}

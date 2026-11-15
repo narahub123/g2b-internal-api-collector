@@ -12,18 +12,20 @@ import { maintenanceResponse } from "@/shared/api/g2b/g2b-maintenance";
 /**
  * 대상의 최신 수집 이력에 보존된 입력으로 같은 업무의 수집을 다시 실행한다.
  * 입찰공고는 큐에 접수하고 발주계획은 저장한 뒤 관련 공고를 등록한다.
+ * @param request 목록 화면은 이력 삭제 후 재사용된 ID를 구분할 시작 시각을 보낸다.
  * @returns 공고 접수 시 작업 ID와 202, 다른 업무 성공 시 빈 204 응답. 번호 형식 오류는 400, 없는 이력은 404, 진행 중이거나 바뀐 이력은 409,
  * 나라장터 점검은 503, 기타 수집 오류는 502를 반환한다.
  * @throws 재시도 대상 이력을 읽지 못한 경우.
  */
-export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const attemptId = Number(id);
   if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(attemptId)) {
     return Response.json({ error: "수집 이력을 찾을 수 없습니다." }, { status: 404 });
   }
 
-  const target = getG2bRepository().collectionAttempts.retryTarget(attemptId);
+  const startedAt = new URL(request.url).searchParams.get("startedAt") ?? undefined;
+  const target = getG2bRepository().collectionAttempts.retryTarget(attemptId, startedAt);
   if (target === "missing") {
     return Response.json({ error: "수집 이력을 찾을 수 없습니다." }, { status: 404 });
   }

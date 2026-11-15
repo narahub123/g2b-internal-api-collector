@@ -1,4 +1,5 @@
 import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
 import { orderPlanPath } from "@/_pages/admin/config/routes";
 import { notFound } from "next/navigation";
 import { getG2bRepository } from "@/server/g2b/repository";
@@ -29,7 +30,11 @@ export async function PriorSpecDetailPage({
         <PriorSpecDetail
           spec={spec}
           orderPlanPath={orderPlanPath}
-          actions={<RecollectButton endpoint={`/api/prior-specs/${encodeURIComponent(number)}`} compact />}
+          actions={
+            <CollectionDetailActions section="prior-specs" records={[spec]}>
+              <RecollectButton endpoint={`/api/prior-specs/${encodeURIComponent(number)}`} compact />
+            </CollectionDetailActions>
+          }
         />
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-xl border bg-card p-5">

@@ -3,8 +3,7 @@ import { decodeHTMLStrict } from "entities";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
 import { formatG2bDisplayDate, formatG2bDisplayDateTime } from "@/shared/lib/g2b/g2b-display-format";
 import type { CollectionListRow, CollectionSection } from "./collection-attempts";
-
-const pageSize = 15;
+import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collection-list";
 
 /** 검색과 정렬에서 HTML 엔티티를 해제하고 한글을 NFC로 통일한다. */
 export function cleanText(value: unknown) {

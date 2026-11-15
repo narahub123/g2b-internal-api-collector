@@ -1,4 +1,5 @@
 import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
 import { contractRequestApiPath } from "@/features/collect-g2b/api/routes";
 import { notFound } from "next/navigation";
 import {
@@ -35,7 +36,11 @@ export async function ContractRequestDetailPage({
       {contractRequest ? (
         <ContractRequestDetail
           contractRequest={contractRequest}
-          actions={<RecollectButton endpoint={contractRequestApiPath(key)} compact />}
+          actions={
+            <CollectionDetailActions section="contract-requests" records={[contractRequest]}>
+              <RecollectButton endpoint={contractRequestApiPath(key)} compact />
+            </CollectionDetailActions>
+          }
         />
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-xl border bg-card p-5">

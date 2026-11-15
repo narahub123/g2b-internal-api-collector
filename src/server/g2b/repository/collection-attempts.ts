@@ -61,10 +61,10 @@ export type CollectionListRow = TargetKey & ListMetadata & {
   diagnostics: string | null;
 };
 
-type RetryRow = { input: string; status: AttemptStatus; latestId: number };
+type RetryRow = { input: string; status: AttemptStatus; latestId: number; startedAt: string };
 
 // 저장된 계획으로 연결되는 호출 번호만 합친다. 서로 다른 계획에 연결되면 원래 이력 번호를 유지한다.
-const orderPlanAttemptKeys = `
+export const orderPlanAttemptKeys = `
   order_plan_links AS (
     SELECT notice_order_plan_lookup(data) AS lookup_number,
       json_extract(data, '$.orderPlanNumber') AS plan_number
@@ -219,7 +219,7 @@ export function openCollectionAttempts(db: DatabaseSync) {
     WHERE id = ? AND status = 'pending'
   `);
   const retry = db.prepare(`
-    SELECT input, status, (
+    SELECT input, status, started_at AS startedAt, (
       SELECT MAX(latest.id) FROM g2b_collection_attempts latest
       WHERE latest.section = attempt.section AND latest.number = attempt.number
         AND latest.revision = attempt.revision AND latest.opening_revision = attempt.opening_revision
@@ -306,13 +306,14 @@ export function openCollectionAttempts(db: DatabaseSync) {
     /**
      * 대상의 최신 실패·보류·미확인 이력에서 재수집 입력을 읽는다.
      * 발주계획 호출 번호가 저장 번호로 연결되면 그 저장 번호로 직접 재수집한다.
-     * @returns 없는 이력은 missing, 이미 성공했거나 새 시도가 시작됐으면 conflict.
+     * @param startedAt 조회한 이력의 시작 시각. 삭제 후 같은 ID가 재사용된 이력을 구분한다.
+     * @returns 없는 이력은 missing, 이미 성공했거나 화면의 이력이 바뀌었으면 conflict.
      * @throws SQLite 조회나 저장 입력 역직렬화가 실패한 경우.
      */
-    retryTarget(id: number): CollectionTarget | "missing" | "conflict" {
+    retryTarget(id: number, startedAt?: string): CollectionTarget | "missing" | "conflict" {
       const row = retry.get(id) as RetryRow | undefined;
       if (!row) return "missing";
-      if (row.status === "succeeded") return "conflict";
+      if (row.status === "succeeded" || (startedAt !== undefined && row.startedAt !== startedAt)) return "conflict";
       const target = JSON.parse(row.input) as CollectionTarget;
       if (target.section === "order-plans") {
         const resolved = retryOrderPlan.get(id) as { number: string; latestId: number } | undefined;

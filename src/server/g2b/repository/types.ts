@@ -17,6 +17,7 @@ export type G2bCollectionCounts = {
 };
 
 export interface G2bRepository {
+  collectionDeletion: ReturnType<typeof import("./collection-deletion").openCollectionDeletion>;
   noticeQueue: import("./notice-queue-types").NoticeQueue;
   collectionAttempts: ReturnType<typeof openCollectionAttempts>;
   /**

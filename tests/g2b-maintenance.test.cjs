@@ -554,6 +554,8 @@ test('수집 이력은 기존 자료와 시도 대상을 합쳐 집계하고 늦
   assert.deepEqual(history.counts('contracts'), counts);
   assert.equal(failures[0].id, latest);
   assert.equal(failures[0].hasData, false);
+  assert.deepEqual(history.retryTarget(latest, failures[0].startedAt), target);
+  assert.equal(history.retryTarget(latest, '2020-01-01T00:00:00.000Z'), 'conflict');
   repository.saveContract({ number: target.number, revision: target.revision, collectedAt });
   assert.equal(history.overview('contracts').failures[0].hasData, true);
   history.finish(history.start(target), 'succeeded');

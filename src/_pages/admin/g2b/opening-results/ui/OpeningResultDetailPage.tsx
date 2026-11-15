@@ -1,4 +1,5 @@
 import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
 import { noticePath } from "@/_pages/admin/config/routes";
 import { openingResultApiPath } from "@/features/collect-g2b/api/routes";
 import { notFound } from "next/navigation";
@@ -39,7 +40,11 @@ export async function OpeningResultDetailPage({ params }: { params: Promise<Noti
         <OpeningResultDetail
           noticeKey={key}
           noticePath={noticePath}
-          actions={<RecollectButton endpoint={openingResultApiPath(key)} compact />}
+          actions={
+            <CollectionDetailActions section="opening-results" records={results}>
+              <RecollectButton endpoint={openingResultApiPath(key)} compact />
+            </CollectionDetailActions>
+          }
           results={results}
           {...header}
         />

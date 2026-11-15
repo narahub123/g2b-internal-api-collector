@@ -1,4 +1,5 @@
 import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
 import { notFound } from "next/navigation";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
@@ -74,7 +75,11 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
           orderPlanPath,
           priorSpecPath,
         }}
-        renderActions={(input) => <RecollectButton endpoint="/api/notices" requestBody={input} compact refreshOnError />}
+        renderActions={(input) => (
+          <CollectionDetailActions section="notices" records={[notice]}>
+            <RecollectButton endpoint="/api/notices" requestBody={input} compact refreshOnError />
+          </CollectionDetailActions>
+        )}
       />
     </div>
   );
