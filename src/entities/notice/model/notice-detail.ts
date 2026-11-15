@@ -1,4 +1,6 @@
 import { attachmentGroup } from "@/shared/model/g2b/g2b-attachments";
+import { decodeHTMLStrict } from "entities";
+import type { Notice } from "./types";
 
 // 통합검색에서 기타 입찰공고를 식별하는 조달업무구분 코드.
 export const etcNoticeBusinessCode = "09";
@@ -32,6 +34,31 @@ export function privateNoticeResult(payload: Record<string, unknown>) {
 export function noticeDetail(payload: Record<string, unknown>) {
   return etcNoticeDetail(payload) ??
     (payload.dmItemMap as Record<string, unknown> | undefined) ?? {};
+}
+
+/**
+ * 민간공고의 공고종류를 공통코드 이름, 상세의 이름, 원본 코드 순으로 읽는다.
+ * 공통코드 응답이 없는 저장본에서도 상세에 표시할 이름을 얻을 수 있다.
+ */
+export function privateNoticeKind(detail: Record<string, unknown>, codeNames: Notice["privateCodeNames"]) {
+  const text = (value: unknown) => typeof value === "string" || typeof value === "number" ? String(value) : "";
+  const code = text(detail.pbancKndCd);
+  return codeNames?.["공44PN000"]?.[code] ?? (text(detail.pbancKndCdNm) || code);
+}
+
+/**
+ * 저장된 공고종류로 사용자 화면에서 제외할 모의공고를 판별한다.
+ * 원본의 괄호는 HTML 엔티티로 저장될 수 있으며, 괄호 안 상태는 공고종류에 영향을 주지 않는다.
+ */
+export function isMockNotice(notice: Pick<Notice, "payload" | "privateCodeNames">) {
+  const payload = notice.payload ?? {};
+  const privateDetail = privateNoticeResult(payload)?.bidPbancMap;
+  const kind = privateDetail && typeof privateDetail === "object" && !Array.isArray(privateDetail)
+    ? privateNoticeKind(privateDetail as Record<string, unknown>, notice.privateCodeNames)
+    : noticeDetail(payload).pbancKndNm;
+  if (typeof kind !== "string") return false;
+  const label = decodeHTMLStrict(kind).trim();
+  return label === "모의공고" || /^모의공고\(\s*[^\s()][^()]*\)$/.test(label);
 }
 
 /**

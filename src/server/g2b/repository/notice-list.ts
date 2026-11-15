@@ -1,8 +1,19 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query";
-import { etcNoticeDetail, noticeDetail } from "@/entities/notice/model/notice-detail";
+import { etcNoticeDetail, isMockNotice, noticeDetail } from "@/entities/notice/model/notice-detail";
+import type { Notice } from "@/entities/notice/model/types";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { cleanText, queryCollectionPage, sortDate } from "./collection-list-query";
+
+// 사용자 입찰공고의 조회 결과, 집계, 선택지에 같은 노출 기준을 적용한다.
+type NoticeListOptions = { excludeMockNotices?: boolean };
+
+function mockNoticeFlag(raw: SQLInputValue) {
+  if (typeof raw !== "string") return 0;
+  const notice = JSON.parse(raw) as Notice | null;
+  return Number(notice !== null && isMockNotice(notice));
+}
+
 const sortColumns = new Map([
   ["posted", "posted"],
   ["submission", "submission"],
@@ -77,6 +88,7 @@ function noticeFields(raw: unknown) {
  */
 export function openNoticeList(db: DatabaseSync, targets: string) {
   db.function("notice_list_fields", { deterministic: true }, noticeFields);
+  db.function("notice_is_mock", { deterministic: true }, mockNoticeFlag);
   db.function("notice_list_regions", { deterministic: true }, (value) =>
     JSON.stringify(regionsFrom(value)),
   );
@@ -86,6 +98,7 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
       CASE WHEN json_valid(data) THEN json_extract(data, '$.payload.dmItemMap.rgnLmtCn') END
     )) region
     WHERE CASE WHEN json_valid(data) THEN json_extract(data, '$.payload.dmItemMap.rgnLmtYn') = 'Y' END
+      AND CASE WHEN ? AND json_valid(data) THEN notice_is_mock(data) = 0 ELSE TRUE END
     ORDER BY label
   `);
   const businesses = db.prepare(`
@@ -93,16 +106,18 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd')) AS code,
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS label
     FROM notices WHERE json_valid(data)
+      AND CASE WHEN ? AND json_valid(data) THEN notice_is_mock(data) = 0 ELSE TRUE END
   `);
 
   return {
     /**
      * 저장된 공고의 업무구분을 목록 배지와 같은 이름으로 반환한다.
+     * @param options 사용자 목록을 구성할 때 모의공고의 업무구분을 제외할지 지정한다.
      * @throws SQLite에서 업무구분을 읽지 못한 경우.
      */
-    businesses() {
+    businesses({ excludeMockNotices = false }: NoticeListOptions = {}) {
       const options = new Map<string, string>();
-      for (const { code, label } of businesses.all()) {
+      for (const { code, label } of businesses.all(Number(excludeMockNotices))) {
         const business = resolveG2bBusiness(code, label);
         if (business) options.set(business.code ?? business.label, business.label);
       }
@@ -111,19 +126,21 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
     },
     /**
      * 수집 상태에 관계없이 저장된 공고에서 명시적으로 표시되는 참가 가능 지역을 조회한다.
+     * @param options 사용자 목록을 구성할 때 모의공고의 지역을 제외할지 지정한다.
      * @throws SQLite에서 공고 자료를 읽지 못한 경우.
      */
-    regions(): string[] {
-      return (regions.all() as { label: string }[]).map(({ label }) => label);
+    regions({ excludeMockNotices = false }: NoticeListOptions = {}): string[] {
+      return (regions.all(Number(excludeMockNotices)) as { label: string }[]).map(({ label }) => label);
     },
 
     /**
      * 검색·필터에 일치하는 수집 상태별 건수와 선택된 상태의 현재 페이지를 함께 조회한다.
+     * @param options 모의공고를 제외하면 검색 결과와 건수 및 페이지 수에 같은 조건을 적용한다.
      * @returns 범위를 벗어난 페이지는 마지막 페이지로 보정하며, 값 없는 행은 정렬 방향에 관계없이 뒤에 둔다.
      * @throws SQLite에서 검색 또는 집계에 실패한 경우.
      */
-    page(query: NoticeListQuery) {
-      const where: string[] = [];
+    page(query: NoticeListQuery, { excludeMockNotices = false }: NoticeListOptions = {}) {
+      const where = excludeMockNotices ? ["isMockNotice = 0"] : [];
       const values: SQLInputValue[] = [];
       // 상세 화면의 하이픈과 목록의 슬래시 모두 같은 공고번호·차수로 검색한다.
       const search =
@@ -170,7 +187,9 @@ export function openNoticeList(db: DatabaseSync, targets: string) {
       const order = sortColumns.get(field) ?? "posted";
       return queryCollectionPage(db, targets, {
         section: "notices",
-        projection: "notice_list_fields(saved.data) AS fields",
+        projection: excludeMockNotices
+          ? "notice_list_fields(saved.data) AS fields, notice_is_mock(saved.data) AS isMockNotice"
+          : "notice_list_fields(saved.data) AS fields",
         columns: `json_extract(fields, '$.posted') AS posted, json_extract(fields, '$.submission') AS submission,
             json_extract(fields, '$.deadline') AS deadline, json_extract(fields, '$.sortTitle') AS sortTitle,
             json_extract(fields, '$.budget') AS budget`,

@@ -36,7 +36,9 @@ const sectionItems = Object.keys(G2B_SECTIONS).filter(isAvailableSection).map((s
 export async function G2bHomePage({ searchParams }: { searchParams: Promise<CollectionSearchParams> }) {
   const params = await searchParams;
   const section = isAvailableSection(params.section) ? params.section : "notices";
-  const { query, result, businesses, ...list } = loadCollectionList(section, params, "collected");
+  const { query, result, businesses, ...list } = loadCollectionList(section, params, "collected", {
+    excludeMockNotices: section === "notices",
+  });
   const listQuery = { ...query, status: "total", page: result.page } as const;
   // URL 원본 대신 검증된 조건과 저장소에서 보정한 페이지를 복귀 주소에 담는다.
   const from = new URLSearchParams(list.href("/", listQuery).split("?")[1]);

@@ -2,7 +2,7 @@ import {
   attachmentGroup,
   publicAttachmentFiles,
 } from "@/shared/model/g2b/g2b-attachments";
-import { noticeAttachmentGroup } from "./notice-detail";
+import { noticeAttachmentGroup, privateNoticeKind } from "./notice-detail";
 import { formatG2bPhone } from "@/shared/lib/g2b-phone";
 import {
   formatG2bDisplayDate,
@@ -243,7 +243,7 @@ export function getPrivateNoticeDisplay(
       "공고처리구분",
       code("공40PN000", detail.pbancSttsCd, detail.pbancSttsCdNm),
     ],
-    ["공고종류", code("공44PN000", detail.pbancKndCd, detail.pbancKndCdNm)],
+    ["공고종류", privateNoticeKind(detail, codeNames)],
     ["긴급여부", detail.emrgPbancYnLtrs],
     [
       "업무분류",

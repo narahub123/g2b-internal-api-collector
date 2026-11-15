@@ -780,6 +780,33 @@ test('관련공고 수집은 정상 저장 건을 거쳐 미수집 차수까지 
   }
 });
 
+test('모의공고는 사용자 목록과 상세 및 관련공고 내부 링크에서 제외된다', async () => {
+  const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
+  const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
+  const { loadCollectionList } = require('../src/server/g2b/repository/load-collection-list');
+  const simulated = { number: 'R26BK00000991', revision: '000' };
+  const regular = { number: 'T26BK00000992', revision: '000' };
+  for (const [key, kind] of [[simulated, '모의공고&#40;등록공고&#41;'], [regular, '일반공고']]) {
+    await repository.save({ ...key, collectedAt, title: key.number, payload: { dmItemMap: {
+      bidPbancNo: key.number, bidPbancOrd: key.revision, pbancKndNm: kind,
+    } } });
+  }
+  const query = { field: 'number', q: simulated.number };
+  assert.equal(loadCollectionList('notices', query).result.rows[0].number, simulated.number);
+  assert.deepEqual(loadCollectionList('notices', query, 'collected', { excludeMockNotices: true }).result.rows, []);
+  const userDetail = (key) => G2bDetailPage({
+    section: 'notices', params: Promise.resolve(key), searchParams: Promise.resolve({}),
+  });
+  await assert.rejects(userDetail(simulated), { digest: 'NEXT_HTTP_ERROR_FALLBACK;404' });
+  const admin = await NoticeDetailPage({ params: Promise.resolve(simulated) });
+  assert.equal(admin.props.children.find((child) => child?.props?.notice).props.notice.number, simulated.number);
+  const user = await userDetail(regular);
+  const { links, notice } = user.props.children.find((child) => child?.props?.notice).props;
+  assert.equal(notice.number, regular.number);
+  assert.equal(links.noticePath(simulated), undefined);
+  assert.equal(links.noticePath(regular), '/g2b/notices/T26BK00000992/000');
+});
+
 test('관련공고 수집은 손상된 상세를 복구하고 실패한 행을 보존하며 점검 시 중단한다', async (t) => {
   const [a, badJson, missing, mismatch, failed, next, deferred, skipped, lookupError, retryChild, failedShape] =
     Array.from({ length: 11 }, (_, index) => `R26BK${String(610 + index).padStart(8, '0')}`);
@@ -1565,6 +1592,36 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
       submissionFrom: '2026-10-27', budgetFrom: '1000', sort: 'deadline-asc',
     }, regions, updatedBusinesses));
     assert.deepEqual(etc.rows.map(({ number, businessCode }) => [number, businessCode]), [['R26BK01792130', '09']]);
+    const mockKinds = [
+      '모의공고&#40;등록공고&#41;', '모의공고&#40;변경공고&#41;',
+      '모의공고&#40;재공고&#41;', ' 모의공고 ', '모의공고(등록공고)',
+    ];
+    for (let index = 0; index < 20; index++) {
+      insert.run('RMOCK' + index, JSON.stringify({ title: '테스트 공고', payload: {
+        dmItemMap: {
+          pbancKndNm: mockKinds[index % mockKinds.length], prcmBsneSeCd: '02',
+          rgnLmtYn: 'Y', rgnLmtCn: '[광주광역시]', alotBgtAmt: 1000,
+        },
+      } }));
+    }
+    insert.run('TREGULAR', JSON.stringify({ title: '테스트 공고', payload: {
+      dmItemMap: { pbancKndNm: '일반공고', alotBgtAmt: 999 },
+    } }));
+    const publicOptions = { excludeMockNotices: true };
+    const list = attempts.noticeList;
+    assert.ok(list.regions().includes('광주광역시'));
+    assert.ok(list.businesses().some(({ value }) => value === '02'));
+    assert.ok(!list.regions(publicOptions).includes('광주광역시'));
+    assert.ok(!list.businesses(publicOptions).some(({ value }) => value === '02'));
+    const publicQuery = parseNoticeListQuery({ status: 'collected', sort: 'budget-desc' }, [], []);
+    assert.equal(list.page(publicQuery).totalPages, 3);
+    const publicPage = list.page(publicQuery, publicOptions);
+    assert.deepEqual(publicPage.counts, { total: 26, collected: 25, uncollected: 1 });
+    assert.equal(publicPage.totalPages, 2);
+    assert.ok(publicPage.rows.some(({ number }) => number === 'TREGULAR'));
+    assert.ok(list.page({ ...publicQuery, page: 2 }, publicOptions).rows.some(({ number }) => number === 'N01'));
+    assert.deepEqual(list.page(parseNoticeListQuery({ q: '테스트 공고' }, [], []), publicOptions)
+      .rows.map(({ number }) => number), ['TREGULAR']);
   } finally {
     databases.delete(db);
     db.close();

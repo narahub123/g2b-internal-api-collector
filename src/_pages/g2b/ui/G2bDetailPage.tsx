@@ -5,6 +5,7 @@ import { contractRequestRevision } from "@/entities/contract-request/model/contr
 import { ContractRequestDetail } from "@/entities/contract-request/ui/ContractRequestDetail";
 import { contractRevision } from "@/entities/contract/model/contract";
 import { ContractDetail } from "@/entities/contract/ui/ContractDetail";
+import { isMockNotice } from "@/entities/notice/model/notice-detail";
 import { NoticeDetail } from "@/entities/notice/ui/NoticeDetail";
 import { openingResultNoticeKey } from "@/entities/opening-result/model/opening-result-display";
 import { openingResultHeader } from "@/entities/opening-result/model/opening-result-header";
@@ -26,7 +27,8 @@ async function savedNoticePaths(keys: NumberWithRevision[]) {
   const references = new Map(keys.map((key) => [userDetailPath("notices", key), key]));
   const paths = new Set<string>();
   await Promise.all(Array.from(references, async ([href, key]) => {
-    if (await repository.find(key)) paths.add(href);
+    const notice = await repository.find(key);
+    if (notice && !isMockNotice(notice)) paths.add(href);
   }));
   return (key: NumberWithRevision) => {
     const href = userDetailPath("notices", key);
@@ -82,14 +84,15 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
     case "notices": {
       if (!/^\d{3}$/.test(revision)) notFound();
       const notice = await repository.find(key);
-      if (!notice) notFound();
+      if (!notice || isMockNotice(notice)) notFound();
       return <NoticeDetail
         notice={notice}
         orderPlanNumber={notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload)}
         links={{
-          noticePath: (reference) => repository.findUsableNotice(reference)
-            ? userDetailPath("notices", reference)
-            : undefined,
+          noticePath: (reference) => {
+            const related = repository.findUsableNotice(reference);
+            return related && !isMockNotice(related) ? userDetailPath("notices", reference) : undefined;
+          },
           orderPlanPath,
           priorSpecPath,
           contractPath: (reference) => repository.findContract(reference)
@@ -115,7 +118,7 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
       const [notice, relatedNoticePath] = await Promise.all([repository.find(key), savedNoticePaths(references)]);
       const noticePath = (reference: NumberWithRevision) => {
         if (reference.number === number && reference.revision === revision) {
-          return notice ? userDetailPath("notices", reference) : undefined;
+          return notice && !isMockNotice(notice) ? userDetailPath("notices", reference) : undefined;
         }
         return relatedNoticePath(reference);
       };
@@ -131,7 +134,7 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
 
 /**
  * 저장된 사용자 상세를 열고 검증된 현재 업무의 목록으로 돌아가는 링크를 제공한다.
- * @throws 경로의 식별자가 유효하지 않거나 자료가 없으면 404 처리하고, 저장소 오류는 호출자에 전달한다.
+ * @throws 식별자가 유효하지 않거나 자료가 없거나 모의공고 상세를 요청하면 404 처리하고, 저장소 오류는 호출자에 전달한다.
  */
 export async function G2bDetailPage({ section, params, searchParams }: {
   section: CollectionSection;
