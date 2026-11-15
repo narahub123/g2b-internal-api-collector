@@ -87,7 +87,7 @@ export function BaseAmountDetail({ notice }: { notice: Notice }) {
     <NoticePostsSection source="base-amount" posts={saved.posts} number={notice.number} revision={notice.revision} />
   ) : null;
   const visibleNodes = new Map(view ? view.nodes.map((node) => [node.id, node] as const) : []);
-  const help = visibleNodes.get("grpHelpBox");
+  // const help = visibleNodes.get("grpHelpBox");
   const sections = sectionGroups.flatMap(([id, bodyId]) => {
     const [heading, ...remaining] = visibleNodes.get(id)?.children ?? [];
     if (!heading?.text) return [];
@@ -175,13 +175,20 @@ export function BaseAmountDetail({ notice }: { notice: Notice }) {
       {saved?.unavailable?.includes("posts") && !saved.retained?.includes("posts") && (
         <p className="text-muted-foreground">기초금액 공지사항을 가져오지 못했습니다.</p>
       )}
-      {help && render(help)}
+      {/* {help && render(help)} */}
       {(sections.length > 0 || posts) && (
         <Accordion type="multiple" defaultValue={[...sections.map(({ id }) => id), "공지사항"]} className="min-w-0 border-t">
           {sections.map(({ id, title, nodes }) => (
-            <DetailAccordionSection key={id} value={id} title={title} heading="h3">
+            <DetailAccordionSection key={id} value={id} title={title} heading="h4">
               <div className="grid min-w-0 gap-2">
-                {nodes.map((node, index) => <Fragment key={node.id ?? index}>{render(node)}</Fragment>)}
+                {id === "taskClCd3" ? (
+                  <>
+                    <div className="flex items-center gap-1">
+                      {nodes.slice(0, 3).map((node, index) => <Fragment key={node.id ?? index}>{render(node)}</Fragment>)}
+                    </div>
+                    {nodes.slice(3).map((node, index) => <Fragment key={node.id ?? index}>{render(node)}</Fragment>)}
+                  </>
+                ) : nodes.map((node, index) => <Fragment key={node.id ?? index}>{render(node)}</Fragment>)}
               </div>
             </DetailAccordionSection>
           ))}
