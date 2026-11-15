@@ -27,7 +27,7 @@ export function NoticePostsSection({
   if (!rows.length) return null;
 
   return (
-    <DetailAccordionSection title="공지사항">
+    <DetailAccordionSection title="공지사항" heading={source === "base-amount" ? "h3" : "h2"}>
       <Accordion
         type="multiple"
         className="min-w-0 [&_[data-slot=accordion-trigger]]:wrap-anywhere"

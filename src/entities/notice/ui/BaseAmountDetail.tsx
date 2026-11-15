@@ -2,6 +2,7 @@ import { Fragment, type ReactNode } from "react";
 import { revisionRoute } from "@/shared/lib/g2b/revision-route";
 import { publicAttachmentFiles } from "@/shared/model/g2b/g2b-attachments";
 import { Accordion } from "@/shared/ui/accordion";
+import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import { baseAmountAdjustmentFile, getBaseAmountDisplay, type BaseAmountNode } from "../model/base-amount";
 import type { Notice } from "../model/types";
 import { BaseAmountHelp } from "./BaseAmountDisclosure";
@@ -12,6 +13,15 @@ type BaseAmountView = ReturnType<typeof getBaseAmountDisplay>;
 
 const cellStyle = "min-w-20 px-3 py-2";
 const partLabels = { detail: "기초금액 상세", posts: "공지사항", adjustment: "조사금액 조정사유서" };
+
+// 원본 마크업에서 분리된 제목과 본문을 같은 아코디언 항목에 배치한다.
+const sectionGroups = [
+  ["taskClCd1", "taskClCd2"],
+  ["taskClCd3", "taskClCd4"],
+  ["taskClCd5", "taskClCd6"],
+  ["tag1"],
+  ["prcmBsneSe5", "prcmBsneSe6"],
+];
 
 /** 원본의 물품 기초금액 표를 입찰분류와 금액·비고 순서로 표시한다. */
 function BaseAmountGrid({ rows }: { rows: BaseAmountView["rows"] }) {
@@ -59,7 +69,7 @@ function tableRowGroups(children: BaseAmountNode[]): BaseAmountNode[][] {
 }
 
 /**
- * 저장된 원본을 공고 상세의 필드·표 스타일로 표시한다.
+ * 저장된 원본을 공고 상세의 아코디언과 필드·표 스타일로 표시한다.
  * 미수집과 조회 실패를 구분하고, 공지는 원본 상세의 마지막 위치에 둔다.
  */
 export function BaseAmountDetail({ notice }: { notice: Notice }) {
@@ -74,10 +84,16 @@ export function BaseAmountDetail({ notice }: { notice: Notice }) {
     ? revisionRoute("api/notices", notice) + "/base-amount-adjustment"
     : undefined;
   const posts = saved?.posts?.entries.length ? (
-    <Accordion type="multiple" defaultValue={["공지사항"]}>
-      <NoticePostsSection source="base-amount" posts={saved.posts} number={notice.number} revision={notice.revision} />
-    </Accordion>
+    <NoticePostsSection source="base-amount" posts={saved.posts} number={notice.number} revision={notice.revision} />
   ) : null;
+  const visibleNodes = new Map(view ? view.nodes.map((node) => [node.id, node] as const) : []);
+  const help = visibleNodes.get("grpHelpBox");
+  const sections = sectionGroups.flatMap(([id, bodyId]) => {
+    const [heading, ...remaining] = visibleNodes.get(id)?.children ?? [];
+    if (!heading?.text) return [];
+    const body = bodyId ? visibleNodes.get(bodyId)?.children ?? [] : [];
+    return [{ id, title: heading.text, nodes: [...remaining, ...body] }];
+  });
 
   function render(node: BaseAmountNode): ReactNode {
     const children = node.kind === "table" ? undefined : node.children
@@ -159,7 +175,19 @@ export function BaseAmountDetail({ notice }: { notice: Notice }) {
       {saved?.unavailable?.includes("posts") && !saved.retained?.includes("posts") && (
         <p className="text-muted-foreground">기초금액 공지사항을 가져오지 못했습니다.</p>
       )}
-      {view ? view.nodes.map((node, index) => <Fragment key={node.id ?? index}>{render(node)}</Fragment>) : posts}
+      {help && render(help)}
+      {(sections.length > 0 || posts) && (
+        <Accordion type="multiple" defaultValue={[...sections.map(({ id }) => id), "공지사항"]} className="min-w-0 border-t">
+          {sections.map(({ id, title, nodes }) => (
+            <DetailAccordionSection key={id} value={id} title={title} heading="h3">
+              <div className="grid min-w-0 gap-2">
+                {nodes.map((node, index) => <Fragment key={node.id ?? index}>{render(node)}</Fragment>)}
+              </div>
+            </DetailAccordionSection>
+          ))}
+          {posts}
+        </Accordion>
+      )}
     </div>
   );
 }
