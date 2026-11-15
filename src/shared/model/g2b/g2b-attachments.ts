@@ -18,6 +18,11 @@ export const attachmentSources = {
     tblNm: "PBASP_PST",
     colNm: "UNTY_ATCH_FILE_NO",
   },
+  "base-amount-adjustment": {
+    bsnePath: "PEXM",
+    tblNm: "PBANC_BID_PBANC",
+    colNm: "PBANC_SPEC_UNTY_ATCH_FILE_NO",
+  },
   "order-plan": {
     bsnePath: "PRPA",
     tblNm: "DMND_ODER_PLAN",
@@ -54,6 +59,7 @@ export function publicAttachmentFiles(
 ) {
   const rows = attachments?.dlUntyAtchFileL;
   if (!group || !Array.isArray(rows)) return [];
+  const requiresExplicitPermission = scope === "notice-post" || scope === "base-amount-adjustment";
   return rows.flatMap((row) => {
     const filename = row?.orgnlAtchFileNm;
     const seq = String(row?.atchFileSqno);
@@ -84,10 +90,10 @@ export function publicAttachmentFiles(
         // API가 숫자/숫자 문자열을 반환할 수 있으므로 원본 값을 유지한다.
         fileSize: row.fileSz ?? undefined,
         downloadable:
-          (scope === "notice-post" ? row.dwnldPrmsYn === "Y" : row.dwnldPrmsYn !== "N") &&
+          (requiresExplicitPermission ? row.dwnldPrmsYn === "Y" : row.dwnldPrmsYn !== "N") &&
           !/[\x00-\x1f\x7f]/.test(filename),
         businessCode:
-          typeof row.bsneClsfCd === "string" ? row.bsneClsfCd : "업130020",
+          typeof row.bsneClsfCd === "string" ? row.bsneClsfCd : scope === "base-amount-adjustment" ? "업130027" : "업130020",
       },
     ];
   });

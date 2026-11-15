@@ -51,7 +51,7 @@ export function collectAttachments(
         ...attachmentSources[scope],
         untyAtchFileNo,
         atchFileSqnos: "",
-        bsneClsfCd: scope === "private-notice" ? "업130031" : scope === "notice-post" ? "업130026" : "업130020",
+        bsneClsfCd: scope === "private-notice" ? "업130031" : scope === "notice-post" ? "업130026" : scope === "base-amount-adjustment" ? "업130027" : "업130020",
         webPathUse: "N",
         isScanEnabled: false,
         imgUrl: "",

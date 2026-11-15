@@ -1,3 +1,4 @@
+import { attachmentGroup } from "@/shared/model/g2b/g2b-attachments";
 import { decodeHTMLStrict } from "entities";
 import { formatG2bDisplayDateTime } from "@/shared/lib/g2b/g2b-display-format";
 
@@ -74,4 +75,26 @@ export function noticePostRows(list: RawResponse) {
     if (!bbsNo || !pstNo) throw new Error("공지사항 게시글 키가 없습니다.");
     return { row, bbsNo, pstNo };
   });
+}
+
+/** 공지 목록은 새 응답을 사용하고, 일시적으로 누락된 게시글 자료만 같은 키와 첨부 그룹에서 복구한다. */
+export function mergeNoticePosts(current?: NoticePosts, previous?: NoticePosts): NoticePosts | undefined {
+  if (!current) return previous;
+  if (!previous) return current;
+  return {
+    ...current,
+    entries: current.entries.map((post) => {
+      const saved = previous.entries.find(({ bbsNo, pstNo }) => bbsNo === post.bbsNo && pstNo === post.pstNo);
+      if (!saved) return post;
+      const detail = post.detail ?? saved.detail;
+      const group = attachmentGroup(noticePostRecord(detail?.dlPstM).untyAtchFileNo);
+      const savedGroup = attachmentGroup(noticePostRecord(saved.detail?.dlPstM).untyAtchFileNo);
+      return {
+        ...post,
+        detail,
+        body: post.body ?? saved.body,
+        attachments: post.attachments ?? (group && group === savedGroup ? saved.attachments : undefined),
+      };
+    }),
+  };
 }

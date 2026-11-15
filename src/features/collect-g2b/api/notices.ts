@@ -1,5 +1,7 @@
 import { contractRequestKeys } from "@/entities/contract-request/model/contract-request";
 import { contractKeys } from "@/entities/contract/model/contract";
+import { baseAmountAdjustmentFile, noticeBaseAmountRows, type NoticeBaseAmount } from "@/entities/notice/model/base-amount";
+import { baseAmountMenu, baseAmountSubmissionPrefix, fetchBaseAmountDetail } from "./base-amount";
 import type { Notice, NoticeKey } from "@/entities/notice";
 import { etcNoticeBusinessCode, etcNoticeDetail, noticeAttachmentGroup } from "@/entities/notice/model/notice-detail";
 import { fetchPrivateNotice, fetchPrivateNoticeCodeNames, fetchPrivateNoticePosts, privateNoticeBusinessCodes } from "./private-notice";
@@ -76,17 +78,25 @@ async function collectNoticeContractLinks(key: NoticeKey, rows: Record<string, u
  * 게시글의 일반 오류는 허용하되 점검을 확인하면 다음 게시글을 조회하지 않는다.
  * @throws 공지 목록 조회가 실패하거나 목록 또는 개별 게시글 조회에서 점검을 확인한 경우.
  */
-async function collectNoticePosts(key: NoticeKey, recordFailure?: (error: unknown) => void): Promise<NonNullable<Notice["posts"]>> {
+async function collectNoticePosts(key: NoticeKey, recordFailure?: (error: unknown) => void, baseAmount = false): Promise<NonNullable<Notice["posts"]>> {
   const prefix = "FIUA027_01_wframe_popupCnts_bidPbancWfrm_";
   const popupPrefix = prefix + "PNPE031_01_wframe_popupCnts_";
   const popupMenu = '{"menuNo":"12568","menuCangVal":"PNPE031_01","bsneClsfCd":"%EC%97%85130026","scrnNo":"07883"}';
   const list = await postG2b(
     "/pn/pnp/pnpe/commBidPbac/selectNtcPstList.do",
-    prefix + "sbmSrchNtcPstList",
-    { dlPstM: { odn1ColCn: key.number, odn2ColCn: key.revision } },
+    (baseAmount ? baseAmountSubmissionPrefix : prefix) + "sbmSrchNtcPstList",
+    { dlPstM: {
+      ...(baseAmount && { bbsNo: "R23AB00000204", clsfPritmSqno: "1721" }),
+      odn1ColCn: key.number, odn2ColCn: key.revision,
+    } },
+    undefined,
+    baseAmount ? baseAmountMenu : undefined,
   );
   const entries: NoticePost[] = [];
   const rows = noticePostRows(list);
+  if (baseAmount && rows.some(({ bbsNo }) => bbsNo !== "R23AB00000204")) {
+    throw collectionValidationError("기초금액 공지의 게시판이 일치하지 않습니다.", "dlPstL");
+  }
   // 목록은 공개 요청으로 조회되지만 게시글 상세 API는 익명 세션을 요구한다.
   const request = rows.length ? createG2bSession() : undefined;
   for (const { bbsNo, pstNo } of rows) {
@@ -136,6 +146,46 @@ async function collectNoticePosts(key: NoticeKey, recordFailure?: (error: unknow
     }
   }
   return { list, entries };
+}
+
+/**
+ * 기초금액 원본과 전용 공지는 독립적으로 수집한다. 파일 목록은 상세에 공개 대상이 있을 때 조회한다.
+ * @throws 개별 조회가 점검으로 중단된 경우.
+ */
+async function collectNoticeBaseAmount(
+  key: NoticeKey,
+  recordFailure?: (error: unknown) => void,
+): Promise<NoticeBaseAmount> {
+  const detailAndFile = async (): Promise<NoticeBaseAmount> => {
+    const request = await createG2bSession();
+    const detail = await fetchBaseAmountDetail(key, request);
+    const target = baseAmountAdjustmentFile(detail);
+    if (!target) return { detail };
+    try {
+      const response = await collectAttachments(target.group, "base-amount-adjustment", request);
+      return { detail, adjustment: { ...target, response } };
+    } catch (error) {
+      if (findMaintenance(error)) throw error;
+      recordFailure?.(error);
+      return { detail, unavailable: ["adjustment"] };
+    }
+  };
+  const [detail, posts] = await Promise.allSettled([
+    detailAndFile(),
+    collectNoticePosts(key, recordFailure, true),
+  ]);
+  throwIfMaintenance(detail, posts);
+  const baseAmount: NoticeBaseAmount = {
+    ...(detail.status === "fulfilled" ? detail.value : {}),
+    posts: posts.status === "fulfilled" ? posts.value : undefined,
+  };
+  for (const [part, outcome] of [["detail", detail], ["posts", posts]] as const) {
+    if (outcome.status === "rejected") {
+      recordFailure?.(outcome.reason);
+      (baseAmount.unavailable ??= []).push(part);
+    }
+  }
+  return baseAmount;
 }
 
 /**
@@ -248,8 +298,10 @@ export async function collectNotice(
     priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
     privateSource ? fetchPrivateNoticePosts(key, detail.pbancSttsCd, privateSource.request, recordFailure) : undefined,
     privateSource ? fetchPrivateNoticeCodeNames(privateSource.request) : undefined,
+    !isEtc && !privateSource && noticeBaseAmountRows(payload).length
+      ? collectNoticeBaseAmount(key, recordFailure) : undefined,
   ]);
-  const [attachments, proposal, contractLinks, openingResults, posts, orderPlan, , privatePosts, privateCodeNames] = outcomes;
+  const [attachments, proposal, contractLinks, openingResults, posts, orderPlan, , privatePosts, privateCodeNames, baseAmount] = outcomes;
   const collectedOrderPlan = orderPlan.status === "fulfilled" ? orderPlan.value : undefined;
   if (recordFailure) {
     if (collectedOrderPlan?.attachmentFailure) recordFailure(collectedOrderPlan.attachmentFailure.reason);
@@ -297,6 +349,7 @@ export async function collectNotice(
       privatePosts: privatePosts.status === "fulfilled" ? privatePosts.value : undefined,
       posts: posts.status === "fulfilled" ? posts.value : undefined,
       documents,
+      baseAmount: baseAmount.status === "fulfilled" ? baseAmount.value : undefined,
       ...(contractLinks.status === "fulfilled" ? contractLinks.value : {}),
     },
   };

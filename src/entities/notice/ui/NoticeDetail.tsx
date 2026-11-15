@@ -8,7 +8,9 @@ import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
-import { renderNoticeHtml } from "../lib/notice-html";
+import { NoticeValue } from "./NoticeValue";
+import { BaseAmountButton, BaseAmountDisclosure, BaseAmountPanel } from "./BaseAmountDisclosure";
+import { BaseAmountDetail } from "./BaseAmountDetail";
 import {
   getNoticeAttachmentFiles,
   getNoticeProposalFiles,
@@ -21,25 +23,8 @@ import { etcNoticeDetail, noticeDetail, privateNoticeResult } from "../model/not
 import type { NumberWithRevision } from "@/shared/lib/g2b/revision-route";
 
 /**
- * 공고 필드값을 HTML 표시 정책에 따라 출력한다.
- * HTML로 처리할 수 없는 값은 엔티티를 디코딩한 일반 텍스트로 표시한다.
- * @param props 수집된 원본 필드값.
- * @returns HTML 또는 일반 텍스트로 표시한 필드값.
- */
-function NoticeValue({ value }: { value: string }) {
-  const html = renderNoticeHtml(value);
-  const className =
-    "wrap-anywhere overflow-x-auto whitespace-pre-wrap [&_a]:underline [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_ul]:list-disc [&_ul]:pl-5";
-  return html === null ? (
-    <div className={className}>{decodeHTMLStrict(value)}</div>
-  ) : (
-    <div className={className} dangerouslySetInnerHTML={{ __html: html }} />
-  );
-}
-
-/**
  * 공고 상세의 표 데이터를 원본 열 순서대로 표시한다.
- * 기초금액조회 항목은 현재 이동 동작을 제공하지 않으므로 비활성 버튼으로 표시한다.
+ * 기초금액공개 표의 상세보기 열은 표 아래 영역을 제어하는 버튼으로 표시한다.
  * @param props 표 제목, 열 이름과 행 데이터.
  * @returns 공고 상세 표.
  */
@@ -81,13 +66,7 @@ function NoticeTable({
                   {title === "기초금액공개" &&
                   columns[column] === "상세보기" &&
                   value === "기초금액조회" ? (
-                    <button
-                      type="button"
-                      disabled
-                      className="rounded border px-3 py-1 text-muted-foreground"
-                    >
-                      기초금액조회
-                    </button>
+                    <BaseAmountButton />
                   ) : value === undefined ? null : href ? (
                     <a
                       href={href}
@@ -362,6 +341,13 @@ export function NoticeDetail({
                   showFileSize={false}
                   getDownloadHref={(file) => proposalHrefBySeq.get(file.seq)}
                 />
+              ) : title === "기초금액공개" && section.rows.length ? (
+                <BaseAmountDisclosure key={JSON.stringify([number, revision])}>
+                  <NoticeTable {...section} />
+                  <BaseAmountPanel>
+                    <BaseAmountDetail notice={notice} />
+                  </BaseAmountPanel>
+                </BaseAmountDisclosure>
               ) : (
                 <NoticeTable {...section} showEmpty={Boolean(privateResult)} />
               )}
