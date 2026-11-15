@@ -1150,6 +1150,69 @@ test('개찰차수의 점검은 부분 저장을 보류하고 일반 오류는 �
   assert.match(diagnostics.errors[1].cause.stack, /request\.ts:\d+:\d+/);
 });
 
+test('적격심사는 차수·분류별로 보충하고 재수집 오류 또는 점검에서 기존 자료를 보존한다', async (t) => {
+  const { collectOpeningResult } = require('../src/features/collect-g2b/api/opening-results');
+  const number = 'R26BK90000123';
+  const openingKey = { number, revision: '000', openingRevision: '001' };
+  const nextKey = { ...openingKey, openingRevision: '002' };
+  const makeQueries = (key) => ['1', '2', '3'].map((classification) => ({
+    ...key, classification, businessCode: '01', status: '개찰완료', endpoint: 'selectOnbsRsltSbidGods',
+  }));
+  const detail = (classification, title) => ({
+    bidInfo: { bidPbancNo: number, bidPbancOrd: '000', bidPbancNm: title, scsbdMthdCd: classification === '3' ? '낙030002' : '낙030001' },
+    etcData: {}, successBidInfo: [],
+  });
+  const queries = makeQueries(openingKey);
+  for (const key of [openingKey, nextKey]) repository.saveOpeningResult({
+    ...key, collectedAt, notice: null, price: null,
+    results: makeQueries(key).map((query) => ({ query, detail: detail(query.classification, '기존 공고') })),
+  });
+  let failure = '';
+  const reviews = [];
+  mockFetch(t, (path, options) => {
+    if (path === '/') return session();
+    const input = JSON.parse(options.body);
+    if (path.endsWith('/selectOnbsRsltSbidGods.do')) {
+      return success({ result: detail(input.dlSrchOnbsRsltBidInM.bidClsfNo, '새 공고') });
+    }
+    if (path.endsWith('/selectBidInfo.do')) return success({ bidPbanc: input.dlParamM });
+    if (path.endsWith('/selectQlemRsltJdgmntList.do')) {
+      const id = input.dlParamM;
+      reviews.push([id.bidPrgrsOrd, id.bidClsfNo]);
+      if (id.bidClsfNo === '1' && failure === 'maintenance') return maintenancePage();
+      if (id.bidClsfNo === '1' && failure === 'error') return new Response(null, { status: 500 });
+      return success({ dlSelectYnM: { selectYn: 'Y' }, qlemRsltJdgmntList: id.bidClsfNo === '2'
+        ? [] : [{ ...id, grpNm: `업체-${id.bidPrgrsOrd}-${id.bidClsfNo}` }] });
+    }
+    if (path.endsWith('/selectRsvePrceInfo.do')) return success({
+      pbancInfo: { bidPbancNo: number, bidPbancOrd: '000', bidClsfNo: '1', bidPrgrsOrd: '001' }, rsvePrceList: [],
+    });
+    return success({ dlPstL: [] });
+  });
+  await collectOpeningResult(openingKey, queries);
+  await collectOpeningResult(openingKey, queries);
+  await collectOpeningResult(nextKey, makeQueries(nextKey));
+  assert.deepEqual(reviews.sort(), [['001', '1'], ['001', '2'], ['002', '1'], ['002', '2']]);
+  const entries = (key) => repository.findOpeningResult(key).results;
+  const first = entries(openingKey)[0].qualificationReview;
+  assert.equal(first.judgmentResponse.qlemRsltJdgmntList[0].grpNm, '업체-001-1');
+  assert.equal(entries(nextKey)[0].qualificationReview.judgmentResponse.qlemRsltJdgmntList[0].grpNm, '업체-002-1');
+  assert.equal(entries(openingKey)[1].qualificationReview, null);
+  assert.equal(entries(openingKey)[2].qualificationReview, undefined);
+
+  failure = 'error';
+  await assert.rejects(collectOpeningResult(openingKey, queries, true), (error) =>
+    error.errors.length === 1 && error.errors[0].message === '적격심사결과 조회 실패');
+  assert.deepEqual(entries(openingKey)[0].qualificationReview, first);
+  assert.equal(entries(openingKey)[0].detail.bidInfo.bidPbancNm, '새 공고');
+  assert.equal(reviews.filter(([ord, clsf]) => ord === '001' && clsf === '2').length, 2);
+
+  const beforeMaintenance = repository.findOpeningResult(openingKey);
+  failure = 'maintenance';
+  await assert.rejects(collectOpeningResult(openingKey, queries, true), (error) => Boolean(findMaintenance(error)));
+  assert.deepEqual(repository.findOpeningResult(openingKey), beforeMaintenance);
+});
+
 test('연기공고의 HTTP 200 점검 HTML은 다른 공지 오류보다 우선하며 개찰차수를 보존한다', async (t) => {
   const noticeKey = { number: 'R26BK00000002', revision: '000' };
   await repository.save({ ...noticeKey, title: '저장된 공고', collectedAt, payload: {} });

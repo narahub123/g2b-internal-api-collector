@@ -280,11 +280,7 @@ function isNoticeControlVisible(
 
   switch (key) {
     case "qualificationReview":
-      return (
-        !isDesign &&
-        (bidInfo.scsbdMthdCd === "낙030001" ||
-          bidInfo.scsbdMthdCd === "낙030033")
-      );
+      return qualificationReviewVisible(endpoint, { bidInfo, etcData });
     case "reservePrice":
       // 용역 설계공모에서는 기본사항 행 자체를 숨긴다.
       return !isDesign;
@@ -340,6 +336,21 @@ function isNoticeControlVisible(
       // 원본에 별도의 숨김 조건이 없는 항목은 임의로 제외하지 않는다.
       return true;
   }
+}
+
+/**
+ * 원본 개찰완료 화면의 적격심사 필드 조건을 수집과 화면에서 동일하게 적용한다.
+ * @param endpoint 개찰결과를 조회한 업무별 API 유형.
+ * @param detail 원본 개찰 상세. 공고정보 또는 낙찰방법이 없으면 조회하지 않는다.
+ */
+export function qualificationReviewVisible(endpoint: OpeningResultEndpoint | undefined, detail: Data): boolean {
+  if (endpoint !== "selectOnbsRsltSbidGods" &&
+      endpoint !== "selectOnbsRsltSbidSrvc" &&
+      endpoint !== "selectOnbsRsltSbidCstn") return false;
+  const isDesign = endpoint === "selectOnbsRsltSbidSrvc" &&
+    isData(detail.etcData) && Boolean(detail.etcData.isPssrp);
+  const method = isData(detail.bidInfo) && detail.bidInfo.scsbdMthdCd;
+  return !isDesign && (method === "낙030001" || method === "낙030033");
 }
 
 function noticeDisplayFields(

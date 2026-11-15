@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
 import type { NoticeKey } from "@/entities/notice/model/types";
 import { formatG2bDisplayDateTime } from "@/shared/lib/g2b/g2b-display-format";
@@ -12,23 +11,12 @@ import {
   getOpeningResultDisplay,
   getOpeningResultPriceDisplay,
   type DisplayField,
-  type DisplayTable,
   type OpeningResultDisplay,
 } from "../model/opening-result-display";
 
-/**
- * API 응답값을 화면에 표시할 문자열로 변환한다.
- * 문자열은 HTML 엔티티를 해제하고, 빈 값은 빈 문자열로 유지한다.
- * @param value 표시할 원본 값.
- * @returns 화면에 표시할 문자열.
- */
-function display(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "";
-  if (typeof value === "string") return decodeHTMLStrict(value);
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  return JSON.stringify(value);
-}
+import { ResultTable, display } from "./ResultTable";
+import { QualificationReviewDetail } from "./QualificationReviewDetail";
+import { getQualificationReviewDisplay, type QualificationReviewDisplay } from "../model/qualification-review-display";
 
 type PriceSections = OpeningResultDisplay["sections"];
 
@@ -38,13 +26,16 @@ type PriceSections = OpeningResultDisplay["sections"];
  * 해당 필드의 값 영역에 중첩 아코디언으로 표시한다.
  * @param fields 표시할 공고정보 필드 목록.
  * @param priceSections 해당 개찰차수의 가격 상세 섹션. 없으면 중첩 내용을 표시하지 않는다.
+ * @param qualificationReview 해당 차수·분류의 적격심사 표시 모델. 없으면 값 영역을 비운다.
  */
 function Fields({
   fields,
   priceSections = [],
+  qualificationReview,
 }: {
   fields: DisplayField[];
   priceSections?: PriceSections;
+  qualificationReview?: QualificationReviewDisplay;
 }) {
   return (
     <dl className="grid gap-3 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]">
@@ -78,6 +69,8 @@ function Fields({
                   ))}
                 </div>
               ) : null
+            ) : key === "qualificationReview" ? (
+              qualificationReview ? <QualificationReviewDetail review={qualificationReview} /> : null
             ) : href ? (
               <Link
                 href={href}
@@ -96,55 +89,9 @@ function Fields({
 }
 
 /**
- * 개찰결과 및 예비가격정보의 표를 공통 렌더링한다.
- * 행 또는 표시 가능한 열이 없으면 빈 표 대신 해당 사유를 안내한다.
- * @param table 표시 열 정의와 행 데이터.
- */
-function ResultTable({ table }: { table: DisplayTable }) {
-  if (!table.rows.length)
-    return (
-      <p className="text-sm text-muted-foreground">조회된 목록이 없습니다.</p>
-    );
-  if (!table.columns.length)
-    return (
-      <p className="text-sm text-muted-foreground">
-        표시할 수 있는 목록 항목이 없습니다.
-      </p>
-    );
-  return (
-    <div className="overflow-x-auto rounded-md border">
-      <table className="w-full text-left text-sm">
-        <thead className="bg-secondary">
-          <tr>
-            {table.columns.map(({ key, label }) => (
-              <th key={key} scope="col" className="whitespace-nowrap px-3 py-2">
-                {label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {table.rows.map((row, index) => (
-            <tr key={index} className="border-t align-top">
-              {table.columns.map(({ key }) => (
-                <td
-                  key={key}
-                  className="min-w-20 whitespace-pre-wrap px-3 py-2"
-                >
-                  {display(row[key])}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/**
  * 개찰결과 응답을 공고정보·목록 등의 화면 섹션으로 구성한다.
  * 가격 상세는 동일 개찰차수의 공고정보 필드에만 연결하며,
+ * 적격심사는 같은 개찰차수·입찰분류의 공고정보 필드에만 연결한다.
  * 공지사항은 게시글 식별자로 중복을 제거해 결과 섹션보다 먼저 표시한다.
  * @param noticeKey 현재 입찰공고 식별자.
  * @param results 개찰차수별 조회 결과.
@@ -176,7 +123,7 @@ export function OpeningResultDetail({
     const priceSections = result.price
       ? getOpeningResultPriceDisplay(result.price).sections
       : [];
-    return result.results.flatMap(({ query, detail }) =>
+    return result.results.flatMap(({ query, detail, qualificationReview }) =>
       getOpeningResultDisplay(query, detail, noticePath).sections.map((section, index) => ({
         // 개찰차수·업무 분류·섹션 순서로 서로 다른 조회 결과의 렌더링 키를 구분한다.
         key: `${result.openingRevision}/${query.classification}/${index}`,
@@ -186,6 +133,10 @@ export function OpeningResultDetail({
           section.kind === "fields" && section.title === "공고정보"
             ? priceSections
             : [],
+        qualificationReview: section.kind === "fields" && qualificationReview &&
+          section.fields.some(({ key }) => key === "qualificationReview")
+          ? getQualificationReviewDisplay(qualificationReview)
+          : undefined,
       })),
     );
   });
@@ -227,7 +178,7 @@ export function OpeningResultDetail({
         </dl>
       )}
       <div className="grid min-w-0 gap-3">
-        {sections.map(({ key, section, priceSections }) => (
+        {sections.map(({ key, section, priceSections, qualificationReview }) => (
           <Accordion
             key={key}
             type="multiple"
@@ -236,7 +187,7 @@ export function OpeningResultDetail({
           >
             <DetailAccordionSection title={section.title} heading="h3">
               {section.kind === "fields" ? (
-                <Fields fields={section.fields} priceSections={priceSections} />
+                <Fields fields={section.fields} priceSections={priceSections} qualificationReview={qualificationReview} />
               ) : (
                 <ResultTable table={section.table} />
               )}

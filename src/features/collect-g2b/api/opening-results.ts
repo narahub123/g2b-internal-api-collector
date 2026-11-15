@@ -3,6 +3,8 @@ import { getG2bRepository } from "@/server/g2b/repository";
 import {
   groupOpeningResultQueries,
   openingResultQueries,
+  resolveOpeningResultEndpoint,
+  type OpeningResultEntry,
   type OpeningResultNotice,
   type OpeningResultKey,
   type OpeningResultQuery,
@@ -17,10 +19,12 @@ import {
   selectOpeningResultNotice,
 } from "@/entities/opening-result/model/opening-result-api";
 import { createG2bSession } from "@/shared/api/g2b/g2b-session";
-import { throwIfMaintenance } from "@/shared/api/g2b/g2b-maintenance";
+import { findMaintenance, throwIfMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 import { postG2b, type G2bRequest } from "./request";
 import { collectOnce } from "./collect-once";
 import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
+import { qualificationReviewVisible } from "@/entities/opening-result/model/opening-result-display";
+import { fetchQualificationReview } from "./qualification-review";
 
 const openingResultMenu =
   '{"menuNo":"01523","menuCangVal":"PBOC007_01","bsneClsfCd":"%EC%97%85130028","scrnNo":"02128"}';
@@ -102,7 +106,7 @@ async function collectOpeningNotice(
 }
 
 /**
- * 개찰결과·공지사항·예정가격을 독립적으로 조회하고 개찰차수별로 저장한다.
+ * 개찰결과·공지사항·예정가격을 조회하고 대상 분류의 적격심사결과를 함께 저장한다.
  * 일반 수집은 이미 확인한 자료를 건너뛰며, 일반 오류가 섞이면 성공 결과를 먼저 저장한다.
  * 점검을 확인하면 성공 결과가 있어도 해당 차수를 갱신하지 않는다.
  *
@@ -124,43 +128,65 @@ export async function collectOpeningResult(
     async () => {
       const saved = await trackCollectionLookup({ section: "opening-results", ...key, queries }, "개찰결과", () => repository.findOpeningResult(key));
       const previous = saved?.results ?? [];
+      const previousByClassification = new Map(previous.map((entry) => [entry.query.classification, entry]));
+      const matchingPrevious = (query: OpeningResultQuery) => {
+        const entry = previousByClassification.get(query.classification);
+        return entry && resolveOpeningResultEndpoint(entry.query) ===
+          resolveOpeningResultEndpoint(query) ? entry : undefined;
+      };
+      const needsReview = ({ query, detail, qualificationReview }: OpeningResultEntry) =>
+        (force || qualificationReview === undefined) &&
+        qualificationReviewVisible(resolveOpeningResultEndpoint(query), detail);
       // 분류와 API 유형이 모두 같은 저장 결과만 수집 완료로 간주한다.
-      const missing = queries.filter(
-        (query) =>
-          force ||
-          !previous.some(
-            (entry) =>
-              entry.query.classification === query.classification &&
-              (entry.query.endpoint ?? "selectOnbsRsltFbid") ===
-                (query.endpoint ?? "selectOnbsRsltFbid"),
-          ),
-      );
+      const missing = queries.filter((query) => force || !matchingPrevious(query));
+      const savedReviewTargets = force ? [] : queries.flatMap((query) => {
+        const entry = matchingPrevious(query);
+        return entry && needsReview(entry) ? [entry] : [];
+      });
       // null은 조회 완료 후 공지가 없다는 결과이므로 undefined인 경우에만 다시 조회한다.
       const needsNotice = force || saved?.notice === undefined;
       const priceQuery = queries[0];
       const needsPrice =
         Boolean(priceQuery) && (force || saved?.price === undefined);
-      if (!missing.length && !needsNotice && !needsPrice) return;
+      if (!missing.length && !savedReviewTargets.length && !needsNotice && !needsPrice) return;
       return trackCollectionAttempt({ section: "opening-results", ...key, queries }, async (recordFailure) => {
         const request = await createG2bSession();
-        const [resultOutcome, noticeOutcome, priceOutcome] = await Promise.all([
-          Promise.allSettled(
-            missing.map(async (query) => {
-              const config = openingResultRequest(key, query);
-              const payload = await postG2b(
-                config.path,
-                config.submission,
-                config.input,
-                request,
-                openingResultMenu,
-              );
-              return {
-                query,
-                detail: collectionStep("개찰결과 응답 검증", () =>
-                  openingResultDetail(config.endpoint, payload, key, query)),
-              };
-            }),
-          ),
+        const resultPromise = Promise.allSettled(
+          missing.map(async (query) => {
+            const config = openingResultRequest(key, query);
+            const payload = await postG2b(
+              config.path,
+              config.submission,
+              config.input,
+              request,
+              openingResultMenu,
+            );
+            const entry: OpeningResultEntry = {
+              query,
+              detail: collectionStep("개찰결과 응답 검증", () =>
+                openingResultDetail(config.endpoint, payload, key, query)),
+            };
+            const previousReview = matchingPrevious(query)?.qualificationReview;
+            if (previousReview !== undefined) entry.qualificationReview = previousReview;
+            return entry;
+          }),
+        );
+        const reviewPromise = resultPromise.then(async (outcomes) => {
+          // 개찰 조회에서 점검을 확인한 뒤에는 후속 심사 요청을 새로 보내지 않는다.
+          if (outcomes.some((outcome) => outcome.status === "rejected" && findMaintenance(outcome.reason))) {
+            return { targets: [], settled: [] };
+          }
+          // 새 개찰 상세의 판정 조건을 우선하며 실패한 새 개찰 조회에는 기존 자료를 유지한다.
+          const targets = [
+            ...savedReviewTargets,
+            ...outcomes.flatMap((outcome) => outcome.status === "fulfilled" && needsReview(outcome.value)
+              ? [outcome.value] : []),
+          ];
+          const settled = await Promise.allSettled(targets.map(({ query }) => fetchQualificationReview(query, request)));
+          return { targets, settled };
+        });
+        const [resultOutcome, noticeOutcome, priceOutcome, reviewOutcome] = await Promise.all([
+          resultPromise,
           needsNotice
             ? collectOpeningNotice(key, queries, request).then(
                 (value) => ({ status: "fulfilled" as const, value }),
@@ -184,6 +210,7 @@ export async function collectOpeningResult(
                 (reason: unknown) => ({ status: "rejected" as const, reason }),
               )
             : Promise.resolve({ status: "skipped" as const }),
+          reviewPromise,
         ]);
         const failures = resultOutcome.flatMap((outcome, index) => outcome.status === "rejected"
           ? [collectionError(new Error("개찰결과 분류 조회 실패", { cause: outcome.reason }), {
@@ -195,9 +222,20 @@ export async function collectOpeningResult(
           reasons.push(new Error("개찰결과 공지사항 조회 실패", { cause: noticeOutcome.reason }));
         if (priceOutcome.status === "rejected")
           reasons.push(new Error("개찰결과 예정가격 조회 실패", { cause: priceOutcome.reason }));
+        const reviewUpdates = new Map<string, OpeningResultEntry["qualificationReview"]>();
+        reviewOutcome.settled.forEach((outcome, index) => {
+          const { query } = reviewOutcome.targets[index];
+          if (outcome.status === "fulfilled") {
+            reviewUpdates.set(query.classification, outcome.value);
+          } else {
+            reasons.push(collectionError(new Error("적격심사결과 조회 실패", { cause: outcome.reason }), {
+              step: "적격심사결과 조회", details: { "개찰 분류": query.classification },
+            }));
+          }
+        });
         // 점검 중에는 저장을 보류하되 함께 실패한 조회도 보존한다.
         try {
-          throwIfMaintenance(...resultOutcome, noticeOutcome, priceOutcome);
+          throwIfMaintenance(...resultOutcome, noticeOutcome, priceOutcome, ...reviewOutcome.settled);
         } catch {
           throw new AggregateError(reasons, "나라장터 점검으로 개찰결과 저장을 보류했습니다.");
         }
@@ -214,10 +252,12 @@ export async function collectOpeningResult(
               ),
           ),
           ...successes,
-        ];
-        // 세 종류 중 하나라도 성공했을 때만 저장하며 실패한 부가 자료는 기존 값을 유지한다.
+        ].map((entry) => reviewUpdates.has(entry.query.classification)
+          ? { ...entry, qualificationReview: reviewUpdates.get(entry.query.classification) }
+          : entry);
+        // 성공한 자료만 반영하며 실패한 부가 자료는 기존 값을 유지한다.
         if (
-          successes.length ||
+          successes.length || reviewUpdates.size ||
           noticeOutcome.status === "fulfilled" ||
           priceOutcome.status === "fulfilled"
         ) {
@@ -246,7 +286,7 @@ export async function collectOpeningResult(
         if (reasons.length) {
           throw new AggregateError(
             reasons,
-            `개찰결과 ${failures.length}/${missing.length}개 분류, 공지사항 또는 예정가격 수집 실패 (성공 결과는 저장됨)`,
+            `개찰결과 ${failures.length}/${missing.length}개 분류 또는 부가 자료 수집 실패 (성공 결과는 저장됨)`,
           );
         }
       });

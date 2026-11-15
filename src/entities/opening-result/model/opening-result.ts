@@ -41,10 +41,24 @@ export type OpeningResultPrice = {
   rsvePrceList: Record<string, unknown>[];
 };
 
+/** 적격심사 팝업의 공고와 업체별 판정 API 원본. 표시 모델은 별도로 구성한다. */
+export type QualificationReview = {
+  bidResponse: Record<string, unknown> & { bidPbanc: Record<string, unknown> };
+  judgmentResponse: Record<string, unknown> & { qlemRsltJdgmntList: Record<string, unknown>[] };
+};
+
+/** 같은 개찰차수의 분류별 결과와 선택적으로 수집한 적격심사 자료. */
+export type OpeningResultEntry = {
+  query: OpeningResultQuery;
+  detail: Record<string, unknown>;
+  // 속성 없음은 미조회, null은 조회 불가 또는 0건이다.
+  qualificationReview?: QualificationReview | null;
+};
+
 export type OpeningResult = OpeningResultKey & {
   collectedAt: string;
   // 기존 유찰 저장 자료의 { query, detail } 형태는 유지한다.
-  results: { query: OpeningResultQuery; detail: Record<string, unknown> }[];
+  results: OpeningResultEntry[];
   // undefined: 미조회, null: 조회 완료·공지 없음, 객체: 표시할 공지
   notice?: OpeningResultNotice | null;
   // undefined: 미조회. 조회 성공 시 원본 가격 응답을 보존한다.
