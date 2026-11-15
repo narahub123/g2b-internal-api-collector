@@ -2,7 +2,7 @@ import { contractRequestKeys } from "@/entities/contract-request/model/contract-
 import { contractKeys } from "@/entities/contract/model/contract";
 import type { Notice, NoticeKey } from "@/entities/notice";
 import { etcNoticeBusinessCode, etcNoticeDetail, noticeAttachmentGroup } from "@/entities/notice/model/notice-detail";
-import { fetchFrcpNotice, frcpNoticeBusinessCode } from "./frcp-notice";
+import { fetchPrivateNotice, fetchPrivateNoticeCodeNames, fetchPrivateNoticePosts, privateNoticeBusinessCodes } from "./private-notice";
 import { noticePostRecord, noticePostRows, type NoticePost } from "@/entities/notice/model/notice-posts";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";
@@ -169,10 +169,14 @@ export async function collectNotice(
   });
   const isEtc = Boolean(unified) || (metadata ? metadata.businessCode === etcNoticeBusinessCode :
     workProgress?.some((row) => row?.prcmBsneSeCd === etcNoticeBusinessCode));
-  const isFrcp = metadata ? metadata.businessCode === frcpNoticeBusinessCode :
-    workProgress?.some((row) => row?.prcmBsneSeCd === frcpNoticeBusinessCode);
+  const businessCode = metadata?.businessCode ?? workProgress?.find(
+    (row) => privateNoticeBusinessCodes.has(row?.prcmBsneSeCd),
+  )?.prcmBsneSeCd;
+  const privateSource = !isEtc && privateNoticeBusinessCodes.has(businessCode)
+    ? await fetchPrivateNotice({ ...key, revision: metadata?.rawRevision ?? key.revision })
+    : undefined;
   const raw = unified ? await fetchEtcNotice(requestKey, unified.businessCode) :
-    isEtc ? await fetchEtcNotice(key) : isFrcp ? await fetchFrcpNotice(key, methodCode) : await postG2b(
+    isEtc ? await fetchEtcNotice(key) : privateSource ? privateSource.raw : await postG2b(
     "/pn/pnp/pnpe/ItemBidPbac/selectItemAnncMngV.do",
     submissionPrefix + "selectItemAnncMngV",
     {
@@ -184,9 +188,17 @@ export async function collectNotice(
       },
     },
   );
-  // 전용 응답 원본을 보존하면서 일반 공고의 표시·연결 조회가 공통 데이터 맵을 사용하게 한다.
-  const payload = !isEtc && isFrcp ? { ...raw, dmItemMap: raw.dlBidPbancM } : raw;
-  const detail = isEtc ? etcNoticeDetail(payload) : payload.dmItemMap;
+  const privateDetail = privateSource ? raw.result?.bidPbancMap : undefined;
+  // 원본 result를 보존하고 목록·검색·연결이 참조하는 공통 맵에는 목록용 업무구분을 제공한다.
+  const payload = privateSource ? {
+    ...raw,
+    dmItemMap: {
+      ...raw.result?.dmItemMap, ...privateDetail,
+      prcmBsneSeCd: businessCode,
+      dmstUntyGrpNm: privateDetail?.grpNm,
+    },
+  } : raw;
+  const detail = isEtc ? etcNoticeDetail(payload) : privateSource ? privateDetail : payload.dmItemMap;
   // 기타 상세의 별도 BM 번호는 BK 번호로 요청한 공고의 저장 키와 다르다.
   const number = isEtc ? detail?.bidPbancUntyNo : detail?.bidPbancNo;
   const revision = isEtc ? detail?.bidPbancUntyOrd : detail?.bidPbancOrd;
@@ -199,7 +211,7 @@ export async function collectNotice(
     typeof detail?.bidPbancNm !== "string" ||
     !detail.bidPbancNm.trim()
   ) {
-    const detailField = isEtc ? "dlUntyBidPbancM" : isFrcp ? "dlBidPbancM" : "dmItemMap";
+    const detailField = isEtc ? "dlUntyBidPbancM" : privateSource ? "result.bidPbancMap" : "dmItemMap";
     const field = typeof detail?.bidPbancNm !== "string" || !detail.bidPbancNm.trim()
       ? `${detailField}.bidPbancNm` : detailField;
     throw collectionValidationError("요청한 공고의 상세 응답을 받지 못했습니다.", field, key, { number, revision });
@@ -207,7 +219,8 @@ export async function collectNotice(
   // 첨부 목록은 공고의 첨부 그룹만 조회하고, 제안요청은 상세 JS와 같이 협상계약에만 적용한다.
   const orderPlanLookupNumber = isEtc ? undefined : getNoticeOrderPlanNumber(payload);
   const priorSpecNumber = isEtc ? undefined : getNoticePriorSpecNumber(payload);
-  const group = isEtc ? noticeAttachmentGroup(payload) : detail.itemPbancUntyAtchFileNo?.trim();
+  const group = privateSource ? attachmentGroup(detail.untyAtchFileNo) :
+    isEtc ? noticeAttachmentGroup(payload) : detail.itemPbancUntyAtchFileNo?.trim();
   const linkedRows = isEtc ? workProgress?.map((row) => {
     // 기타 업무진행 행은 BK 번호 없이 상세의 BM 번호만 반환할 수 있다.
     if (row && !row.bidPbancNo && typeof detail.untyBidPbancNo === "string" &&
@@ -221,20 +234,22 @@ export async function collectNotice(
   // 일반 부가 조회 오류는 공고 저장을 허용하지만, 점검이 하나라도 확인되면 공고 저장을 보류한다.
   const outcomes = await Promise.allSettled([
     group
-      ? collectAttachments(group, isEtc ? "etc-notice" : "notice")
+      ? collectAttachments(group, privateSource ? "private-notice" : isEtc ? "etc-notice" : "notice", privateSource?.request)
       : undefined,
-    !isEtc && detail.scsbdMthdCd === "낙030005" &&
+    !isEtc && !privateSource && detail.scsbdMthdCd === "낙030005" &&
     detail.rfpNo?.trim() &&
     /^\d{1,3}$/.test(String(detail.rfpOrd))
       ? collectProposal(detail.rfpNo, detail.rfpOrd, detail.prcmBsneSeCd)
       : undefined,
     linkedRows ? collectNoticeContractLinks(key, linkedRows, recordFailure) : undefined,
     isEtc ? { targetRevisions: [], succeededRevisions: [], failures: [] } : collectNoticeOpeningResults(payload),
-    isEtc ? undefined : collectNoticePosts(key, recordFailure),
+    isEtc || privateSource ? undefined : collectNoticePosts(key, recordFailure),
     orderPlanLookupNumber ? collectOrderPlan(orderPlanLookupNumber, false, { fromNotice: true }) : undefined,
     priorSpecNumber ? collectPriorSpec(priorSpecNumber) : undefined,
+    privateSource ? fetchPrivateNoticePosts(key, detail.pbancSttsCd, privateSource.request, recordFailure) : undefined,
+    privateSource ? fetchPrivateNoticeCodeNames(privateSource.request) : undefined,
   ]);
-  const [attachments, proposal, contractLinks, openingResults, posts, orderPlan] = outcomes;
+  const [attachments, proposal, contractLinks, openingResults, posts, orderPlan, , privatePosts, privateCodeNames] = outcomes;
   const collectedOrderPlan = orderPlan.status === "fulfilled" ? orderPlan.value : undefined;
   if (recordFailure) {
     if (collectedOrderPlan?.attachmentFailure) recordFailure(collectedOrderPlan.attachmentFailure.reason);
@@ -278,6 +293,8 @@ export async function collectNotice(
       collectedAt,
       payload,
       orderPlanNumber: collectedOrderPlan?.number,
+      privateCodeNames: privateCodeNames.status === "fulfilled" ? privateCodeNames.value : undefined,
+      privatePosts: privatePosts.status === "fulfilled" ? privatePosts.value : undefined,
       posts: posts.status === "fulfilled" ? posts.value : undefined,
       documents,
       ...(contractLinks.status === "fulfilled" ? contractLinks.value : {}),

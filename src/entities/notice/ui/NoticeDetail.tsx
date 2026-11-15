@@ -15,8 +15,9 @@ import {
   getNoticeDisplay,
   relatedNoticeSectionTitle,
 } from "../model/notice-display";
+import { getPrivateNoticeAttachmentFiles, getPrivateNoticeDisplay } from "../model/private-notice-display";
 import type { Notice } from "../model/types";
-import { etcNoticeDetail, noticeDetail } from "../model/notice-detail";
+import { etcNoticeDetail, noticeDetail, privateNoticeResult } from "../model/notice-detail";
 import type { NumberWithRevision } from "@/shared/lib/g2b/revision-route";
 
 /**
@@ -46,10 +47,12 @@ function NoticeTable({
   title,
   columns,
   rows,
+  showEmpty = false,
 }: {
   title: string;
+  showEmpty?: boolean;
   columns: string[];
-  rows: { value?: string; href?: string }[][];
+  rows: { value?: string; href?: string; colSpan?: number }[][];
 }) {
   return (
     <div className="overflow-x-auto rounded-md border">
@@ -68,10 +71,13 @@ function NoticeTable({
           </tr>
         </thead>
         <tbody>
+          {showEmpty && !rows.length && (
+            <tr><td colSpan={columns.length} className="p-3 text-center">데이터가 없음</td></tr>
+          )}
           {rows.map((row, index) => (
             <tr key={index} className="border-t align-top">
-              {row.map(({ value, href }, column) => (
-                <td key={columns[column]} className="min-w-20 px-3 py-2">
+              {row.map(({ value, href, colSpan }, column) => (
+                <td key={columns[column]} colSpan={colSpan} className="min-w-20 px-3 py-2">
                   {title === "기초금액공개" &&
                   columns[column] === "상세보기" &&
                   value === "기초금액조회" ? (
@@ -90,7 +96,7 @@ function NoticeTable({
                       {decodeHTMLStrict(value)}
                     </a>
                   ) : (
-                    <NoticeValue value={value} />
+                    <NoticeValue value={value ?? ""} />
                   )}
                 </td>
               ))}
@@ -154,13 +160,17 @@ export function NoticeDetail({
       })),
     },
   ].filter(({ links }) => links.length > 0);
-  const sections = getNoticeDisplay(
+  const privateResult = privateNoticeResult(notice.payload);
+  const sections = privateResult ? [
+    ...getPrivateNoticeDisplay(privateResult, notice.privatePosts, notice.privateCodeNames),
+    { title: "파일첨부", columns: [], rows: [] },
+  ] : getNoticeDisplay(
     notice.payload,
     notice.documents,
     links.openingResultPath,
     contractLinks.length > 0,
   );
-  const attachmentFiles = getNoticeAttachmentFiles(
+  const attachmentFiles = privateResult ? getPrivateNoticeAttachmentFiles(notice) : getNoticeAttachmentFiles(
     notice.payload,
     notice.documents,
   );
@@ -184,7 +194,9 @@ export function NoticeDetail({
 
   // 현재는 원본 페이지 존재 여부를 알려주는 공고 API 항목이 없어 번호와 차수로 링크를 생성해 항상 표시한다.
   // 향후 해당 정보가 수집되면 원본 페이지의 존재 여부에 따른 표시 조건을 적용할 수 있다.
-  const originalHref = originalNoticeHref(notice);
+  const originalHref = privateResult
+    ? "https://www.g2b.go.kr/link/NNBB002_01/single/?" + new URLSearchParams({ bidPbancNo: number, bidPbancOrd: revision })
+    : originalNoticeHref(notice);
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
@@ -239,9 +251,10 @@ export function NoticeDetail({
               <dl className="grid gap-4 text-sm">
                 {section.fields.map(({ label, value, ...rest }, index) => {
                   const priorSpecNumber = label === "사전규격등록번호" ? g2bNumber(value) : undefined;
-                  const href = label === "발주계획번호" && orderPlanNumber
-                    ? links.orderPlanPath(orderPlanNumber)
-                    : priorSpecNumber && links.priorSpecPath(priorSpecNumber);
+                  const href = "href" in rest && typeof rest.href === "string" ? rest.href :
+                    label === "발주계획번호" && orderPlanNumber
+                      ? links.orderPlanPath(orderPlanNumber)
+                      : priorSpecNumber && links.priorSpecPath(priorSpecNumber);
                   return (
                     <div
                       key={`${index}-${label ?? ""}`}
@@ -255,7 +268,19 @@ export function NoticeDetail({
                         <dt className="text-muted-foreground">{label}</dt>
                       )}
                       <dd>
-                        {href ? (
+                        {"details" in rest && Array.isArray(rest.details) ? (
+                          <details>
+                            <summary className="cursor-pointer underline underline-offset-2">{value}</summary>
+                            <dl className="mt-2 grid gap-2">
+                              {rest.details.map((item) => (
+                                <div key={item.label}>
+                                  <dt className="text-muted-foreground">{item.label}</dt>
+                                  <dd>{item.href ? <a className="underline" href={item.href}>{item.value}</a> : <NoticeValue value={item.value} />}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          </details>
+                        ) : href ? (
                           <Link
                             href={href}
                             className="text-primary underline underline-offset-2"
@@ -308,10 +333,12 @@ export function NoticeDetail({
               </dl>
               {"nestedTable" in section && section.nestedTable && (
                 <div className="mt-4 grid gap-2">
-                  <h3 className="text-sm font-semibold">
-                    {section.nestedTable.title}
-                  </h3>
-                  <NoticeTable {...section.nestedTable} />
+                  {"note" in section.nestedTable && typeof section.nestedTable.note === "string" ? (
+                    <p className="text-sm text-muted-foreground">{section.nestedTable.note}</p>
+                  ) : (
+                    <h3 className="text-sm font-semibold">{section.nestedTable.title}</h3>
+                  )}
+                  <NoticeTable {...section.nestedTable} showEmpty={Boolean(privateResult)} />
                 </div>
               )}
             </DetailAccordionSection>
@@ -336,7 +363,7 @@ export function NoticeDetail({
                   getDownloadHref={(file) => proposalHrefBySeq.get(file.seq)}
                 />
               ) : (
-                <NoticeTable {...section} />
+                <NoticeTable {...section} showEmpty={Boolean(privateResult)} />
               )}
             </DetailAccordionSection>
           );

@@ -1,6 +1,6 @@
 import { openingResultQuery } from "@/entities/opening-result/model/opening-result";
 import type { Notice } from "./types";
-import { etcNoticeDetail, noticeAttachmentGroup } from "./notice-detail";
+import { etcNoticeDetail, noticeAttachmentGroup, privateNoticeResult } from "./notice-detail";
 import { publicAttachmentFiles } from "@/shared/model/g2b/g2b-attachments";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";
@@ -410,6 +410,16 @@ export function getRelatedNoticeKeys(payload: RecordValue) {
       return number && revision && /^\d{1,3}$/.test(revision)
         ? [{ number, revision: revision.padStart(3, "0") }] : [];
     }) : [];
+  }
+  const privateList = privateNoticeResult(payload)?.bidInfoList;
+  if (Array.isArray(privateList)) {
+    return privateList.flatMap((item) => {
+      const { bidPbancNo, bidPbancOrd } = record(item);
+      const number = g2bNumber(bidPbancNo);
+      const revision = displayValue(bidPbancOrd);
+      return number && revision && /^\d{1,3}$/.test(revision)
+        ? [{ number, revision: revision.padStart(3, "0") }] : [];
+    });
   }
   const value = record(payload.dmItemMap).relaPbancNo;
   // 공고번호 자체에 하이픈이 포함될 수 있으므로 끝의 세 자리를 차수로 분리한다.

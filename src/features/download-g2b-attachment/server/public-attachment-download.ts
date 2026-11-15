@@ -20,7 +20,7 @@ export async function resolvePublicAttachmentDownload(
   group: string | undefined,
   attachments: Record<string, unknown> | undefined,
   seq: string,
-  scope: "order-plan" | "prior-spec" | "notice-post",
+  scope: "order-plan" | "prior-spec" | "notice-post" | "private-notice",
 ): Promise<URL | null> {
   const savedFile = publicAttachmentFiles(group, attachments, scope).find(
     (file) => file.seq === seq && file.downloadable,

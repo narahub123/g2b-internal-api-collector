@@ -11,6 +11,8 @@ export const attachmentSources = {
     tblNm: "PBANC_UNTY_BID_PBANC",
     colNm: "UNTY_ATCH_FILE_NO",
   },
+  // 민간공고 파일 UDC가 사용하는 누리장터 첨부 경로다.
+  "private-notice": { bsnePath: "a", tblNm: "c", colNm: "d" },
   "notice-post": {
     bsnePath: "ntcbbs",
     tblNm: "PBASP_PST",

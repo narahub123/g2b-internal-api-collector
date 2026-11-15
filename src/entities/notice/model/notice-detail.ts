@@ -15,6 +15,17 @@ export function etcNoticeDetail(payload: Record<string, unknown>) {
 }
 
 /**
+ * 누리장터 전용 API로 수집한 공고의 원본 result 맵을 읽는다.
+ * 이전 상세 응답은 기존 표시 경로에서 읽을 수 있도록 undefined를 반환한다.
+ */
+export function privateNoticeResult(payload: Record<string, unknown>) {
+  const result = payload.result;
+  if (result && typeof result === "object" && !Array.isArray(result) && "bidPbancMap" in result) {
+    return result as Record<string, unknown>;
+  }
+}
+
+/**
  * 업무별 상세 데이터 맵에서 원본 공고 필드를 읽는다.
  * @returns 일반 또는 기타 상세 필드. 맵이 없으면 빈 객체.
  */
@@ -28,6 +39,10 @@ export function noticeDetail(payload: Record<string, unknown>) {
  * @returns 유효한 첨부 그룹 식별자 또는 undefined.
  */
 export function noticeAttachmentGroup(payload: Record<string, unknown>) {
+  const privateDetail = privateNoticeResult(payload)?.bidPbancMap;
+  if (privateDetail && typeof privateDetail === "object" && "untyAtchFileNo" in privateDetail) {
+    return attachmentGroup(privateDetail.untyAtchFileNo);
+  }
   return attachmentGroup(etcNoticeDetail(payload)?.untyAtchFileNo ??
     noticeDetail(payload).itemPbancUntyAtchFileNo);
 }

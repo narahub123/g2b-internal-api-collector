@@ -1,6 +1,6 @@
 import { getG2bRepository } from "@/server/g2b/repository";
 import { noticePostRecord } from "@/entities/notice/model/notice-posts";
-import { etcNoticeDetail, noticeAttachmentGroup } from "@/entities/notice/model/notice-detail";
+import { etcNoticeDetail, noticeAttachmentGroup, privateNoticeResult } from "@/entities/notice/model/notice-detail";
 import { getRelatedNoticeKeys } from "@/entities/notice/model/notice-display";
 import type { Notice } from "@/entities/notice/model/types";
 import { getNoticeOrderPlanNumber, orderPlanNoticeReferences } from "@/entities/order-plan/model/order-plan";
@@ -18,16 +18,21 @@ function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFa
     const repository = getG2bRepository();
     const documents = notice.documents;
     const isEtc = Boolean(etcNoticeDetail(notice.payload));
-    const missingPosts = !isEtc && (!notice.posts || notice.posts.entries.some((post) => !post.body ||
+    const isPrivate = Boolean(privateNoticeResult(notice.payload));
+    const missingPrivatePosts = isPrivate && revision !== "000" && (!notice.privatePosts ||
+      notice.privatePosts.details.some((entry) => !entry || (!entry.attachments &&
+        attachmentGroup(noticePostRecord(noticePostRecord(entry.raw.result).noceMap).untyAtchFileNo))));
+    const missingPrivateCodes = isPrivate && !notice.privateCodeNames;
+    const missingPosts = !isEtc && !isPrivate && (!notice.posts || notice.posts.entries.some((post) => !post.body ||
       (!post.attachments && attachmentGroup(noticePostRecord(post.detail?.dlPstM).untyAtchFileNo))));
-    if (documents?.unavailable?.length || missingPosts ||
+    if (documents?.unavailable?.length || missingPosts || missingPrivatePosts || missingPrivateCodes ||
         notice.contractRequests === undefined || notice.contracts === undefined) {
       // 일시적인 문서 조회 실패 때문에 이전에 저장한 원본 목록을 잃지 않도록 한다.
       const previous = collectionStep("SQLite 이전 공고 조회", () =>
         repository.findUsableNotice(input));
       if (documents) {
         for (const kind of documents.unavailable ?? []) {
-          if (isEtc && kind === "attachments") {
+          if ((isEtc || isPrivate) && kind === "attachments") {
             const group = noticeAttachmentGroup(notice.payload);
             if (!previous || !group || group !== noticeAttachmentGroup(previous.payload)) continue;
           }
@@ -36,7 +41,40 @@ function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFa
       }
       notice.contractRequests ??= previous?.contractRequests;
       notice.contracts ??= previous?.contracts;
-      if (!isEtc && !notice.posts) {
+      if (previous && privateNoticeResult(previous.payload)) {
+        notice.privateCodeNames ??= previous.privateCodeNames;
+        const savedPosts = previous.privatePosts;
+        if (missingPrivatePosts && savedPosts) {
+          if (!notice.privatePosts) {
+            notice.privatePosts = savedPosts;
+          } else {
+            const list = noticePostRecord(notice.privatePosts.list.result).noceList;
+            const savedList = noticePostRecord(savedPosts.list.result).noceList;
+            if (Array.isArray(list) && Array.isArray(savedList)) {
+              for (const [index, item] of list.entries()) {
+                const row = noticePostRecord(item);
+                if (!row.bbsNo || !row.pstNo) continue;
+                const match = savedList.findIndex((item) => {
+                  const saved = noticePostRecord(item);
+                  return saved.bbsNo === row.bbsNo && String(saved.pstNo) === String(row.pstNo) &&
+                    saved.odn3ColCn === row.odn3ColCn;
+                });
+                const entry = notice.privatePosts.details[index];
+                const saved = savedPosts.details[match];
+                if (!entry) {
+                  notice.privatePosts.details[index] = saved;
+                } else if (!entry.attachments && saved?.attachments) {
+                  const currentMap = noticePostRecord(noticePostRecord(entry.raw.result).noceMap);
+                  const savedMap = noticePostRecord(noticePostRecord(saved.raw.result).noceMap);
+                  const group = attachmentGroup(currentMap.untyAtchFileNo);
+                  if (group && group === savedMap.untyAtchFileNo) entry.attachments = saved.attachments;
+                }
+              }
+            }
+          }
+        }
+      }
+      if (!isEtc && !isPrivate && !notice.posts) {
         notice.posts = previous?.posts;
       } else if (notice.posts) {
         for (const post of notice.posts.entries) {

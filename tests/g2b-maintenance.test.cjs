@@ -304,25 +304,131 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
   assert.ok(orderPlanBody.props.notices.some(({ number }) => number === noticeKey.number));
 });
 
-test('업무구분 22는 전용 상세 경로를 사용하고 원본과 기존 표시용 데이터 맵을 제공한다', async (t) => {
+test('민간공고 21~24는 원본 상세 API를 사용하고 응답을 보존한다', async (t) => {
   const key = { number: 'R26BK01827103', revision: '001' };
   const detail = { bidPbancNo: key.number, bidPbancOrd: key.revision, bidPbancNm: '외부시설물 설치공사' };
+  const result = { bidPbancMap: detail, pbancOrgMap: { onbsPlacNm: '현장' }, bidPbancItemlist: [] };
+  let businessCode = '21';
   mockFetch(t, (path, options) => {
     if (path === '/') return new Response('', { headers: { 'Set-Cookie': 'test-session=1; Path=/' } });
-    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [{ prcmBsneSeCd: '22' }] });
-    if (path.endsWith('/selectFrcpBidPbacDtlInfo.do')) {
-      const input = JSON.parse(options.body).dlBidPbancM;
-      assert.deepEqual([input.bidPbancNo, input.bidPbancOrd, input.prcmBsneSeCd, input.scsbdMthdCd],
-        [key.number, key.revision, '22', '낙030001']);
-      return success({ dlBidPbancM: detail });
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [{ prcmBsneSeCd: businessCode }] });
+    if (path.endsWith('/selectBidPbancDetl.do')) {
+      const input = JSON.parse(options.body).dlSrchCndtM;
+      assert.deepEqual([input.bidPbancNo, input.bidPbancOrd], [key.number, key.revision]);
+      return success({ result });
     }
-    assert.ok(!path.endsWith('/selectItemAnncMngV.do'));
-    return success({ dlNtcPstL: [] });
+    if (path.endsWith('/selectBidNoceDetl.do')) return success({ result: { noceList: [] } });
+    assert.ok(!path.endsWith('/selectItemAnncMngV.do') && !path.endsWith('/selectFrcpBidPbacDtlInfo.do'));
+    return success({});
   });
-  const { notice } = await collectNotice(key, '낙030001');
-  assert.equal(notice.title, detail.bidPbancNm);
-  assert.deepEqual(notice.payload.dlBidPbancM, detail);
-  assert.deepEqual(notice.payload.dmItemMap, detail);
+  for (businessCode of ['21', '22', '23', '24']) {
+    const lookup = businessCode === '22' ? undefined :
+      { registrationType: '통050002', businessCode, rawRevision: key.revision };
+    const { notice } = await collectNotice(key, '낙030001', undefined, lookup);
+    assert.equal(notice.title, detail.bidPbancNm);
+    assert.deepEqual(notice.payload.result, result);
+    assert.equal(notice.payload.dmItemMap.prcmBsneSeCd, businessCode);
+    await getG2bRepository().save(notice);
+  }
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { createElement } = require('react');
+  const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
+  const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
+  const admin = await NoticeDetailPage({ params: Promise.resolve(key) });
+  const user = await G2bDetailPage({ section: 'notices', params: Promise.resolve(key), searchParams: Promise.resolve({}) });
+  for (const page of [admin, user]) {
+    const body = page.props.children.find((child) => child?.props?.notice);
+    const html = renderToStaticMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
+    let previousIndex = -1;
+    for (const heading of ['공고일반', '입찰 및 계약방법', '입찰진행', '현장설명회', '투찰제한', '입찰담당정보', '파일첨부']) {
+      const index = html.indexOf(heading, previousIndex + 1);
+      assert.ok(index > previousIndex, heading);
+      previousIndex = index;
+    }
+    assert.ok(html.includes('NNBB002_01'));
+    const fileTable = html.match(/<table[^>]+aria-label="파일첨부"[\s\S]*?<\/table>/)?.[0];
+    assert.ok(fileTable?.includes('문서구분'));
+    assert.ok(fileTable.includes('조회된 내역이 없습니다.'));
+    assert.ok(!fileTable.includes('등록자명'));
+  }
+});
+
+test('민간공고는 원본 조건에 따라 표시하고 빈 필드와 업무별 빈 표를 보존한다', () => {
+  const { getPrivateNoticeDisplay } = require('../src/entities/notice/model/private-notice-display');
+  const result = {
+    bidPbancMap: {
+      prcmBsneSeCd: '조070004', bidMthdCd: '입180003', pnprRlsYn: 'N',
+      evlcrtAmt: 123456, stdCtrtMthdCd: '계030002', cvlnPbancNmcptEtpsRlsYn: 'N',
+      bidPrgrsOrd: -1, rgnLmtYn: 'Y', hsmpMngOfceTlphNo: '021234567',
+    },
+    bidPbancItemlist: [],
+    bidLmtRgnList: [{ lgdngNm: '서울특별시' }],
+    dmItemMap: { lcnsLmtYnNm: '공고서참조', intpLmtCn: '숨김 대상' },
+  };
+  const sections = getPrivateNoticeDisplay(result);
+  const titles = sections.map(({ title }) => title);
+  assert.ok(titles.includes('역경매진행'));
+  for (const title of ['입찰금액', '기준금액', '지명경쟁업체', '입찰(재입찰)내역', '단지정보']) {
+    assert.ok(!titles.includes(title));
+  }
+  const items = sections.find(({ title }) => title === '입찰상세내역');
+  assert.deepEqual(items.columns, ['No', '공사명', '준공기한', '공사현장명']);
+  assert.deepEqual(items.rows, []);
+  assert.equal(sections.find(({ title }) => title === '공고일반').fields.find(({ label }) => label === '문서번호').value, '');
+  assert.ok(!JSON.stringify(sections).includes('숨김 대상'));
+});
+
+test('민간 첨부의 저장된 코드표가 없어도 누리장터 문서구분을 표시한다', () => {
+  const { getPrivateNoticeAttachmentFiles } = require('../src/entities/notice/model/private-notice-display');
+  const group = '11e81849-11c5-4dfb-92a9-4d73f48e5a47';
+  const notice = {
+    number: 'R26BK01830344', revision: '000',
+    payload: { result: {
+      bidPbancMap: { untyAtchFileNo: group },
+      bidBsneCndtCrtrCdMap: { bsneCndt1Val: '20000101000000' },
+    } },
+    documents: { attachments: { dlUntyAtchFileL: ['첨020297', '첨020417', '첨020033', '첨020109'].map((code, index) => ({
+      untyAtchFileNo: group, orgnlAtchFileNm: '첨부.pdf', atchFileSqno: index + 1, atchFileKndCd: code, scrnIndtYn: 'Y',
+    })) } },
+  };
+  assert.deepEqual(getPrivateNoticeAttachmentFiles(notice).map((file) => file.documentType),
+    ['공고서(원본)', '공고서(변환본)', '규격서', '기타문서']);
+  notice.privateCodeNames = { 첨02NN005: { 첨020109: '기타문서' }, '첨02NN005:supplement': { 첨020109: '' } };
+  assert.equal(getPrivateNoticeAttachmentFiles(notice)[3].documentType, '기타문서');
+});
+
+test('민간 변경공고는 이전 차수의 공지 본문을 읽고 현재 차수로 표시한다', async (t) => {
+  const { fetchPrivateNoticePosts } = require('../src/features/collect-g2b/api/private-notice');
+  const { getPrivateNoticeDisplay } = require('../src/entities/notice/model/private-notice-display');
+  const key = { number: 'R26BK01827103', revision: '001' };
+  const row = { bbsNo: 'R23AB00000108', pstNo: '123', odn3ColCn: 'A', inptDt: '2026/11/13', pstNm: '변경공고사유' };
+  mockFetch(t, (path, options) => {
+    if (path.endsWith('/selectBidNoceDetl.do')) {
+      assert.equal(JSON.parse(options.body).dlSrchCndtM.odn3ColCn, 'A');
+      return success({ result: { noceList: [row] } });
+    }
+    assert.ok(path.endsWith('/selectBidNoceBulkPstCn.do'));
+    assert.equal(JSON.parse(options.body).dlPstM.bidPbancOrd, '000');
+    return success({ result: { noceMap: { odn3ColCn: 'A', bulkPstCn: '변경 내용' } } });
+  });
+  const posts = await fetchPrivateNoticePosts(key, '공400002', fetch);
+  const detail = { bidPbancNo: key.number, bidPbancOrd: key.revision };
+  const [section] = getPrivateNoticeDisplay({ bidPbancMap: detail }, posts);
+  assert.equal(section.title, '공지사항(변경,취소공고사유 등)');
+  assert.equal(section.fields[0].details.find(({ label }) => label === '입찰공고차수').value, '001');
+  assert.equal(section.fields[0].details.find(({ label }) => label === '내용').value, '변경 내용');
+  assert.equal(await fetchPrivateNoticePosts({ ...key, revision: '000' }, '공400002', fetch), undefined);
+});
+
+test('민간공고 기준금액은 개찰 상태 전까지 비공개 값을 숨긴다', () => {
+  const { getPrivateNoticeDisplay } = require('../src/entities/notice/model/private-notice-display');
+  const detail = { pnprRlsYn: 'N', evlcrtAmt: 123456, bidPbancPgstCd: '진010008' };
+  const sections = () => getPrivateNoticeDisplay({ bidPbancMap: detail });
+  const field = (title, label) => sections().find((s) => s.title === title).fields.find((f) => f.label === label).value;
+  assert.equal(field('공고일반', '게시일시'), '공고게시이전입니다.');
+  assert.equal(field('기준금액', '기준금액'), '원');
+  detail.bidPbancPgstCd = '입160004';
+  assert.equal(field('기준금액', '기준금액'), '123,456 원');
 });
 
 test('기타 공고는 업무진행을 한 번 조회하고 기타 상세와 공개 첨부를 수집한다', async (t) => {
