@@ -100,7 +100,10 @@ export async function CollectionListPage({
           </Link>
         </Button>
       </header>
-      <G2bSectionNav items={ADMIN_NAVIGATION.g2b.sections} activeSection={section} />
+      <G2bSectionNav
+        items={ADMIN_NAVIGATION.g2b.sections}
+        activeSection={section}
+      />
       <CollectionForm section={section} />
       <nav
         aria-label="수집 상태로 필터링"
@@ -109,7 +112,11 @@ export async function CollectionListPage({
         {collectionCountLabels.map(([key, label]) => (
           <Link
             key={key}
-            href={paginated.href(href, { ...paginated.query, status: key, page: 1 })}
+            href={paginated.href(href, {
+              ...paginated.query,
+              status: key,
+              page: 1,
+            })}
             aria-current={selected === key ? "page" : undefined}
             className={cn(
               "flex min-w-0 flex-wrap items-center justify-between gap-x-2 border-b-2 border-transparent px-3 py-4 hover:bg-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:px-5",
@@ -140,13 +147,19 @@ export async function CollectionListPage({
           ? { section: paginated.section, regions: paginated.regions }
           : { section: paginated.section })}
       >
-        <CollectionListSelection
-          key={paginated.href(href, paginated.query)}
-          section={section}
-          eligible={rows.flatMap(({ deletionTarget }) => deletionTarget ? [deletionTarget] : [])}
-        >
+        {rows.length === 0 ? (
           <CollectionRows section={section} rows={rows} />
-        </CollectionListSelection>
+        ) : (
+          <CollectionListSelection
+            key={paginated.href(href, paginated.query)}
+            section={section}
+            eligible={rows.flatMap(({ deletionTarget }) =>
+              deletionTarget ? [deletionTarget] : [],
+            )}
+          >
+            <CollectionRows section={section} rows={rows} />
+          </CollectionListSelection>
+        )}
       </CollectionQueryView>
     </section>
   );
