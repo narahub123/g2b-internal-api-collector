@@ -16,6 +16,7 @@ import {
 
 import { ResultTable, display } from "./ResultTable";
 import { QualificationReviewDetail } from "./QualificationReviewDetail";
+import { OpeningResultFieldSection } from "./OpeningResultFieldSection";
 import { getQualificationReviewDisplay, type QualificationReviewDisplay } from "../model/qualification-review-display";
 
 type PriceSections = OpeningResultDisplay["sections"];
@@ -48,24 +49,16 @@ function Fields({
               priceSections.length > 0 ? (
                 <div className="grid min-w-0 gap-2">
                   {priceSections.map((section, index) => (
-                    <Accordion
+                    <OpeningResultFieldSection
                       key={`${section.title}/${index}`}
-                      type="multiple"
-                      defaultValue={[section.title]}
-                      className="min-w-0 border-t text-sm [&_button]:py-2 [&_button]:text-sm"
+                      title={section.title}
                     >
-                      <DetailAccordionSection
-                        title={section.title}
-                        heading="h3"
-                      >
-                        {/* 가격 상세도 필드형과 표형 섹션을 동일한 표시 컴포넌트로 처리한다. */}
-                        {section.kind === "fields" ? (
-                          <Fields fields={section.fields} />
-                        ) : (
-                          <ResultTable table={section.table} />
-                        )}
-                      </DetailAccordionSection>
-                    </Accordion>
+                      {section.kind === "fields" ? (
+                        <Fields fields={section.fields} />
+                      ) : (
+                        <ResultTable table={section.table} />
+                      )}
+                    </OpeningResultFieldSection>
                   ))}
                 </div>
               ) : null
