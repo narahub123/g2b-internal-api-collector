@@ -10,6 +10,7 @@ import { Input } from "@/shared/ui/input";
 import type { NoticeRun, NoticeRunPeriod } from "@/server/g2b/repository/notice-queue-types";
 import { collectionCountFormat } from "./collection-count-labels";
 import { noticeRunJobLabels } from "./notice-run-status";
+import { NoticeRunFailedList } from "./NoticeRunFailedList";
 
 const endpoint = "/api/g2b/notice-collection-runs";
 const runLabels: Record<NoticeRun["status"], string> = {
@@ -209,6 +210,9 @@ export function NoticePeriodCollection() {
                   </AccordionContent>
                 </AccordionItem>
               </Accordion>
+
+              {/* 신규 실패 목록 */}
+              <NoticeRunFailedList notices={run.notices} />
             </>
           )}
         </div>

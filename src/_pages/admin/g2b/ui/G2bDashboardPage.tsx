@@ -1,10 +1,20 @@
-import { ClipboardList, FileCheck, FileSearch, Gavel, ListChecks, Megaphone } from "lucide-react";
+import {
+  ClipboardList,
+  FileCheck,
+  FileSearch,
+  Gavel,
+  ListChecks,
+  Megaphone,
+} from "lucide-react";
 import { connection } from "next/server";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type { CollectionSection } from "@/server/g2b/repository/collection-attempts";
 import { ADMIN_NAVIGATION } from "../../config/navigation";
 import { AdminDashboardCard } from "../../ui/AdminDashboardCard";
-import { collectionCountFormat, collectionCountLabels } from "./collection-count-labels";
+import {
+  collectionCountFormat,
+  collectionCountLabels,
+} from "./collection-count-labels";
 import { cn } from "@/shared/lib/utils";
 import { NoticePeriodCollection } from "./NoticePeriodCollection";
 
@@ -33,12 +43,14 @@ export async function G2bDashboardPage() {
         {ADMIN_NAVIGATION.g2b.sections.map(({ section, href, label }) => {
           const Icon = sectionIcons[section];
           const counts = history.counts(section);
+          const hasUncollected = counts.uncollected > 0;
           return (
             <AdminDashboardCard
               key={section}
               href={href}
               title={label}
               icon={<Icon className="size-5" />}
+              warning={hasUncollected}
             >
               <dl className="grid grid-cols-3 gap-2">
                 {collectionCountLabels.map(([key, name]) => (

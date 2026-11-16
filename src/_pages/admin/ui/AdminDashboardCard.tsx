@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { useId, type ReactNode } from "react";
-import { Card, CardContent, CardDescription, CardHeader } from "@/shared/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+} from "@/shared/ui/card";
+import { cn } from "@/shared/lib/utils";
 
 // 카드마다 이동 경로와 헤더를 지정하고 본문은 필요한 경우에만 제공한다.
 type AdminDashboardCardProps = {
@@ -9,6 +15,7 @@ type AdminDashboardCardProps = {
   description?: string;
   icon: ReactNode;
   children?: ReactNode;
+  warning?: boolean;
 };
 
 /**
@@ -22,6 +29,7 @@ export function AdminDashboardCard({
   description,
   icon,
   children,
+  warning,
 }: AdminDashboardCardProps) {
   const titleId = useId();
 
@@ -31,10 +39,20 @@ export function AdminDashboardCard({
       aria-labelledby={titleId}
       className="group block rounded-xl focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
     >
-      <Card className="transition-colors group-hover:border-primary/50 gap-3">
+      <Card
+        className={cn(
+          "gap-3 transition-colors",
+          warning
+            ? "border-destructive group-hover:border-destructive group-hover:ring-1 group-hover:ring-destructive/40"
+            : "group-hover:border-primary/50 group-hover:ring-1 group-hover:ring-primary/30",
+        )}
+      >
         <CardHeader>
           <div className="flex items-center gap-3">
-            <span className="rounded-lg bg-muted p-2 text-foreground" aria-hidden="true">
+            <span
+              className="rounded-lg bg-muted p-2 text-foreground"
+              aria-hidden="true"
+            >
               {icon}
             </span>
             <h2 id={titleId} className="text-lg font-semibold">
