@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { noticeRetryDelayMs } from "./notice-queue-types";
 import type { G2bDatabase } from "./database";
 import { openNoticeAutomatic } from "./notice-automatic";
 import type { NoticeJob, NoticeQueue, NoticeQueueInput, NoticeRun, NoticeRunPeriod, NoticeSource } from "./notice-queue-types";
@@ -133,6 +135,43 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
 
   const queue: NoticeQueue = {
     automatic: openNoticeAutomatic(db),
+    async reserveWorkerDispatch(now) {
+      const token = randomUUID();
+      // 예약·실행권 검사는 같은 UPDATE에서 판단해 여러 웹 인스턴스의 호출이 겹치지 않게 한다.
+      const result = await db.prepare(`
+        UPDATE g2b_notice_queue AS q SET dispatchToken = ?, dispatchUntil = unixepoch() + 180
+        WHERE q.id = 1 AND q.dispatchUntil <= unixepoch()
+          AND NOT EXISTS (SELECT 1 FROM g2b_notice_worker_lease WHERE token IS NOT NULL AND expires_at > unixepoch())
+          AND EXISTS (
+            SELECT 1 FROM g2b_notice_automatic a WHERE a.id = 1 AND (
+              (a.enabled = 1 AND a.nextAt <= ? AND (q.manual = 0 OR q.maintenance <> 0))
+              OR (a.enabled = 1 AND q.maintenance <> 0 AND a.probeMaintenance = q.maintenance)
+              OR (q.manual = 0 AND (
+                (a.enabled = 1 AND a.immediate = 1 AND q.maintenance = 0)
+                OR ((q.maintenance = 0 OR a.enabled = 0) AND (
+                  EXISTS (SELECT 1 FROM g2b_notice_runs r
+                    WHERE r.phase IN ('pending', 'discovering') AND (r.source = 'manual' OR a.enabled = 1))
+                  OR EXISTS (SELECT 1 FROM g2b_notice_jobs j
+                    WHERE j.status IN ('pending', 'retry_wait', 'running') AND j.availableAt <= ?
+                    AND (j.source = 'manual' OR a.enabled = 1))
+                ))
+              ))
+            )
+          )
+      `).run(token, now, now);
+      return result.rowsAffected === 1 ? token : undefined;
+    },
+    async releaseWorkerDispatch(token) {
+      await db.prepare(`UPDATE g2b_notice_queue SET dispatchToken = NULL, dispatchUntil = 0
+        WHERE id = 1 AND (? IS NULL OR dispatchToken = ?)`).run(token ?? null, token ?? null);
+    },
+    async nextRetryAt() {
+      const row = await db.prepare(`SELECT MIN(j.availableAt) AS readyAt
+        FROM g2b_notice_jobs j CROSS JOIN g2b_notice_queue q CROSS JOIN g2b_notice_automatic a
+        WHERE q.id = 1 AND a.id = 1 AND q.manual = 0 AND q.maintenance = 0
+          AND j.status = 'retry_wait' AND (j.source = 'manual' OR a.enabled = 1)`).get();
+      return typeof row?.readyAt === "number" ? row.readyAt : null;
+    },
     enqueueRun(period, requestKey, source = "manual") {
       return transaction(async () => {
         const existing = requestKey && (await db.prepare("SELECT id, startMinute, endMinute, source FROM g2b_notice_runs WHERE requestKey = ?").get(requestKey));
@@ -318,7 +357,7 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
         // 종료 시 이미 예약된 강제 작업이 있으면 현재 작업은 일반 재시도 규칙을 그대로 따른다.
         await db.prepare(`UPDATE g2b_notice_jobs SET status = ?, failures = ?, availableAt = ?, error = ?, result = ?,
           hasFirstResult = MAX(hasFirstResult, ?) WHERE id = ?`)
-          .run(status, failures, status === "retry_wait" ? now + 60_000 : 0,
+          .run(status, failures, status === "retry_wait" ? now + noticeRetryDelayMs : 0,
             outcome.kind === "success" ? null : outcome.error,
             JSON.stringify(("result" in outcome ? outcome.result : null) ?? null), Number(outcome.kind !== "maintenance"), id);
         if (outcome.kind !== "maintenance") {

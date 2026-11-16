@@ -1,0 +1,36 @@
+name: 공고 수집 실행 기록 정리
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 삭제 대상만 확인
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: notice-collection-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: vars.NOTICE_ACTIONS_CLEANUP_ENABLED == 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: node scripts/cleanup-notice-actions.cjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTICE_CLEANUP_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}

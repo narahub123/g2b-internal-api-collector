@@ -1,4 +1,5 @@
 import { getG2bRepository } from "@/server/g2b/repository";
+import { wakeNoticeWorker } from "@/features/collect-g2b/api/notice-actions";
 import { logNoticeQueueError } from "@/features/collect-g2b/api/notice-queue-service";
 
 /** 영속 중단 사유와 실행 중인 작업 및 최근 작업을 반환한다. */
@@ -17,6 +18,7 @@ export async function PATCH(request: Request) {
   if (typeof body?.manual !== "boolean") return Response.json({ error: "중단 상태를 확인하세요." }, { status: 400 });
   try {
     await getG2bRepository().noticeQueue.setManual(body.manual);
+    if (!body.manual) await wakeNoticeWorker();
     return new Response(null, { status: 204 });
   } catch (error) {
     logNoticeQueueError("set-manual", error);

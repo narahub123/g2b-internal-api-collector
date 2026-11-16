@@ -582,6 +582,8 @@ test('늦게 확인한 겹친 정기 회차는 건너뛰고 점검은 다음 정
     assert.equal(await queue.automatic.tick(time('13:59')), undefined);
     const firstCheck = await queue.automatic.tick(time('14:00'));
     assert.equal(firstCheck.maintenance, await queue.maintenanceVersion());
+    assert.deepEqual(await queue.automatic.tick(time('14:01')), firstCheck);
+    await queue.automatic.finishMaintenanceCheck(firstCheck);
     assert.equal(await queue.automatic.tick(time('14:01')), undefined);
     await queue.clearMaintenance(firstCheck.maintenance);
     assert.equal((await queue.automatic.get()).status, 'maintenance');

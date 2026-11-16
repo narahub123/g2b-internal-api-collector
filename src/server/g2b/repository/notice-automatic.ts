@@ -13,6 +13,7 @@ type Schedule = {
   immediate: number;
   maintenance: number;
   manual: number;
+  probeMaintenance: number | null;
 };
 
 function startTime(minute: string) {
@@ -67,7 +68,8 @@ export function openNoticeAutomatic(db: G2bDatabase) {
       return db.transaction(async () => {
         const schedule = await read();
         if (command.action === "stop") {
-          await db.prepare("UPDATE g2b_notice_automatic SET enabled = 0, immediate = 0, nextAt = NULL WHERE id = 1").run();
+          await db.prepare(`UPDATE g2b_notice_automatic
+            SET enabled = 0, immediate = 0, nextAt = NULL, probeMaintenance = NULL WHERE id = 1`).run();
           // 목록 탐색은 아직 공고를 접수하지 않았으므로 중단 중 반환된 응답은 반영하지 않는다.
           await db.prepare(`UPDATE g2b_notice_runs SET phase = 'pending'
             WHERE scheduleGeneration = ? AND phase = 'discovering'`).run(schedule.generation);
@@ -91,23 +93,32 @@ export function openNoticeAutomatic(db: G2bDatabase) {
         await db.prepare(`UPDATE g2b_notice_runs SET phase = 'failed', error = '새 시작 시각으로 재개했습니다.'
           WHERE scheduleGeneration IS NOT NULL AND phase IN ('pending', 'discovering')`).run();
         await db.prepare(`UPDATE g2b_notice_automatic
-          SET enabled = 1, immediate = 1, generation = generation + 1, startMinute = ?, interval = ?, nextAt = ?
+          SET enabled = 1, immediate = 1, generation = generation + 1, startMinute = ?, interval = ?, nextAt = ?, probeMaintenance = NULL
           WHERE id = 1`).run(command.startMinute, command.interval, nextTime(anchor, command.interval, now));
       });
     },
 
+    /** 점검 확인을 마친 회차를 기록한다. 이전 세대의 확인은 현재 일정에 영향을 주지 않는다. */
+    async finishMaintenanceCheck({ maintenance, generation }: { maintenance: number; generation: number }) {
+      await db.prepare(`UPDATE g2b_notice_automatic SET probeMaintenance = NULL
+        WHERE id = 1 AND generation = ? AND probeMaintenance = ?`).run(generation, maintenance);
+    },
+
     /**
      * 실행할 시점이면 현재 세대의 다음 구간을 접수한다. 이미 실행 중인 정기 회차는 건너뛴다.
-     * @returns 정기 시각에 점검 중일 때만 정상 복귀 확인에 필요한 점검·일정 세대를 반환한다.
+     * @returns 정기 시각에 접수됐고 결과 확인이 끝나지 않은 점검·일정 세대.
      */
     async tick(now = Date.now()): Promise<{ maintenance: number; generation: number } | undefined> {
       const due = ({ nextAt }: Schedule) => nextAt !== null && now >= nextAt;
       const ready = (schedule: Schedule) => schedule.enabled && (schedule.immediate || due(schedule));
-      if (!ready(await read())) return;
+      const pendingProbe = ({ enabled, maintenance, probeMaintenance, generation }: Schedule) =>
+        enabled && maintenance && maintenance === probeMaintenance ? { maintenance, generation } : undefined;
+      const snapshot = await read();
+      if (!ready(snapshot)) return pendingProbe(snapshot);
       return db.transaction(async () => {
         const schedule = await read();
         const { startMinute, generation, interval, maintenance, nextAt } = schedule;
-        if (!startMinute || !ready(schedule)) return;
+        if (!startMinute || !ready(schedule)) return pendingProbe(schedule);
         const regular = due(schedule);
         const following = regular ? nextTime(startTime(startMinute), interval, now) : nextAt;
         await db.prepare("UPDATE g2b_notice_automatic SET immediate = 0, nextAt = ? WHERE id = 1")
@@ -128,8 +139,10 @@ export function openNoticeAutomatic(db: G2bDatabase) {
           // 점검 중 목록을 확정하지 못한 구간은 정상 여부를 다시 확인할 때까지 조회 범위를 확장한다.
           await db.prepare(`UPDATE g2b_notice_runs SET endMinute = MAX(endMinute, ?)
             WHERE scheduleGeneration = ? AND phase = 'pending'`).run(noticeKoreanMinute(now), generation);
+          await db.prepare("UPDATE g2b_notice_automatic SET probeMaintenance = ? WHERE id = 1").run(maintenance);
           return { maintenance, generation };
         }
+        return pendingProbe(schedule);
       });
     },
   };

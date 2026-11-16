@@ -2,6 +2,9 @@ import type { CollectNoticeInput } from "@/features/collect-g2b/model/input";
 import type { CollectionDiagnostic } from "@/shared/api/g2b/collection-diagnostic";
 import type { openNoticeAutomatic } from "./notice-automatic";
 
+/** 실패 시각부터 다음 공고 재시도까지의 간격. 단발 워커의 대기 범위에도 사용한다. */
+export const noticeRetryDelayMs = 60_000;
+
 export type NoticeAttemptCompletion = {
   id: number;
   status: "succeeded" | "failed" | "deferred";
@@ -64,6 +67,12 @@ export type NoticeJobOutcome =
 export interface NoticeQueue {
   /** 자동 수집의 관리자 설정과 정기 회차 접수를 관리한다. */
   automatic: ReturnType<typeof openNoticeAutomatic>;
+  /** 실행 가능한 작업이 있고 활성 워커가 없을 때 Actions 호출을 예약한다. */
+  reserveWorkerDispatch(now: number): Promise<string | undefined>;
+  /** 실패한 호출의 예약을 해제한다. 실행권을 획득한 워커는 토큰을 생략해 예약을 인수한다. */
+  releaseWorkerDispatch(token?: string): Promise<void>;
+  /** 보류 사유를 제외한 작업 중 다음 재시도 가능 시각을 조회한다. */
+  nextRetryAt(): Promise<number | null>;
   /** 기간 탐색을 영속 접수한다. 같은 요청 키·기간·출처는 기존 실행 ID를 반환한다. */
   enqueueRun(period: NoticeRunPeriod, requestKey?: string, source?: NoticeSource): Promise<number>;
   /** 중단 사유가 없을 때 지정한 출처의 탐색을 선점한다. 생략하면 수동 탐색을 우선한다. */

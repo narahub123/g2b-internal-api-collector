@@ -162,6 +162,16 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (3);
       `);
     }
+    const actionsUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 4");
+    if (actionsUpgrade.rows.length === 0) {
+      // Actions가 실행권을 얻기 전까지 중복 호출을 제한하고, 러너가 시작하지 않으면 예약을 만료시킨다.
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_notice_queue ADD COLUMN dispatchToken TEXT;
+        ALTER TABLE g2b_notice_queue ADD COLUMN dispatchUntil INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE g2b_notice_automatic ADD COLUMN probeMaintenance INTEGER;
+        INSERT INTO g2b_schema_migrations (version) VALUES (4);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

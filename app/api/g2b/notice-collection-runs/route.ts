@@ -1,4 +1,5 @@
 import { validateNoticePeriod } from "@/features/collect-g2b/api/notice-period";
+import { wakeNoticeWorker } from "@/features/collect-g2b/api/notice-actions";
 import { logNoticeQueueError } from "@/features/collect-g2b/api/notice-queue-diagnostics";
 import { getG2bRepository } from "@/server/g2b/repository";
 
@@ -24,6 +25,7 @@ export async function POST(request: Request) {
   }
   try {
     const id = await getG2bRepository().noticeQueue.enqueueRun({ startMinute, endMinute }, requestKey);
+    await wakeNoticeWorker();
     return Response.json({ id }, { status: 202, headers: { Location: `/api/g2b/notice-collection-runs/${id}` } });
   } catch (error) {
     if (error instanceof RangeError) return Response.json({ error: error.message }, { status: 409 });

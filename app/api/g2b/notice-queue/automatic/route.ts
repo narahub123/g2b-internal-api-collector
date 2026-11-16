@@ -1,4 +1,5 @@
 import { logNoticeQueueError } from "@/features/collect-g2b/api/notice-queue-diagnostics";
+import { wakeNoticeWorker } from "@/features/collect-g2b/api/notice-actions";
 import { noticeAutomaticIntervals } from "@/features/collect-g2b/model/notice-automatic";
 import { getG2bRepository } from "@/server/g2b/repository";
 
@@ -26,6 +27,7 @@ export async function PATCH(request: Request) {
   try {
     const automatic = getG2bRepository().noticeQueue.automatic;
     await automatic.update(body);
+    if (body.action === "start") await wakeNoticeWorker();
     return Response.json(await automatic.get());
   } catch (error) {
     if (error instanceof RangeError) return Response.json({ error: error.message }, { status: 400 });
