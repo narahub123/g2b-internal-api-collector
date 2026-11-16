@@ -343,3 +343,80 @@ test('기간 탐색은 여러 페이지 분량을 순서대로 등록하고 강�
     db.client.close();
   }
 });
+
+test('자동 구간은 최초 상세 결과를 저장하면 재시도 결과 전에 완료 시각을 기록한다', async () => {
+  const db = await testDatabase();
+  try {
+    const queue = openNoticeQueue(db);
+    const period = { startMinute: '2026-11-11T23:30', endMinute: '2026-11-11T23:59' };
+    const target = (number) => ({ number, revision: '000', methodCode: '', title: number });
+    const id = await queue.enqueueRun(period, 'auto-window', 'automatic');
+    await queue.claimRun();
+    await queue.finishRun(id, { kind: 'targets', targets: ['R', 'A', 'B', 'C'].map(target) });
+
+    assert.equal(await queue.getAutomaticCoveredThrough(), null);
+    const retry = await queue.claim(0);
+    assert.equal(retry.source, 'automatic');
+    await queue.finish(retry.id, { kind: 'failure', error: '상세 실패' }, 0);
+
+    const current = (await queue.claimNext(0, true)).job;
+    assert.equal(current.input.number, 'A');
+    const [manual] = await queue.enqueue([target('M')], true);
+    const manualRun = await queue.enqueueRun(period);
+    const pendingAutoRun = await queue.enqueueRun(period, 'pending-auto', 'automatic');
+    assert.equal(await queue.claimNext(60000, true), undefined);
+    await queue.finish(current.id, { kind: 'success', related: [], result: {} }, 60000);
+
+    assert.equal((await queue.claimNext(60000, true)).job.id, manual);
+    await queue.finish(manual, { kind: 'success', related: [], result: {} }, 60000);
+    assert.equal((await queue.claimNext(60000, true)).run.id, manualRun);
+    await queue.finishRun(manualRun, { kind: 'failure', error: '목록 조회 중단' });
+    assert.equal((await queue.claimNext(60000, true)).job.id, retry.id);
+    await queue.finish(retry.id, { kind: 'failure', error: '상세 실패' }, 60000);
+    assert.equal((await queue.claimNext(60000, true)).run.id, pendingAutoRun);
+    await queue.finishRun(pendingAutoRun, { kind: 'failure', error: '목록 조회 중단' });
+
+    const next = await queue.claim(60000);
+    assert.equal(next.input.number, 'B');
+    await queue.finish(next.id, { kind: 'success', related: [], result: {} }, 60000);
+    assert.equal(await queue.getAutomaticCoveredThrough(), null);
+    const last = await queue.claim(60000);
+    assert.equal(last.input.number, 'C');
+    const outcome = { kind: 'success', related: [], result: {} };
+    await db.client.executeMultiple("CREATE TRIGGER fail_coverage BEFORE UPDATE OF coveredThrough ON g2b_notice_runs BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+    await assert.rejects(() => queue.finish(last.id, outcome, 60000), /test failure/);
+    assert.equal(await queue.getAutomaticCoveredThrough(), null);
+    assert.equal((await queue.get(last.id)).status, 'running');
+    await db.client.execute("DROP TRIGGER fail_coverage");
+    await queue.recover();
+    assert.equal((await queue.claim(60000)).id, last.id);
+    await queue.finish(last.id, outcome, 60000);
+
+    assert.equal(await queue.getAutomaticCoveredThrough(), period.endMinute);
+    assert.equal((await queue.getRun(id)).status, 'collecting');
+    assert.equal((await queue.claim(120000)).id, retry.id);
+    await queue.finish(retry.id, { kind: 'failure', error: '상세 실패' }, 120000);
+    assert.equal((await queue.get(retry.id)).status, 'failed');
+
+    const nextPeriod = { startMinute: period.endMinute, endMinute: '2026-11-12T00:30' };
+    const failedRun = await queue.enqueueRun(nextPeriod, undefined, 'automatic');
+    await queue.claimRun();
+    await queue.finishRun(failedRun, { kind: 'failure', error: '목록 조회 중단' });
+    assert.equal(await queue.getAutomaticCoveredThrough(), period.endMinute);
+
+    const deferredRun = await queue.enqueueRun(nextPeriod, undefined, 'automatic');
+    await queue.claimRun();
+    await queue.finishRun(deferredRun, { kind: 'targets', targets: [target('D')] });
+    const deferred = await queue.claim(120000);
+    await queue.finish(deferred.id, { kind: 'maintenance', error: '점검' }, 120000);
+    assert.equal((await queue.get(deferred.id)).failures, 0);
+    assert.equal(await queue.getAutomaticCoveredThrough(), period.endMinute);
+    assert.equal(await queue.claimNext(120000, true), undefined);
+    await queue.clearMaintenance(await queue.maintenanceVersion());
+    assert.equal((await queue.claim(120000)).id, deferred.id);
+    await queue.finish(deferred.id, outcome, 120000);
+    assert.equal(await queue.getAutomaticCoveredThrough(), nextPeriod.endMinute);
+  } finally {
+    db.client.close();
+  }
+});

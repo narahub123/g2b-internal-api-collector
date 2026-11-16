@@ -115,7 +115,7 @@ const initialSchema = `
 `;
 
 /**
- * 초기 스키마와 적용 이력을 같은 쓰기 트랜잭션으로 기록한다.
+ * 스키마 변경과 적용 이력을 같은 쓰기 트랜잭션으로 기록한다.
  * @throws 연결 또는 스키마 적용에 실패하면 원래 오류를 전달한다.
  */
 export async function migrateG2bDatabase(client: Client): Promise<void> {
@@ -126,6 +126,21 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
     if (applied.rows.length === 0) {
       await transaction.executeMultiple(initialSchema);
       await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (1)");
+    }
+    const queueUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 2");
+    if (queueUpgrade.rows.length === 0) {
+      // 자동 수집 도입 이전의 작업은 기존 수동 요청에서 비롯됐다.
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_notice_runs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+        ALTER TABLE g2b_notice_runs ADD COLUMN coveredThrough TEXT;
+        ALTER TABLE g2b_notice_walks ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+        ALTER TABLE g2b_notice_walk_visits ADD COLUMN initialTarget INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE g2b_notice_jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+        ALTER TABLE g2b_notice_jobs ADD COLUMN hasFirstResult INTEGER NOT NULL DEFAULT 0;
+        UPDATE g2b_notice_jobs SET hasFirstResult = 1
+          WHERE failures > 0 OR status IN ('succeeded', 'failed');
+        INSERT INTO g2b_schema_migrations (version) VALUES (2);
+      `);
     }
     await transaction.commit();
   } finally {

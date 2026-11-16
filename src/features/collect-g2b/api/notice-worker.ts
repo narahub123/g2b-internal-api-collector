@@ -101,10 +101,9 @@ async function drainQueue(signal: AbortSignal, execute: typeof executeNoticeJob,
         await checkNoticeQueueMaintenance();
         nextMaintenanceCheck = Date.now() + 60_000;
       }
-      // 기간 탐색이 연속 접수돼도 준비된 상세 작업과 번갈아 처리한다.
-      if (preferRun) run = await queue.claimRun();
-      if (!run) job = await queue.claim(now);
-      if (!job && !preferRun) run = await queue.claimRun();
+      const next = await queue.claimNext(now, preferRun);
+      if (next?.kind === "run") run = next.run;
+      if (next?.kind === "job") job = next.job;
     } catch (error) {
       if (error instanceof NoticeWorkerLeaseLostError) throw error;
       logNoticeQueueError("claim", error);
