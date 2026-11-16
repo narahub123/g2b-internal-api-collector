@@ -45,45 +45,53 @@ function fetchContractRequestData(
 }
 
 /**
- * 계약요청 품목을 페이지 단위로 모두 조회하고 식별자 및 반복 페이지를 검사한다.
- * 같은 페이지가 반복되면 종료 조건에 도달하지 못할 수 있어 오류로 처리한다.
+ * 계약요청 품목 API를 한 번 호출하여 전체 품목을 조회한다.
+ * 응답 배열과 계약요청 식별자를 검증한 뒤 품목 목록을 반환한다.
  *
  * @param key 계약요청 식별자.
- * @param checkMaintenance 상세 조회에서 점검을 확인했으면 다음 품목 요청 전에 중단하는 검사.
- * @returns 검증을 통과한 전체 품목 목록.
- * @throws 상세 또는 품목에서 점검을 확인했거나, 조회에 실패했거나, 다른 식별자 또는 반복 페이지를 받은 경우.
+ * @param checkMaintenance 상세 조회에서 확인된 점검 상태를 조회 전에 검사하는 함수.
+ * @returns 검증을 통과한 품목 목록.
+ * @throws 점검 상태, API 조회 실패, 응답 형식 오류 또는 계약요청 식별자 불일치 시.
  */
 async function collectContractRequestItems(
   key: ContractRequestKey,
   checkMaintenance: () => void,
 ) {
-  const items: Record<string, unknown>[] = [];
-  const seenPages = new Set<string>();
-  for (let page = 1; ; page++) {
-    checkMaintenance();
-    const result = await fetchContractRequestData(
-      "srchDmndSttusItemSql",
+  // 상세 조회에서 시스템 점검이 확인되었다면 품목 API 호출 전에 중단한다.
+  checkMaintenance();
+
+  // 페이지 반복 조회 없이 API를 한 번 호출하여 품목 목록을 가져온다.
+  const result = await fetchContractRequestData("srchDmndSttusItemSql", key);
+
+  const rows = result.dlTotalSrchItemL;
+
+  // 모든 품목이 요청한 계약요청 번호와 차수에 속하는지 확인한다.
+  // 응답이 배열이 아니면 식별자 검사를 생략하고 아래에서 형식 오류로 처리한다.
+  const invalidIndex = Array.isArray(rows)
+    ? rows.findIndex(
+        (row) =>
+          row?.ctrtDmndRcptNo !== key.number ||
+          contractRequestRevision(row?.ctrtDmndRcptOrd) !== key.revision,
+      )
+    : -1;
+
+  // 응답 형식이 잘못되었거나 다른 계약요청의 품목이 포함되면 오류를 발생시킨다.
+  if (!Array.isArray(rows) || invalidIndex >= 0) {
+    const row = rows?.[invalidIndex];
+
+    throw collectionValidationError(
+      "요청한 계약요청의 품목 응답을 받지 못했습니다.",
+      "dlTotalSrchItemL",
       key,
-      page,
+      {
+        number: row?.ctrtDmndRcptNo,
+        revision: row?.ctrtDmndRcptOrd,
+      },
     );
-    const rows = result.dlTotalSrchItemL;
-    const invalidIndex = Array.isArray(rows) ? rows.findIndex((row) =>
-      row?.ctrtDmndRcptNo !== key.number || contractRequestRevision(row?.ctrtDmndRcptOrd) !== key.revision) : -1;
-    if (!Array.isArray(rows) || invalidIndex >= 0) {
-      const row = rows?.[invalidIndex];
-      throw collectionValidationError("요청한 계약요청의 품목 응답을 받지 못했습니다.", "dlTotalSrchItemL", key,
-        { number: row?.ctrtDmndRcptNo, revision: row?.ctrtDmndRcptOrd });
-    }
-    // API가 다음 페이지에도 같은 품목을 반환하면 중복 저장과 무한 조회를 막는다.
-    const signature = JSON.stringify(rows.map(({ rowNum, ...item }) => item));
-    if (seenPages.has(signature))
-      throw new Error(
-        "나라장터가 같은 계약요청 품목 페이지를 반복 반환했습니다.",
-      );
-    seenPages.add(signature);
-    items.push(...rows);
-    if (rows.length < contractItemPageSize) return items;
   }
+
+  // 품목 수와 관계없이 검증을 통과한 응답 배열 전체를 반환한다.
+  return rows;
 }
 
 /**

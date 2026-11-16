@@ -1173,6 +1173,44 @@ test('계약요청 상세 점검 이후에는 다음 품목 페이지를 조회�
   assert.deepEqual(repository.findContractRequest(contractKey), previous);
 });
 
+
+test("계약요청 품목이 10건을 초과해도 한 번만 조회하고 전체 저장한다", async (t) => {
+  const contractKey = { number: "REQ-ITEMS-18", revision: "000" };
+  const items = Array.from({ length: 18 }, (_, index) => ({
+    ctrtDmndRcptNo: contractKey.number,
+    ctrtDmndRcptOrd: "0",
+    index,
+  }));
+
+  let itemCalls = 0;
+
+  mockFetch(t, (path) => {
+    if (path.endsWith("/srchDmndSttusSql.do")) {
+      return success({
+        dlTotalSrchL: [
+          {
+            bizNo: contractKey.number,
+            bizOrd: 0,
+          },
+        ],
+      });
+    }
+
+    if (path.endsWith("/srchDmndSttusItemSql.do")) {
+      itemCalls++;
+      return success({ dlTotalSrchItemL: items });
+    }
+
+    assert.fail(path);
+  });
+
+  await collectContractRequest(contractKey, true);
+
+  assert.equal(itemCalls, 1);
+  assert.deepEqual(repository.findContractRequest(contractKey)?.items, items);
+});
+
+
 test('발주계획과 사전규격의 첨부 점검은 저장과 대기 중인 재수집을 보류한다', async (t) => {
   let attachmentCalls = 0;
   let useMaintenance = true;
