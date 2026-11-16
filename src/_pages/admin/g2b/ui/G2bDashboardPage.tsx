@@ -17,6 +17,7 @@ import {
 } from "./collection-count-labels";
 import { cn } from "@/shared/lib/utils";
 import { NoticePeriodCollection } from "./NoticePeriodCollection";
+import { NoticeAutomaticSettings } from "./NoticeAutomaticSettings";
 
 // 카드의 업무 아이콘은 메뉴의 여섯 업무와 일치한다.
 const sectionIcons = {
@@ -29,7 +30,7 @@ const sectionIcons = {
 } satisfies Record<CollectionSection, typeof ClipboardList>;
 
 /**
- * 업무별 현황과 전체 목록 링크 아래에 입찰공고 기간 수집을 제공한다.
+ * 업무별 현황과 목록 링크 아래에 공고 기간 수집과 자동 수집 설정을 제공한다.
  * @throws Turso 저장소를 열거나 수집 현황을 읽지 못한 경우.
  */
 export async function G2bDashboardPage() {
@@ -79,6 +80,7 @@ export async function G2bDashboardPage() {
         })}
       </div>
       <NoticePeriodCollection />
+      <NoticeAutomaticSettings />
     </section>
   );
 }

@@ -1,5 +1,6 @@
 import type { CollectNoticeInput } from "@/features/collect-g2b/model/input";
 import type { CollectionDiagnostic } from "@/shared/api/g2b/collection-diagnostic";
+import type { openNoticeAutomatic } from "./notice-automatic";
 
 export type NoticeAttemptCompletion = {
   id: number;
@@ -32,7 +33,7 @@ export type NoticeRunOutcome =
 export type NoticeRun = NoticeRunPeriod & {
   id: number;
   status: "pending" | "discovering" | "collecting" | "completed" | "failed";
-  pauseReason: "manual" | "maintenance" | null;
+  pauseReason: "manual" | "maintenance" | "automatic" | null;
   initialCount: number | null;
   totalCount: number;
   succeededCount: number;
@@ -61,6 +62,8 @@ export type NoticeJobOutcome =
   | { kind: "maintenance"; error: string; result?: NoticeJobResult };
 
 export interface NoticeQueue {
+  /** 자동 수집의 관리자 설정과 정기 회차 접수를 관리한다. */
+  automatic: ReturnType<typeof openNoticeAutomatic>;
   /** 기간 탐색을 영속 접수한다. 같은 요청 키·기간·출처는 기존 실행 ID를 반환한다. */
   enqueueRun(period: NoticeRunPeriod, requestKey?: string, source?: NoticeSource): Promise<number>;
   /** 중단 사유가 없을 때 지정한 출처의 탐색을 선점한다. 생략하면 수동 탐색을 우선한다. */
@@ -68,13 +71,13 @@ export interface NoticeQueue {
   /** 목록과 최초 상세 결과가 모두 저장된 자동 구간의 가장 늦은 종료 시각을 반환한다. */
   getAutomaticCoveredThrough(): Promise<string | null>;
   /** 목록 결과와 초기 공고 작업을 한 트랜잭션으로 반영한다. */
-  finishRun(id: number, outcome: NoticeRunOutcome): Promise<void>;
+  finishRun(id: number, outcome: NoticeRunOutcome, now?: number): Promise<void>;
   /** 실행과 소속 공고를 같은 읽기 시점에서 반환한다. ID 생략 시 최근 실행을 조회한다. */
   getRun(id?: number): Promise<NoticeRun | undefined>;
   /** 저장된 상세가 없는 공고의 최근 기간 수집 결과를 조회한다. */
   findRunNotice(number: string, revision: string): Promise<NoticeRun["notices"][number] | undefined>;
-  /** 점검 대기 중인 기간 실행이 있으면 워커의 정상 복귀 확인을 허용한다. */
-  hasActiveRuns(): Promise<boolean>;
+  /** 자동 수집이 꺼져 있을 때 점검 종료 확인이 필요한 수동 대기 작업이 있는지 조회한다. */
+  needsManualMaintenanceCheck(): Promise<boolean>;
   /** 최초 탐색과 작업을 함께 등록하고 대상별 작업 ID를 반환한다. */
   enqueue(inputs: NoticeQueueInput[], force: boolean, retryAttemptId?: number): Promise<number[]>;
   /** 실행 가능한 작업을 수동·재시도·일반 자동 순으로 선점한다. 우선순위를 지정하면 해당 작업만 선택한다. */
@@ -97,6 +100,6 @@ export interface NoticeQueue {
   setManual(paused: boolean): Promise<void>;
   /** 점검을 기록하고 이전 정상 확인의 효력을 무효화한다. */
   markMaintenance(): Promise<void>;
-  /** 같은 세대가 유지된 경우에만 점검 사유를 해제한다. */
-  clearMaintenance(version: number): Promise<void>;
+  /** 점검 세대와 확인이 허용된 일정 세대가 유지된 경우에만 점검 사유를 해제한다. */
+  clearMaintenance(version: number, scheduleGeneration?: number): Promise<void>;
 }

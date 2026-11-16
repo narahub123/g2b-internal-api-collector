@@ -97,7 +97,10 @@ async function drainQueue(signal: AbortSignal, execute: typeof executeNoticeJob,
     // 선점 결과가 불확실한 경우 다음 반복에서 고아 실행을 복구한 뒤 다시 선점한다.
     try {
       const now = Date.now();
-      if (now >= nextMaintenanceCheck && (await queue.maintenanceVersion()) && (await queue.hasActiveRuns())) {
+      const scheduledCheck = await queue.automatic.tick(now);
+      if (scheduledCheck) {
+        await checkNoticeQueueMaintenance(scheduledCheck);
+      } else if (now >= nextMaintenanceCheck && await queue.needsManualMaintenanceCheck()) {
         await checkNoticeQueueMaintenance();
         nextMaintenanceCheck = Date.now() + 60_000;
       }

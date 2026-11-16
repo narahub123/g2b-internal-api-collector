@@ -142,6 +142,26 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (2);
       `);
     }
+    const automaticUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 3");
+    if (automaticUpgrade.rows.length === 0) {
+      // 재개 전에 접수한 공고는 보존하고 구간 완료 시각만 현재 일정 세대로 한정한다.
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_notice_runs ADD COLUMN scheduleGeneration INTEGER;
+        ALTER TABLE g2b_notice_runs ADD COLUMN scheduleFinishedAt INTEGER;
+        CREATE INDEX g2b_notice_runs_schedule ON g2b_notice_runs (scheduleGeneration, phase);
+        CREATE TABLE g2b_notice_automatic (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          enabled INTEGER NOT NULL DEFAULT 0,
+          interval INTEGER NOT NULL DEFAULT 60 CHECK (interval IN (30, 60, 120)),
+          startMinute TEXT,
+          nextAt INTEGER,
+          generation INTEGER NOT NULL DEFAULT 0,
+          immediate INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO g2b_notice_automatic (id) VALUES (1);
+        INSERT INTO g2b_schema_migrations (version) VALUES (3);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

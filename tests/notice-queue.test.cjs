@@ -420,3 +420,235 @@ test('자동 구간은 최초 상세 결과를 저장하면 재시도 결과 전
     db.client.close();
   }
 });
+
+test('자동 수집은 시작 기준 시각으로 스케줄을 계산하고 재개 이전 구간은 새 완료 시각에서 제외한다', async () => {
+  const db = await testDatabase();
+  try {
+    const queue = openNoticeQueue(db);
+    const time = (minute) => Date.parse(`${minute}:00+09:00`);
+    const now = time('2026-11-12T12:20');
+    await queue.automatic.update({ action: 'start', startMinute: '2026-11-12T10:00', interval: 60 }, now);
+    assert.equal((await queue.automatic.get()).nextAt, time('2026-11-12T13:00'));
+    await queue.automatic.tick(now);
+    await queue.automatic.tick(now);
+    const run = await queue.claimRun('automatic');
+    assert.deepEqual([run.startMinute, run.endMinute], ['2026-11-12T10:00', '2026-11-12T12:20']);
+    const target = { number: 'A', revision: '000', methodCode: '', title: '공고' };
+    await queue.finishRun(run.id, { kind: 'targets', targets: [target, { ...target, number: 'B' }] });
+    const active = await queue.claim(now);
+    await queue.automatic.tick(time('2026-11-12T13:00'));
+    assert.equal(await queue.claimRun('automatic'), undefined);
+    await queue.automatic.update({ action: 'stop' }, now);
+    await queue.finish(active.id, { kind: 'success', related: [], result: {} }, now);
+    const [manual] = await queue.enqueue([{ ...target, number: 'M' }], true);
+    assert.equal((await queue.claim(now)).id, manual);
+    await queue.finish(manual, { kind: 'success', related: [], result: {} }, now);
+    assert.equal(await queue.claim(now), undefined);
+    await queue.automatic.update({ action: 'start', startMinute: '2026-11-12T09:00', interval: 60 }, now);
+    await queue.automatic.tick(now);
+    const resumed = await queue.claimRun('automatic');
+    assert.deepEqual([resumed.startMinute, resumed.endMinute], ['2026-11-12T09:00', '2026-11-12T12:20']);
+    await queue.finishRun(resumed.id, { kind: 'failure', error: '조회 중단' }, now);
+    const remaining = await queue.claim(now);
+    assert.equal(remaining.input.number, 'B');
+    await queue.finish(remaining.id, { kind: 'success', related: [], result: {} }, now);
+    await queue.automatic.update({ action: 'interval', interval: 30 }, now);
+    assert.equal((await queue.automatic.get()).nextAt, time('2026-11-12T12:30'));
+    await queue.automatic.tick(time('2026-11-12T12:30'));
+    const next = await queue.claimRun('automatic');
+    assert.deepEqual([next.startMinute, next.endMinute], ['2026-11-12T09:00', '2026-11-12T12:30']);
+  } finally {
+    db.client.close();
+  }
+});
+
+test('자동 수집 상태는 실행 대기와 목록·상세·재시도 실행을 구분한다', async () => {
+  const db = await testDatabase();
+  try {
+    const queue = openNoticeQueue(db);
+    const now = Date.parse('2026-11-12T12:20:00+09:00');
+    const status = async () => (await queue.automatic.get()).status;
+    await queue.automatic.update({ action: 'start', interval: 60, startMinute: '2026-11-12T10:00' }, now);
+    assert.equal(await status(), 'pending');
+    await queue.automatic.tick(now);
+    assert.equal(await status(), 'pending');
+    const run = await queue.claimRun('automatic');
+    assert.equal(await status(), 'running');
+    await queue.finishRun(run.id, { kind: 'targets', targets: [
+      { number: 'A', revision: '000', methodCode: '', title: '공고' },
+    ] }, now);
+    assert.equal(await status(), 'pending');
+    const job = await queue.claim(now);
+    assert.equal(await status(), 'running');
+    await queue.finish(job.id, { kind: 'failure', error: '상세 조회 실패' }, now);
+    assert.equal(await status(), 'pending');
+    await queue.claim(now + 60_000);
+    assert.equal(await status(), 'running');
+    await queue.automatic.update({ action: 'stop' }, now + 60_000);
+    assert.equal(await status(), 'stopping');
+    await queue.finish(job.id, { kind: 'success', related: [], result: {} }, now + 60_000);
+    assert.equal(await status(), 'stopped');
+  } finally {
+    db.client.close();
+  }
+});
+
+test('같은 일정에서 목록 실패 다음 회차는 마지막 완료 시각부터 다시 조회한다', async () => {
+  const db = await testDatabase();
+  try {
+    const queue = openNoticeQueue(db);
+    const time = (minute) => Date.parse(`2026-11-12T${minute}:00+09:00`);
+    await queue.automatic.update({ action: 'start', interval: 60, startMinute: '2026-11-12T10:00' }, time('10:20'));
+    await queue.automatic.tick(time('10:20'));
+    const first = await queue.claimRun('automatic');
+    await queue.finishRun(first.id, { kind: 'targets', targets: [] }, time('10:20'));
+    await queue.automatic.tick(time('11:00'));
+    const failed = await queue.claimRun('automatic');
+    assert.equal(failed.startMinute, first.endMinute);
+    await queue.finishRun(failed.id, { kind: 'failure', error: '목록 중간 실패' }, time('11:01'));
+    await queue.automatic.tick(time('12:00'));
+    const recovered = await queue.claimRun('automatic');
+    assert.deepEqual([recovered.startMinute, recovered.endMinute], [first.endMinute, '2026-11-12T12:00']);
+    await queue.finishRun(recovered.id, { kind: 'targets', targets: [] }, time('12:00'));
+    await queue.automatic.tick(time('13:00'));
+    assert.equal((await queue.claimRun('automatic')).startMinute, recovered.endMinute);
+  } finally {
+    db.client.close();
+  }
+});
+
+test('재개하면 신규 수동, 기존 자동 재시도, 기존·신규 자동 상세 순으로 처리한다', async () => {
+  const db = await testDatabase();
+  try {
+    const queue = openNoticeQueue(db);
+    const now = Date.parse('2026-11-12T12:20:00+09:00');
+    const target = (number) => ({ number, revision: '000', methodCode: '', title: number });
+    const success = { kind: 'success', related: [], result: {} };
+    const start = { action: 'start', interval: 60, startMinute: '2026-11-12T10:00' };
+    await queue.automatic.update(start, now);
+    await queue.automatic.tick(now);
+    const old = await queue.claimRun('automatic');
+    await queue.finishRun(old.id, { kind: 'targets', targets: ['R', 'A', 'B'].map(target) }, now);
+    const retry = await queue.claim(now);
+    await queue.finish(retry.id, { kind: 'failure', error: '일시 오류' }, now);
+    const ongoing = await queue.claim(now);
+    assert.equal(ongoing.input.number, 'A');
+    await queue.automatic.update({ action: 'stop' }, now);
+    await queue.finish(ongoing.id, success, now);
+    assert.equal(await queue.claim(now + 60_000), undefined);
+
+    const resumedAt = now + 120_000;
+    await queue.automatic.update({ ...start, startMinute: '2026-11-12T09:00' }, resumedAt);
+    await queue.automatic.tick(resumedAt);
+    const [manual] = await queue.enqueue([target('M')], true);
+    assert.equal((await queue.claimNext(resumedAt, true)).job.id, manual);
+    await queue.finish(manual, success, resumedAt);
+    assert.equal((await queue.claimNext(resumedAt, true)).job.id, retry.id);
+    await queue.finish(retry.id, success, resumedAt);
+    const resumed = (await queue.claimNext(resumedAt, true)).run;
+    await queue.finishRun(resumed.id, { kind: 'targets', targets: ['B', 'C'].map(target) }, resumedAt);
+    const previous = (await queue.claimNext(resumedAt, false)).job;
+    assert.equal(previous.input.number, 'B');
+    await queue.finish(previous.id, success, resumedAt);
+    assert.equal((await queue.getRun(old.id)).status, 'completed');
+    assert.equal((await queue.getRun(resumed.id)).status, 'collecting');
+    const current = (await queue.claimNext(resumedAt, true)).job;
+    assert.equal(current.input.number, 'C');
+    await queue.finish(current.id, success, resumedAt);
+    assert.equal((await queue.getRun(resumed.id)).status, 'completed');
+    assert.equal(await queue.claimNext(resumedAt, true), undefined);
+    await queue.automatic.tick(Date.parse('2026-11-12T13:00:00+09:00'));
+    assert.equal((await queue.claimRun('automatic')).startMinute, resumed.endMinute);
+  } finally {
+    db.client.close();
+  }
+});
+
+test('늦게 확인한 겹친 정기 회차는 건너뛰고 점검은 다음 정기 시각에만 확인한다', async () => {
+  const db = await testDatabase();
+  try {
+    const queue = openNoticeQueue(db);
+    const time = (minute) => Date.parse(`2026-11-12T${minute}:00+09:00`);
+    const start = '2026-11-12T10:00';
+    await queue.automatic.update({ action: 'start', startMinute: start, interval: 120 }, time('10:20'));
+    await queue.automatic.tick(time('10:20'));
+    const immediate = await queue.claimRun();
+    await queue.finishRun(immediate.id, { kind: 'targets', targets: [] }, time('12:01'));
+    await queue.automatic.tick(time('12:01'));
+    assert.equal(await queue.claimRun(), undefined);
+    assert.equal((await queue.automatic.get()).nextAt, time('14:00'));
+
+    await queue.markMaintenance();
+    assert.equal(await queue.automatic.tick(time('13:59')), undefined);
+    const firstCheck = await queue.automatic.tick(time('14:00'));
+    assert.equal(firstCheck.maintenance, await queue.maintenanceVersion());
+    assert.equal(await queue.automatic.tick(time('14:01')), undefined);
+    await queue.clearMaintenance(firstCheck.maintenance);
+    assert.equal((await queue.automatic.get()).status, 'maintenance');
+    assert.equal(await queue.claimRun(), undefined);
+
+    const nextCheck = await queue.automatic.tick(time('16:00'));
+    await queue.clearMaintenance(nextCheck.maintenance, nextCheck.generation);
+    const recovered = await queue.claimRun();
+    assert.deepEqual([recovered.startMinute, recovered.endMinute], ['2026-11-12T10:20', '2026-11-12T16:00']);
+    await queue.finishRun(recovered.id, { kind: 'targets', targets: [] }, time('16:00'));
+    await queue.automatic.update({ action: 'stop' }, time('16:00'));
+    await queue.markMaintenance();
+    assert.equal(await queue.needsManualMaintenanceCheck(), false);
+    const [manual] = await queue.enqueue([{ number: 'M', revision: '000', methodCode: '' }], true);
+    assert.equal(await queue.needsManualMaintenanceCheck(), true);
+    await queue.clearMaintenance(await queue.maintenanceVersion());
+    assert.equal((await queue.claim(time('16:00'))).id, manual);
+  } finally {
+    db.client.close();
+  }
+});
+
+test('자동 수집 설정 API에서 시작과 중단을 접수하고 워커가 즉시 목록을 조회한다', () => {
+  const { spawnSync } = require('node:child_process');
+  const loader = require.resolve('../scripts/register-project-typescript.cjs');
+  const api = require.resolve('../app/api/g2b/notice-queue/automatic/route.ts');
+  const worker = require.resolve('../src/features/collect-g2b/api/notice-worker.ts');
+  const repository = require.resolve('../src/server/g2b/repository/index.ts');
+  const migrations = require.resolve('../src/server/g2b/repository/migrations.ts');
+  const result = spawnSync(process.execPath, ['-e', `
+    const assert = require('node:assert/strict');
+    require(${JSON.stringify(loader)});
+    process.env.TURSO_DATABASE_URL = ':memory:';
+    process.env.TURSO_AUTH_TOKEN = 'test-token';
+    const { GET, PATCH } = require(${JSON.stringify(api)});
+    const { runNoticeWorker } = require(${JSON.stringify(worker)});
+    const { getG2bDatabase, getG2bRepository } = require(${JSON.stringify(repository)});
+    const { migrateG2bDatabase } = require(${JSON.stringify(migrations)});
+    (async () => {
+      await migrateG2bDatabase(getG2bDatabase().client);
+      const patch = (body) => PATCH(new Request('http://localhost', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      }));
+      assert.equal((await (await GET()).json()).status, 'stopped');
+      const command = { action: 'start', interval: 30, startMinute: '2020-01-01T11:20' };
+      assert.equal((await patch({ ...command, interval: 31 })).status, 400);
+      assert.equal((await patch({ ...command, startMinute: '2020-02-30T11:20' })).status, 400);
+      assert.equal((await patch({ ...command, startMinute: '2099-01-01T11:20' })).status, 400);
+      assert.equal((await patch(command)).status, 200);
+      const stop = new AbortController();
+      let discoveries = 0;
+      await runNoticeWorker(stop.signal, async () => {
+        stop.abort();
+        return { kind: 'success', related: [], result: {} };
+      }, async (start, end) => {
+        discoveries++;
+        assert.equal(start, command.startMinute);
+        assert.ok(end > start);
+        return [{ number: 'R26BK1', revision: '000', methodCode: '', title: '공고' }];
+      });
+      assert.equal(discoveries, 1);
+      assert.equal((await (await GET()).json()).status, 'scheduled');
+      assert.equal(await getG2bRepository().noticeQueue.getRun(), undefined);
+      assert.equal((await patch({ action: 'stop' })).status, 200);
+      assert.equal((await (await GET()).json()).nextAt, null);
+      getG2bDatabase().client.close();
+    })().catch((error) => { console.error(error); process.exitCode = 1; });
+  `], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 0, result.stderr || String(result.error));
+});

@@ -6,19 +6,23 @@ import { collectOrderPlan } from "./order-plans";
 import { relatedPlanInputs } from "./collect-and-save-notice";
 export { logNoticeQueueError } from "./notice-queue-diagnostics";
 
-/** 접수 결과와 별개로 같은 점검 세대의 종료 여부를 확인한다. */
-export async function checkNoticeQueueMaintenance() {
+/**
+ * 점검 종료 여부를 확인한다. 자동 수집이 켜져 있으면 정기 회차에서만 확인한다.
+ * @param scheduled 정기 회차가 접수될 때 확인한 점검·일정 세대.
+ */
+export async function checkNoticeQueueMaintenance(scheduled?: { maintenance: number; generation: number }) {
   try {
     const queue = getG2bRepository().noticeQueue;
-    const version = await queue.maintenanceVersion();
+    const version = scheduled?.maintenance ?? await queue.maintenanceVersion();
     if (!version) return;
+    if (!scheduled && (await queue.automatic.get()).enabled) return;
     try {
       await createG2bSession();
     } catch {
       // 통신 장애와 점검 응답 모두 정상 복귀의 근거가 될 수 없다.
       return;
     }
-    await queue.clearMaintenance(version);
+    await queue.clearMaintenance(version, scheduled?.generation);
   } catch (error) {
     logNoticeQueueError("check-maintenance", error);
   }

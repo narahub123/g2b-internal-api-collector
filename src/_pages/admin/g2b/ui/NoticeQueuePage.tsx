@@ -7,7 +7,7 @@ import type { NoticeQueue } from "@/server/g2b/repository/notice-queue-types";
 const endpoint = "/api/g2b/notice-queue";
 const labels = { pending: "대기", running: "실행 중", retry_wait: "재시도 대기", succeeded: "완료", failed: "최종 실패" };
 
-/** 공고 큐의 중단 사유와 최근 작업을 확인하고 수동 중단을 변경한다. */
+/** 수동·자동 공고 작업의 실행 상태를 확인하고 전체 큐의 일시 중단을 관리한다. */
 export function NoticeQueuePage() {
   const [queue, setQueue] = useState<Awaited<ReturnType<NoticeQueue["overview"]>>>();
   const [readError, setReadError] = useState("");
@@ -67,11 +67,12 @@ export function NoticeQueuePage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <caption className="sr-only">최근 공고 수집 작업</caption>
-            <thead><tr className="border-b"><th className="p-2">작업 ID</th><th>공고번호·차수</th><th>상태</th><th>실패 횟수</th><th>오류</th></tr></thead>
+            <thead><tr className="border-b"><th className="p-2">작업 ID</th><th>공고번호·차수</th><th>수집 방식</th><th>상태</th><th>실패 횟수</th><th>오류</th></tr></thead>
             <tbody>{queue.jobs.map((job) => (
               <tr className="border-b" key={job.id}>
                 <td className="p-2">{job.id}</td>
-                <td>{job.input.number}-{job.input.revision}</td><td>{labels[job.status]}</td>
+                <td>{job.input.number}-{job.input.revision}</td><td>{job.source === "automatic" ? "자동" : "수동"}</td>
+                <td>{labels[job.status]}</td>
                 <td>{job.failures}</td><td>{job.error}</td>
               </tr>
             ))}</tbody>

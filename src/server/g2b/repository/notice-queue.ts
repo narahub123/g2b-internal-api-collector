@@ -1,4 +1,5 @@
 import type { G2bDatabase } from "./database";
+import { openNoticeAutomatic } from "./notice-automatic";
 import type { NoticeJob, NoticeQueue, NoticeQueueInput, NoticeRun, NoticeRunPeriod, NoticeSource } from "./notice-queue-types";
 
 type JobRow = Omit<NoticeJob, "input" | "result" | "force"> & { input: string; result: string | null; force: number };
@@ -15,7 +16,9 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
   const transaction = db.transaction.bind(db);
 
   async function state() {
-    return await db.prepare("SELECT manual, maintenance FROM g2b_notice_queue WHERE id = 1").get() as { manual: number; maintenance: number };
+    return await db.prepare(`SELECT q.manual, q.maintenance, (a.generation > 0 AND a.enabled = 0) AS automaticPaused
+      FROM g2b_notice_queue q JOIN g2b_notice_automatic a ON a.id = q.id WHERE q.id = 1`).get() as
+      { manual: number; maintenance: number; automaticPaused: number };
   }
 
   async function attachForced(walk: number, input: NoticeQueueInput) {
@@ -113,13 +116,13 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
   }
 
   // 최초 상세 결과가 재시도 대기 상태로 저장되어도 구간 완료 조건을 충족한다.
-  async function recordCoverage(walk: number) {
-    await db.prepare(`UPDATE g2b_notice_runs SET coveredThrough = endMinute
+  async function recordCoverage(walk: number, now: number) {
+    await db.prepare(`UPDATE g2b_notice_runs SET coveredThrough = endMinute, scheduleFinishedAt = ?
       WHERE walkId = ? AND source = 'automatic' AND phase = 'collecting' AND coveredThrough IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM g2b_notice_walk_visits v JOIN g2b_notice_jobs j ON j.id = v.job_id
         WHERE v.walk_id = g2b_notice_runs.walkId AND v.initialTarget = 1 AND j.hasFirstResult = 0
-      )`).run(walk);
+      )`).run(now, walk);
   }
 
   function runNotice(row: JobRow): NoticeRun["notices"][number] {
@@ -129,6 +132,7 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
   }
 
   const queue: NoticeQueue = {
+    automatic: openNoticeAutomatic(db),
     enqueueRun(period, requestKey, source = "manual") {
       return transaction(async () => {
         const existing = requestKey && (await db.prepare("SELECT id, startMinute, endMinute, source FROM g2b_notice_runs WHERE requestKey = ?").get(requestKey));
@@ -144,21 +148,23 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
     },
     claimRun(source) {
       return transaction(async () => {
-        const { manual, maintenance } = await state();
+        const { manual, maintenance, automaticPaused } = await state();
         if (manual || maintenance) return;
         return await db.prepare(`UPDATE g2b_notice_runs SET phase = 'discovering', error = NULL WHERE id = (
           SELECT id FROM g2b_notice_runs WHERE phase = 'pending' AND (? IS NULL OR source = ?)
+          AND (? = 0 OR source = 'manual')
           ORDER BY source = 'manual' DESC, id LIMIT 1
         ) AND NOT EXISTS (SELECT 1 FROM g2b_notice_runs WHERE phase = 'discovering')
           AND NOT EXISTS (SELECT 1 FROM g2b_notice_jobs WHERE status = 'running')
-        RETURNING id, startMinute, endMinute`).get(source ?? null, source ?? null) as (NoticeRunPeriod & { id: number }) | undefined;
+        RETURNING id, startMinute, endMinute`).get(source ?? null, source ?? null, automaticPaused) as
+          (NoticeRunPeriod & { id: number }) | undefined;
       });
     },
     async getAutomaticCoveredThrough() {
       const row = await db.prepare("SELECT MAX(coveredThrough) AS coveredThrough FROM g2b_notice_runs WHERE source = 'automatic'").get();
       return (row?.coveredThrough as string | null | undefined) ?? null;
     },
-    finishRun(id, outcome) {
+    finishRun(id, outcome, now = Date.now()) {
       return transaction(async () => {
         const run = await db.prepare("SELECT source FROM g2b_notice_runs WHERE id = ? AND phase = 'discovering'").get(id);
         if (!run) return;
@@ -171,28 +177,28 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
           await db.prepare(`UPDATE g2b_notice_runs SET phase = 'collecting', walkId = ?, error = NULL,
             initialCount = (SELECT COUNT(*) FROM g2b_notice_walk_visits WHERE walk_id = ?) WHERE id = ?`)
             .run(walk, walk, id);
-          if (run.source === "automatic") await recordCoverage(walk);
+          if (run.source === "automatic") await recordCoverage(walk, now);
         } else {
           if (outcome.kind === "maintenance") await markMaintenance();
-          await db.prepare("UPDATE g2b_notice_runs SET phase = ?, error = ? WHERE id = ?")
-            .run(outcome.kind === "maintenance" ? "pending" : "failed", outcome.error, id);
+          await db.prepare("UPDATE g2b_notice_runs SET phase = ?, error = ?, scheduleFinishedAt = ? WHERE id = ?")
+            .run(outcome.kind === "maintenance" ? "pending" : "failed", outcome.error, outcome.kind === "failure" ? now : null, id);
         }
       });
     },
     getRun(id) {
       return transaction(async () => {
-        const run = await db.prepare(`SELECT id, startMinute, endMinute, phase, walkId, initialCount, error
-          FROM g2b_notice_runs WHERE id = COALESCE(?, (SELECT MAX(id) FROM g2b_notice_runs))`).get(id ?? null) as
-          (NoticeRunPeriod & { id: number; phase: NoticeRun["status"]; walkId: number | null; initialCount: number | null; error: string | null }) | undefined;
+        const run = await db.prepare(`SELECT id, startMinute, endMinute, source, phase, walkId, initialCount, error
+          FROM g2b_notice_runs WHERE id = COALESCE(?, (SELECT MAX(id) FROM g2b_notice_runs WHERE source = 'manual'))`).get(id ?? null) as
+          (NoticeRunPeriod & { id: number; source: NoticeSource; phase: NoticeRun["status"]; walkId: number | null; initialCount: number | null; error: string | null }) | undefined;
         if (!run) return;
         const notices = (await db.prepare(`SELECT j.* FROM g2b_notice_walk_visits v JOIN g2b_notice_jobs j ON j.id = v.job_id
           WHERE v.walk_id = ? ORDER BY v.rowid`).all(run.walkId) as JobRow[]).map(runNotice);
         const succeededCount = notices.filter(({ status }) => status === "succeeded").length;
         const failedCount = notices.filter(({ status }) => status === "failed").length;
         const status = run.phase === "collecting" && succeededCount + failedCount === notices.length ? "completed" : run.phase;
-        const { manual, maintenance } = await state();
+        const { manual, maintenance, automaticPaused } = await state();
         const pauseReason = status === "completed" || status === "failed" ? null :
-          maintenance ? "maintenance" : manual ? "manual" : null;
+          maintenance ? "maintenance" : manual ? "manual" : automaticPaused && run.source === "automatic" ? "automatic" : null;
         return { id: run.id, startMinute: run.startMinute, endMinute: run.endMinute, status, pauseReason,
           initialCount: run.initialCount, totalCount: notices.length, succeededCount, failedCount, error: run.error, notices };
       }, false);
@@ -205,10 +211,13 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
         .get(number, revision) as JobRow | undefined;
       return row && runNotice(row);
     },
-    async hasActiveRuns() {
-      return Boolean(await db.prepare(`SELECT 1 FROM g2b_notice_runs r WHERE r.phase IN ('pending', 'discovering')
-        OR EXISTS (SELECT 1 FROM g2b_notice_walk_visits v JOIN g2b_notice_jobs j ON j.id = v.job_id
-          WHERE v.walk_id = r.walkId AND j.status IN ('pending', 'running', 'retry_wait')) LIMIT 1`).get());
+    async needsManualMaintenanceCheck() {
+      return Boolean(await db.prepare(`SELECT 1
+        FROM g2b_notice_automatic a JOIN g2b_notice_queue q ON q.id = a.id
+        WHERE a.id = 1 AND a.enabled = 0 AND q.maintenance <> 0 AND (
+          EXISTS (SELECT 1 FROM g2b_notice_runs WHERE source = 'manual' AND phase IN ('pending', 'discovering'))
+          OR EXISTS (SELECT 1 FROM g2b_notice_jobs WHERE source = 'manual' AND status IN ('pending', 'retry_wait'))
+        )`).get());
     },
     enqueue(inputs, force, retryAttemptId) {
       return transaction(async () => {
@@ -234,17 +243,18 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
     },
     claim(now, priority) {
       return transaction(async () => {
-        const { manual, maintenance } = await state();
+        const { manual, maintenance, automaticPaused } = await state();
         if (manual || maintenance) return;
         const row = await db.prepare(`
           UPDATE g2b_notice_jobs SET status = 'running', executions = executions + 1 WHERE id = (
             SELECT id FROM g2b_notice_jobs WHERE status IN ('pending', 'retry_wait') AND availableAt <= ?
+            AND (? = 0 OR source = 'manual')
             AND NOT EXISTS (SELECT 1 FROM g2b_notice_jobs WHERE status = 'running')
             AND NOT EXISTS (SELECT 1 FROM g2b_notice_runs WHERE phase = 'discovering')
             AND (? IS NULL OR (? = 'manual' AND source = 'manual') OR (? = 'retry' AND failures > 0))
             ORDER BY source = 'manual' DESC, (source = 'automatic' AND failures > 0) DESC, id LIMIT 1
           ) RETURNING *
-        `).get(now, priority ?? null, priority ?? null, priority ?? null) as JobRow | undefined;
+        `).get(now, automaticPaused, priority ?? null, priority ?? null, priority ?? null) as JobRow | undefined;
         return row && job(row);
       });
     },
@@ -313,7 +323,7 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
             JSON.stringify(("result" in outcome ? outcome.result : null) ?? null), Number(outcome.kind !== "maintenance"), id);
         if (outcome.kind !== "maintenance") {
           const initialWalks = await db.prepare("SELECT walk_id FROM g2b_notice_walk_visits WHERE job_id = ? AND initialTarget = 1").all(id);
-          for (const { walk_id } of initialWalks) await recordCoverage(Number(walk_id));
+          for (const { walk_id } of initialWalks) await recordCoverage(Number(walk_id), now);
         }
       });
     },
@@ -345,8 +355,11 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
       await db.prepare("UPDATE g2b_notice_queue SET manual = ? WHERE id = 1").run(Number(paused));
     },
     markMaintenance,
-    async clearMaintenance(version) {
-      await db.prepare("UPDATE g2b_notice_queue SET maintenance = 0 WHERE id = 1 AND maintenance = ?").run(version);
+    async clearMaintenance(version, scheduleGeneration) {
+      await db.prepare(`UPDATE g2b_notice_queue SET maintenance = 0 WHERE id = 1 AND maintenance = ?
+        AND EXISTS (SELECT 1 FROM g2b_notice_automatic
+          WHERE (? IS NULL AND enabled = 0) OR (enabled = 1 AND generation = ?))`)
+        .run(version, scheduleGeneration ?? null, scheduleGeneration ?? null);
     },
   };
   return queue;
