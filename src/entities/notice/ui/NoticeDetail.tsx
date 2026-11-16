@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
+import { orderPlanUnavailableMessage, orderPlanUnprocessableStatus } from "@/shared/config/g2b-order-plan";
 import { Accordion } from "@/shared/ui/accordion";
 import { NoticePostsSection } from "./NoticePostsSection";
 import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
@@ -98,7 +99,7 @@ function originalNoticeHref({ number, revision }: NumberWithRevision) {
 /**
  * 수집한 입찰공고의 상세 정보, 관련 자료 및 원본 페이지 이동 기능을 표시한다.
  * 관련 자료의 주소가 없으면 원래 값을 표시하고, 제목 동작은 호출 화면이 제공할 때만 표시한다.
- * 발주계획번호 항목은 공고 원본의 값을 표시하고 저장된 발주계획번호로 이동한다.
+ * 발주계획번호 항목은 공고 원본의 값을 표시한다. 나라장터에서 미존재를 확인한 경우 번호 아래에 안내한다.
  * 관련공고는 저장된 상세로 연결하며, 미수집 공고는 나라장터 원본 상세로 연결한다.
  * @param props 공고 데이터, 저장된 발주계획번호, 연관 업무 링크와 제목 영역의 동작.
  * @returns 공고 상세 본문과 조건에 따른 관련 정보 및 첨부 목록.
@@ -230,7 +231,8 @@ export function NoticeDetail({
               <dl className="grid gap-4 text-sm">
                 {section.fields.map(({ label, value, ...rest }, index) => {
                   const priorSpecNumber = label === "사전규격등록번호" ? g2bNumber(value) : undefined;
-                  const href = "href" in rest && typeof rest.href === "string" ? rest.href :
+                  const orderPlanUnavailable = label === "발주계획번호" && notice.orderPlanStatus === orderPlanUnprocessableStatus;
+                  const href = orderPlanUnavailable ? undefined : "href" in rest && typeof rest.href === "string" ? rest.href :
                     label === "발주계획번호" && orderPlanNumber
                       ? links.orderPlanPath(orderPlanNumber)
                       : priorSpecNumber && links.priorSpecPath(priorSpecNumber);
@@ -279,7 +281,7 @@ export function NoticeDetail({
                             )}
                             {label === "발주계획번호" && (
                               <p className="text-muted-foreground">
-                                아직 수집된 발주계획이 없습니다.
+                                {orderPlanUnavailable ? orderPlanUnavailableMessage : "아직 수집된 발주계획이 없습니다."}
                               </p>
                             )}
                           </>

@@ -41,14 +41,20 @@ export async function acceptNoticeJob(input: NoticeQueueInput, retryAttemptId?: 
 /** 발주계획은 저장됐지만 연관 공고의 영속 접수가 실패했음을 전달한다. */
 export class QueueRegistrationError extends Error {}
 
-/** 발주계획을 직접 수집하고 저장된 계획에서 발견한 공고를 원자적으로 등록한다. */
+/**
+ * 발주계획을 직접 수집하고 저장된 계획에서 발견한 공고를 원자적으로 등록한다.
+ * @returns 미존재가 확인되면 큐 등록 없이 요청 번호와 상세 조회 상태를 반환한다.
+ * @throws 수집 오류 또는 저장 후 관련 공고를 등록하지 못한 경우의 QueueRegistrationError.
+ */
 export async function collectPlanAndEnqueueNotices(number: string) {
   await checkNoticeQueueMaintenance();
   const plan = await collectOrderPlan(number, true);
+  if (plan.status) return { number: plan.number, status: plan.status };
   try {
     getG2bRepository().noticeQueue.enqueue(relatedPlanInputs(plan.number), false);
   } catch (error) {
     logNoticeQueueError("enqueue-plan-notices", error);
     throw new QueueRegistrationError("발주계획은 저장됐지만 관련 공고를 접수하지 못했습니다.", { cause: error });
   }
+  return { number: plan.number };
 }

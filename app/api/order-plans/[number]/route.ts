@@ -4,14 +4,13 @@ import { collectPlanAndEnqueueNotices, QueueRegistrationError } from '@/features
 /**
  * 차세대 DD 발주계획번호로 상세와 첨부 목록을 다시 조회해 수집이 완료되면 기존 자료를 교체한다.
  * 저장된 계획의 원본 공고 목록을 영속 큐에 등록한다.
- * @returns 성공 시 발주계획번호, 입력 오류는 400, 점검 보류는 503, 그 외 수집 오류는 502를 반환한다.
+ * @returns 성공 시 발주계획번호, 미존재 시 요청 번호와 조회 상태를 반환한다. 입력 오류는 400, 점검 보류나 큐 등록 실패는 503, 그 외 수집 오류는 502다.
  */
 export async function POST(_request: Request, { params }: { params: Promise<{ number: string }> }) {
   const { number } = await params;
   if (!number.trim()) return Response.json({ error: "번호를 입력해 주세요." }, { status: 400 });
   try {
-    await collectPlanAndEnqueueNotices(number);
-    return Response.json({ number });
+    return Response.json(await collectPlanAndEnqueueNotices(number));
   } catch (error) {
     if (error instanceof QueueRegistrationError) return Response.json({ error: error.message }, { status: 503 });
     const maintenance = maintenanceResponse(error);

@@ -11,6 +11,7 @@ import { Card } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
 import { contractApiPath, contractRequestApiPath, openingResultApiPath } from "../api/routes";
 import { parseCollectNoticeInput } from "../model/input";
+import { orderPlanUnavailableMessage, orderPlanUnprocessableStatus } from "@/shared/config/g2b-order-plan";
 
 // 기존 API가 요구하는 번호와 차수 형식으로 입력을 변환한다.
 const settings = {
@@ -76,6 +77,7 @@ function CollectionErrorMessage({ message }: { message: string }) {
  * 업무에 필요한 식별자를 받아 기존 수집 API에 제출한다.
  * 업무별 번호 형식을 제출 전에 검사해 오입력이 수집 이력에 남는 것을 막는다.
  * 오류가 나면 입력을 유지하고, 성공하면 정규화한 식별자를 전달한 뒤 화면 전환 처리가 끝날 때까지 제출을 막는다.
+ * 발주계획 미존재가 확인되면 현재 화면에서 결과를 안내한다.
  * @param props.onCollected 저장 성공 뒤 화면을 갱신하고 이동한다. 실패하면 수집 완료와 화면 갱신 실패를 함께 안내한다.
  * @param props.onFailure 일부 자료가 저장되었을 수 있으므로 호출 화면의 목록과 집계를 갱신한다.
  */
@@ -87,6 +89,7 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
   const config = settings[section];
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [jobId, setJobId] = useState<number>();
   const requestController = useRef<AbortController>(null);
   useEffect(() => () => requestController.current?.abort(), []);
@@ -94,6 +97,7 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
+    setMessage("");
     const fields = new FormData(event.currentTarget);
     const number = String(fields.get("number") ?? "").trim().toUpperCase();
     const revision = "normalizeRevision" in config ? config.normalizeRevision(fields.get("revision")) : "";
@@ -132,6 +136,13 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
         onFailure();
         return;
       }
+      if (section === "order-plans" && response.status === 200) {
+        const result = await response.json();
+        if (result?.status === orderPlanUnprocessableStatus) {
+          setMessage(orderPlanUnavailableMessage);
+          return;
+        }
+      }
       await waitForNoticeJob(response, setJobId, controller.signal);
       try {
         await onCollected(key);
@@ -168,6 +179,7 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
         <Button type="submit" disabled={pending}>{pending ? "수집 중…" : "수집 / 다시 수집"}</Button>
       </form>
       {jobId && <p role="status" className="text-sm">수집 작업 {jobId} 접수됨</p>}
+      {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
       {error && <CollectionErrorMessage message={error} />}
     </Card>
   );

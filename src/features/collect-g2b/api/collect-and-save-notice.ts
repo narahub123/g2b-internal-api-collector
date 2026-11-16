@@ -104,6 +104,7 @@ export function relatedPlanInputs(number: string): NoticeQueueInput[] {
 
 function relatedInputs(notice: Notice): NoticeQueueInput[] {
   const references = getRelatedNoticeKeys(notice.payload).map((key) => ({ ...key, methodCode: "" }));
+  if (notice.orderPlanStatus) return references;
   const planNumber = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
   return planNumber ? [...references, ...relatedPlanInputs(planNumber)] : references;
 }

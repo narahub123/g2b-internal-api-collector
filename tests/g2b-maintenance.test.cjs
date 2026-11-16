@@ -201,6 +201,72 @@ test('코드 99는 요청 번호와 일치하는 사전규격 상세만 저장�
   assert.equal(repository.findOrderPlan(number), null);
 });
 
+test('발주계획 미존재 422는 공고를 정상 저장하고 재수집 성공 시 상태를 해제한다', async (t) => {
+  const noticeKey = { number: 'R26BK01828764', revision: '000' };
+  const number = 'R26DD20928824';
+  const detail = {
+    bidPbancNo: noticeKey.number, bidPbancOrd: noticeKey.revision, bidPbancNm: '발주계획 미존재 공고',
+    oderPlanUntyNo: number,
+  };
+  let status = 422;
+  let message = '발주계획정보가 존재하지 않습니다.';
+  mockFetch(t, (path) => {
+    if (path === '/') return session();
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+    if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
+    if (path.endsWith('/selectItemAnncMngV.do')) return success({ dmItemMap: detail });
+    assert.ok(path.endsWith('/selectOderPlan.do'), path);
+    return status === 200 && !message
+      ? success({ dlOderPlanM: { oderPlanNo: number } })
+      : Response.json({ ErrorCode: -1, ErrorMsg: message }, { status });
+  });
+
+  const { POST } = require('../app/api/order-plans/[number]/route');
+  const collectDirectly = () => POST(new Request('http://localhost'), { params: Promise.resolve({ number }) });
+  const response = await collectDirectly();
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { number, status: 'unprocessable-entity' });
+  const recollect = () => collectSingleNotice({ ...noticeKey, methodCode: '' });
+  await recollect();
+  const saved = await repository.find(noticeKey);
+  assert.equal(saved.orderPlanStatus, 'unprocessable-entity');
+  assert.deepEqual(saved.payload.dmItemMap, detail);
+  assert.equal(repository.findOrderPlan(number), null);
+  assert.ok(!repository.collectionAttempts.overview('order-plans').failures.some((row) => row.number === number));
+
+  const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
+  const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
+  const { createElement } = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const params = Promise.resolve(noticeKey);
+  const admin = await NoticeDetailPage({ params });
+  const user = await G2bDetailPage({ section: 'notices', params, searchParams: Promise.resolve({}) });
+  for (const page of [admin, user]) {
+    const body = page.props.children.find((child) => child?.props?.notice);
+    const html = renderToStaticMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
+    assert.match(html, /R26DD20928824/);
+    assert.match(html, /나라장터에서 해당 발주계획 정보를 찾을 수 없습니다\./);
+    assert.doesNotMatch(html, /href="[^"]*order-plans\/R26DD20928824/);
+  }
+
+  status = 500;
+  assert.equal((await collectDirectly()).status, 502);
+  status = 422;
+  message = '다른 오류';
+  assert.equal((await collectDirectly()).status, 502);
+  status = 200;
+  message = '';
+  await recollect();
+  const updated = await repository.find(noticeKey);
+  assert.equal(updated.orderPlanStatus, undefined);
+  assert.equal(updated.orderPlanNumber, number);
+  const savedPlan = repository.findOrderPlan(number);
+  status = 422;
+  message = '발주계획정보가 존재하지 않습니다.';
+  assert.deepEqual(await (await collectDirectly()).json(), { number, status: 'unprocessable-entity' });
+  assert.deepEqual(repository.findOrderPlan(number), savedPlan);
+});
+
 test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번호로 연결한다', async (t) => {
   const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
   const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
