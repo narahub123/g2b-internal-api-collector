@@ -104,7 +104,7 @@ function originalNoticeHref({ number, revision }: NumberWithRevision) {
  * @param props 공고 데이터, 저장된 발주계획번호, 연관 업무 링크와 제목 영역의 동작.
  * @returns 공고 상세 본문과 조건에 따른 관련 정보 및 첨부 목록.
  */
-export function NoticeDetail({
+export async function NoticeDetail({
   notice,
   orderPlanNumber,
   links,
@@ -113,41 +113,53 @@ export function NoticeDetail({
   notice: Notice;
   orderPlanNumber?: string;
   links: {
-    contractPath: (key: { number: string; revision: string }) => string | undefined;
-    contractRequestPath: (key: { number: string; revision: string }) => string | undefined;
-    noticePath: (key: NumberWithRevision) => string | undefined;
-    openingResultPath: (key: { number: string; revision: string }) => string | undefined;
-    orderPlanPath: (number: string) => string | undefined;
-    priorSpecPath: (number: string) => string | undefined;
+    contractPath: (key: { number: string; revision: string }) => string | undefined | Promise<string | undefined>;
+    contractRequestPath: (key: { number: string; revision: string }) => string | undefined | Promise<string | undefined>;
+    noticePath: (key: NumberWithRevision) => string | undefined | Promise<string | undefined>;
+    openingResultPath: (key: { number: string; revision: string }) => string | undefined | Promise<string | undefined>;
+    orderPlanPath: (number: string) => string | undefined | Promise<string | undefined>;
+    priorSpecPath: (number: string) => string | undefined | Promise<string | undefined>;
   };
   renderActions?: (input: { number: string; revision: string; methodCode: string }) => ReactNode;
 }) {
   const contractLinks = [
     {
       label: "계약요청",
-      links: (notice.contractRequests ?? []).map((key) => ({
+      links: await Promise.all((notice.contractRequests ?? []).map(async (key) => ({
         ...key,
         text: `${key.number} / ${key.revision}`,
-        href: links.contractRequestPath(key),
-      })),
+        href: await links.contractRequestPath(key),
+      }))),
     },
     {
       label: "계약현황",
-      links: (notice.contracts ?? []).map((key) => ({
+      links: await Promise.all((notice.contracts ?? []).map(async (key) => ({
         ...key,
         text: `${key.number} / ${key.revision}`,
-        href: links.contractPath(key),
-      })),
+        href: await links.contractPath(key),
+      }))),
     },
   ].filter(({ links }) => links.length > 0);
   const privateResult = privateNoticeResult(notice.payload);
+  // 표의 원본 표시 조건에서 실제 개찰 링크에 사용되는 키만 조회한다.
+  const openingPaths = new Map<string, string | undefined>();
+  if (!privateResult) {
+    const keys = new Map<string, NumberWithRevision>();
+    getNoticeDisplay(notice.payload, notice.documents, (key) => {
+      keys.set(JSON.stringify([key.number, key.revision]), key);
+      return undefined;
+    }, contractLinks.length > 0);
+    await Promise.all(Array.from(keys, async ([id, key]) => {
+      openingPaths.set(id, await links.openingResultPath(key));
+    }));
+  }
   const sections = privateResult ? [
     ...getPrivateNoticeDisplay(privateResult, notice.privatePosts, notice.privateCodeNames),
     { title: "파일첨부", columns: [], rows: [] },
   ] : getNoticeDisplay(
     notice.payload,
     notice.documents,
-    links.openingResultPath,
+    (key) => openingPaths.get(JSON.stringify([key.number, key.revision])),
     contractLinks.length > 0,
   );
   const attachmentFiles = privateResult ? getPrivateNoticeAttachmentFiles(notice) : getNoticeAttachmentFiles(
@@ -211,7 +223,7 @@ export function NoticeDetail({
             revision={revision}
           />
         )}
-        {sections.map((section) => {
+        {sections.map(async (section) => {
           const { title } = section;
           const relatedLinks = title === relatedNoticeSectionTitle || (isEtc && title === "공고일반")
             ? [...contractLinks]
@@ -219,23 +231,23 @@ export function NoticeDetail({
           if ("relatedNotices" in section && section.relatedNotices?.length) {
             relatedLinks.unshift({
               label: "관련공고",
-              links: section.relatedNotices.map((key) => ({
+              links: await Promise.all(section.relatedNotices.map(async (key) => ({
                 ...key,
                 text: `${key.number}-${key.revision}`,
-                href: links.noticePath(key) ?? originalNoticeHref(key),
-              })),
+                href: await links.noticePath(key) ?? originalNoticeHref(key),
+              }))),
             });
           }
           return "fields" in section ? (
             <DetailAccordionSection key={title} title={title}>
               <dl className="grid gap-4 text-sm">
-                {section.fields.map(({ label, value, ...rest }, index) => {
+                {section.fields.map(async ({ label, value, ...rest }, index) => {
                   const priorSpecNumber = label === "사전규격등록번호" ? g2bNumber(value) : undefined;
                   const orderPlanUnavailable = label === "발주계획번호" && notice.orderPlanStatus === orderPlanUnprocessableStatus;
                   const href = orderPlanUnavailable ? undefined : "href" in rest && typeof rest.href === "string" ? rest.href :
                     label === "발주계획번호" && orderPlanNumber
-                      ? links.orderPlanPath(orderPlanNumber)
-                      : priorSpecNumber && links.priorSpecPath(priorSpecNumber);
+                      ? await links.orderPlanPath(orderPlanNumber)
+                      : priorSpecNumber && await links.priorSpecPath(priorSpecNumber);
                   return (
                     <div
                       key={`${index}-${label ?? ""}`}

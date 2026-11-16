@@ -1,13 +1,16 @@
-import { openG2bRepository } from "./sqlite";
-import type { G2bRepository } from "./types";
+import { G2bDatabase } from "./database";
+import { openG2bRepository } from "./turso";
+import { createTursoClient } from "./turso-client";
 
-let repository: G2bRepository | undefined;
+let database: G2bDatabase | undefined;
+let repository: ReturnType<typeof openG2bRepository> | undefined;
 
-/**
- * 프로세스에서 공유하는 나라장터 저장소를 반환한다.
- * 처음 호출할 때 SQLite 연결을 열고 업무별 테이블을 준비한다.
- * @throws SQLite 연결 또는 스키마 초기화에 실패한 경우.
- */
+/** 프로세스 안의 웹 요청 또는 워커 작업이 하나의 원격 연결을 공유하게 한다. */
+export function getG2bDatabase() {
+  return database ??= new G2bDatabase(createTursoClient());
+}
+
+/** 스키마가 적용된 원격 DB에 연결된 저장소를 반환한다. */
 export function getG2bRepository() {
-  return repository ??= openG2bRepository();
+  return repository ??= openG2bRepository(getG2bDatabase());
 }

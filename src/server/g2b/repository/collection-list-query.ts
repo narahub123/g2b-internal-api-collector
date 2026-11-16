@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { G2bDatabase, SQLInputValue } from "./database";
 import { decodeHTMLStrict } from "entities";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
 import { formatG2bDisplayDate, formatG2bDisplayDateTime } from "@/shared/lib/g2b/g2b-display-format";
@@ -10,6 +10,11 @@ export function cleanText(value: unknown) {
   return typeof value === "string"
     ? decodeHTMLStrict(value).normalize("NFC").trim()
     : "";
+}
+
+/** 원본과 검색어에 같은 대소문자 및 유니코드 정규화 규칙을 적용한다. */
+export function searchText(value: unknown) {
+  return cleanText(value).toLowerCase();
 }
 
 /** 저장된 업무 일시를 날짜 범위 검색과 정렬에 사용하는 문자열로 변환한다. */
@@ -38,9 +43,9 @@ type CollectionPageOptions = {
 /**
  * 검색·필터를 적용한 상태별 집계와 선택된 상태의 페이지를 한 번의 SQLite 조회로 반환한다.
  * @param options projection·columns·where·order는 저장소가 정의한 SQL이며 사용자 값은 values에 바인딩한다.
- * @throws SQLite에서 조회문 준비나 실행이 실패한 경우.
+ * @throws Turso에서 조회문 준비나 실행이 실패한 경우.
  */
-export function queryCollectionPage(db: DatabaseSync, targets: string, options: CollectionPageOptions) {
+export async function queryCollectionPage(db: G2bDatabase, targets: string, options: CollectionPageOptions) {
   const { section, projection, columns, where, values, order, ascending, page } = options;
   const status = options.status === "collected" ? "collectedAt IS NOT NULL"
     : options.status === "uncollected" ? "collectedAt IS NULL" : "TRUE";
@@ -80,7 +85,7 @@ export function queryCollectionPage(db: DatabaseSync, targets: string, options: 
     FROM totals LEFT JOIN paged ON TRUE
     LEFT JOIN g2b_collection_attempts diagnostic_attempt ON diagnostic_attempt.id = paged.id
     ORDER BY sortValue ${ascending ? "ASC" : "DESC"} NULLS LAST, number, revision`;
-  const rows = db
+  const rows = await db
     .prepare(sql)
     .all(section, ...values, page) as (CollectionListRow & {
     total: number;
@@ -106,7 +111,7 @@ const businessKey = "COALESCE(json_extract(b.value, '$.code'), json_extract(b.va
  * @throws SQLite 함수 등록이나 조회문 준비가 실패한 경우.
  */
 export function openCollectionList(
-  db: DatabaseSync,
+  db: G2bDatabase,
   section: CollectionSection,
   targets: string,
   projection: string,
@@ -121,16 +126,16 @@ export function openCollectionList(
   return {
     /**
      * 저장된 업무 자료에 있는 업무구분을 선택지로 조회한다.
-     * @throws SQLite에서 업무구분을 읽지 못한 경우.
+     * @throws Turso에서 업무구분을 읽지 못한 경우.
      */
-    businesses() {
-      return (businessOptions.all(section) as { value: string; label: string }[])
+    async businesses() {
+      return (await businessOptions.all(section) as { value: string; label: string }[])
         .map(({ value, label }) => ({ value, label }));
     },
 
     /**
      * 검색과 필터에 일치하는 건수를 집계하고 선택 상태의 페이지를 반환한다.
-     * @throws SQLite에서 조회문 준비나 실행이 실패한 경우.
+     * @throws Turso에서 조회문 준비나 실행이 실패한 경우.
      */
     page(query: CollectionListQuery) {
       const where: string[] = [];
@@ -138,14 +143,14 @@ export function openCollectionList(
       const { field, query: keyword } = query.search;
       if (keyword) {
         if (field === "number") {
-          where.push("(instr(collection_search_text(number || revision), collection_search_text(?)) > 0 OR instr(collection_search_text(json_extract(fields, '$.receipt')), collection_search_text(?)) > 0)");
-          values.push(keyword.replace(/[\s/-]+/g, "") || keyword, keyword);
+          where.push("(instr(lower(number || revision), ?) > 0 OR instr(json_extract(fields, '$.receipt'), ?) > 0)");
+          values.push(searchText(keyword.replace(/[\s/-]+/g, "") || keyword), searchText(keyword));
         } else if (field === "agency") {
-          where.push("EXISTS (SELECT 1 FROM json_each(fields, '$.agencies') WHERE instr(collection_search_text(value), collection_search_text(?)) > 0)");
-          values.push(keyword);
+          where.push("EXISTS (SELECT 1 FROM json_each(fields, '$.agencies') WHERE instr(value, ?) > 0)");
+          values.push(searchText(keyword));
         } else {
-          where.push("instr(sortTitle, collection_search_text(?)) > 0");
-          values.push(keyword);
+          where.push("instr(sortTitle, ?) > 0");
+          values.push(searchText(keyword));
         }
       }
 
@@ -178,7 +183,7 @@ export function openCollectionList(
       const [sort, direction] = query.sort.split("-");
       return queryCollectionPage(db, targets, {
         section,
-        projection: `${projection} AS fields, NULLIF(collection_search_text(saved.title), '') AS sortTitle`,
+        projection: `${projection} AS fields, NULLIF(saved.searchTitle, '') AS sortTitle`,
         columns: "json_extract(fields, '$.date') AS sortDate",
         where,
         values,

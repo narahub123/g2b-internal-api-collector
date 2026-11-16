@@ -59,35 +59,35 @@ export type NoticeJobOutcome =
 
 export interface NoticeQueue {
   /** 기간 탐색을 영속 접수한다. 같은 요청 키와 기간은 기존 실행 ID를 반환한다. */
-  enqueueRun(period: NoticeRunPeriod, requestKey?: string): number;
+  enqueueRun(period: NoticeRunPeriod, requestKey?: string): Promise<number>;
   /** 중단 사유가 없을 때 대기 중인 기간 탐색 하나를 선점한다. */
-  claimRun(): (NoticeRunPeriod & { id: number }) | undefined;
+  claimRun(): Promise<(NoticeRunPeriod & { id: number }) | undefined>;
   /** 목록 결과와 초기 공고 작업을 한 트랜잭션으로 반영한다. */
-  finishRun(id: number, outcome: NoticeRunOutcome): void;
+  finishRun(id: number, outcome: NoticeRunOutcome): Promise<void>;
   /** 실행과 소속 공고를 같은 읽기 시점에서 반환한다. ID 생략 시 최근 실행을 조회한다. */
-  getRun(id?: number): NoticeRun | undefined;
+  getRun(id?: number): Promise<NoticeRun | undefined>;
   /** 저장된 상세가 없는 공고의 최근 기간 수집 결과를 조회한다. */
-  findRunNotice(number: string, revision: string): NoticeRun["notices"][number] | undefined;
+  findRunNotice(number: string, revision: string): Promise<NoticeRun["notices"][number] | undefined>;
   /** 점검 대기 중인 기간 실행이 있으면 워커의 정상 복귀 확인을 허용한다. */
-  hasActiveRuns(): boolean;
+  hasActiveRuns(): Promise<boolean>;
   /** 최초 탐색과 작업을 함께 등록하고 대상별 작업 ID를 반환한다. */
-  enqueue(inputs: NoticeQueueInput[], force: boolean, retryAttemptId?: number): number[];
+  enqueue(inputs: NoticeQueueInput[], force: boolean, retryAttemptId?: number): Promise<number[]>;
   /** 중단 사유가 없을 때 다음 작업을 선점한다. */
-  claim(now: number): NoticeJob | undefined;
+  claim(now: number): Promise<NoticeJob | undefined>;
   /** 실행 결과와 후속 탐색 작업을 한 트랜잭션에 반영한다. */
-  finish(id: number, outcome: NoticeJobOutcome, now: number, attempts?: readonly NoticeAttemptCompletion[]): void;
+  finish(id: number, outcome: NoticeJobOutcome, now: number, attempts?: readonly NoticeAttemptCompletion[]): Promise<void>;
   /** 독점 워커 실행권 획득 후 미완료 작업과 시도를 정리한다. */
-  recover(): void;
+  recover(): Promise<void>;
   /** 영속 작업 상태와 결과를 조회한다. */
-  get(id: number): NoticeJob | undefined;
+  get(id: number): Promise<NoticeJob | undefined>;
   /** 운영 화면에 표시할 활성 작업과 최근 작업을 조회한다. */
-  overview(): { manual: boolean; maintenance: number; active: number | null; jobs: NoticeJob[] };
+  overview(): Promise<{ manual: boolean; maintenance: number; active: number | null; jobs: NoticeJob[] }>;
   /** 현재 점검 세대를 읽어 확인 도중 들어온 새 점검과 구분한다. */
-  maintenanceVersion(): number;
+  maintenanceVersion(): Promise<number>;
   /** 수동 중단 요청 상태를 저장한다. */
-  setManual(paused: boolean): void;
+  setManual(paused: boolean): Promise<void>;
   /** 점검을 기록하고 이전 정상 확인의 효력을 무효화한다. */
-  markMaintenance(): void;
+  markMaintenance(): Promise<void>;
   /** 같은 세대가 유지된 경우에만 점검 사유를 해제한다. */
-  clearMaintenance(version: number): void;
+  clearMaintenance(version: number): Promise<void>;
 }

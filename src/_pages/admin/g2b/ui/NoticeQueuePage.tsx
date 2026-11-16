@@ -9,7 +9,7 @@ const labels = { pending: "대기", running: "실행 중", retry_wait: "재시�
 
 /** 공고 큐의 중단 사유와 최근 작업을 확인하고 수동 중단을 변경한다. */
 export function NoticeQueuePage() {
-  const [queue, setQueue] = useState<ReturnType<NoticeQueue["overview"]>>();
+  const [queue, setQueue] = useState<Awaited<ReturnType<NoticeQueue["overview"]>>>();
   const [readError, setReadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [saving, setSaving] = useState(false);

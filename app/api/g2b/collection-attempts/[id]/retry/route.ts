@@ -25,7 +25,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   const startedAt = new URL(request.url).searchParams.get("startedAt") ?? undefined;
-  const target = getG2bRepository().collectionAttempts.retryTarget(attemptId, startedAt);
+  const target = await getG2bRepository().collectionAttempts.retryTarget(attemptId, startedAt);
   if (target === "missing") {
     return Response.json({ error: "수집 이력을 찾을 수 없습니다." }, { status: 404 });
   }

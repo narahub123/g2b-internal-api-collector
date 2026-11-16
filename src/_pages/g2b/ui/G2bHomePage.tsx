@@ -31,12 +31,12 @@ const sectionItems = Object.keys(G2B_SECTIONS).filter(isAvailableSection).map((s
 
 /**
  * 업무 탭과 저장된 나라장터 자료를 표시한다. 단계가 생략되거나 미지원이면 입찰공고를 조회한다.
- * @throws SQLite에서 선택한 업무의 자료나 필터 선택지를 읽지 못한 경우.
+ * @throws Turso에서 선택한 업무의 자료나 필터 선택지를 읽지 못한 경우.
  */
 export async function G2bHomePage({ searchParams }: { searchParams: Promise<CollectionSearchParams> }) {
   const params = await searchParams;
   const section = isAvailableSection(params.section) ? params.section : "notices";
-  const { query, result, businesses, ...list } = loadCollectionList(section, params, "collected", {
+  const { query, result, businesses, ...list } = await loadCollectionList(section, params, "collected", {
     excludeMockNotices: section === "notices",
   });
   const listQuery = { ...query, status: "total", page: result.page } as const;

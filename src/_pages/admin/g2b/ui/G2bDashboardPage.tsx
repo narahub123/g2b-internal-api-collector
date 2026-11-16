@@ -30,7 +30,7 @@ const sectionIcons = {
 
 /**
  * 업무별 현황과 전체 목록 링크 아래에 입찰공고 기간 수집을 제공한다.
- * @throws SQLite 저장소를 열거나 수집 현황을 읽지 못한 경우.
+ * @throws Turso 저장소를 열거나 수집 현황을 읽지 못한 경우.
  */
 export async function G2bDashboardPage() {
   await connection();
@@ -40,9 +40,9 @@ export async function G2bDashboardPage() {
     <section className="space-y-6">
       <h1 className="text-2xl font-semibold">{ADMIN_NAVIGATION.g2b.label}</h1>
       <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {ADMIN_NAVIGATION.g2b.sections.map(({ section, href, label }) => {
+        {ADMIN_NAVIGATION.g2b.sections.map(async ({ section, href, label }) => {
           const Icon = sectionIcons[section];
-          const counts = history.counts(section);
+          const counts = await history.counts(section);
           const hasUncollected = counts.uncollected > 0;
           return (
             <AdminDashboardCard

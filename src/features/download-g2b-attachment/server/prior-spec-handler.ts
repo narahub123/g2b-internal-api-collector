@@ -10,7 +10,7 @@ import { attachmentGroup } from '@/shared/model/g2b/g2b-attachments';
  */
 export async function downloadPriorSpecAttachment(_request: Request, { params }: { params: Promise<{ number: string; seq: string }> }) {
   const { number, seq } = await params;
-  const spec = getG2bRepository().findPriorSpec(number);
+  const spec = await getG2bRepository().findPriorSpec(number);
   if (!spec) return Response.json({ error: '사전규격을 찾을 수 없습니다.' }, { status: 404 });
 
   try {

@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     return Response.json({ error: error.message }, { status: 400 });
   }
   try {
-    const id = getG2bRepository().noticeQueue.enqueueRun({ startMinute, endMinute }, requestKey);
+    const id = await getG2bRepository().noticeQueue.enqueueRun({ startMinute, endMinute }, requestKey);
     return Response.json({ id }, { status: 202, headers: { Location: `/api/g2b/notice-collection-runs/${id}` } });
   } catch (error) {
     if (error instanceof RangeError) return Response.json({ error: error.message }, { status: 409 });
@@ -33,9 +33,9 @@ export async function POST(request: Request) {
 }
 
 /** 새로고침 또는 접수 응답 유실 시 복원할 최근 실행을 반환한다. */
-export function GET() {
+export async function GET() {
   try {
-    return Response.json(getG2bRepository().noticeQueue.getRun() ?? null);
+    return Response.json((await getG2bRepository().noticeQueue.getRun()) ?? null);
   } catch (error) {
     logNoticeQueueError("get-latest-run", error);
     return Response.json({ error: "최근 기간 수집 상태를 조회하지 못했습니다." }, { status: 503 });

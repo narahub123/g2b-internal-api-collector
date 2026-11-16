@@ -1,6 +1,5 @@
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { collectionQueryData, noticeQueryData, openingQueryData } from "./query-data";
+import type { G2bDatabase } from "./database";
 import type { ContractRequest } from '@/entities/contract-request/model/contract-request';
 import type { Contract } from '@/entities/contract/model/contract';
 import type { OpeningResult } from '@/entities/opening-result/model/opening-result';
@@ -38,55 +37,8 @@ function parseUsableNotice(data: string, key: NoticeKey) {
   }
 }
 
-export function openG2bRepository(): G2bRepository {
-  const directory = join(process.cwd(), '.data');
-  mkdirSync(directory, { recursive: true });
-  const db = new DatabaseSync(join(directory, 'notices.sqlite'));
-  db.function('notice_has_usable_detail', { deterministic: true }, (data, number, revision) =>
-    Number(typeof data === 'string' && typeof number === 'string' && typeof revision === 'string' &&
-      Boolean(parseUsableNotice(data, { number, revision }))));
-  db.exec(`
-    PRAGMA busy_timeout = 5000;
-    CREATE TABLE IF NOT EXISTS notices (
-      number TEXT NOT NULL,
-      revision TEXT NOT NULL,
-      collected_at TEXT NOT NULL,
-      data TEXT NOT NULL,
-      PRIMARY KEY (number, revision)
-    );
-    CREATE TABLE IF NOT EXISTS order_plans (
-      number TEXT NOT NULL PRIMARY KEY,
-      collected_at TEXT NOT NULL,
-      data TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS prior_specs (
-      number TEXT NOT NULL PRIMARY KEY,
-      collected_at TEXT NOT NULL,
-      data TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS contract_requests (
-      number TEXT NOT NULL,
-      revision TEXT NOT NULL,
-      collected_at TEXT NOT NULL,
-      data TEXT NOT NULL,
-      PRIMARY KEY (number, revision)
-    );
-    CREATE TABLE IF NOT EXISTS contracts (
-      number TEXT NOT NULL,
-      revision TEXT NOT NULL,
-      collected_at TEXT NOT NULL,
-      data TEXT NOT NULL,
-      PRIMARY KEY (number, revision)
-    );
-    CREATE TABLE IF NOT EXISTS opening_results (
-      number TEXT NOT NULL,
-      revision TEXT NOT NULL,
-      opening_revision TEXT NOT NULL,
-      collected_at TEXT NOT NULL,
-      data TEXT NOT NULL,
-      PRIMARY KEY (number, revision, opening_revision)
-    );
-  `);
+/** 업무 원본과 큐를 같은 원격 연결에서 조회하고 갱신한다. */
+export function openG2bRepository(db: G2bDatabase): G2bRepository {
   const collectionCounts = db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM order_plans) AS "order-plans",
@@ -106,46 +58,46 @@ export function openG2bRepository(): G2bRepository {
   const find = db.prepare('SELECT data FROM notices WHERE number = ? AND revision = ?');
   // 정상적인 최신 응답은 보존하되 손상된 행의 저장 시각은 복구를 막지 않는다.
   const save = db.prepare(`
-    INSERT INTO notices (number, revision, collected_at, data) VALUES (?, ?, ?, ?)
+    INSERT INTO notices (number, revision, collected_at, data, query_data) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (number, revision) DO UPDATE SET
-      collected_at = excluded.collected_at, data = excluded.data
+      collected_at = excluded.collected_at, data = excluded.data, query_data = excluded.query_data
     WHERE excluded.collected_at >= notices.collected_at
-      OR notice_has_usable_detail(notices.data, notices.number, notices.revision) = 0
+      OR COALESCE(json_extract(notices.query_data, '$.usable'), 0) = 0
   `);
   const findOrderPlan = db.prepare('SELECT data FROM order_plans WHERE number = ?');
   const findOpeningResult = db.prepare('SELECT data FROM opening_results WHERE number = ? AND revision = ? AND opening_revision = ?');
   const listOpeningResults = db.prepare('SELECT data FROM opening_results WHERE number = ? AND revision = ? ORDER BY opening_revision');
   const saveOpeningResult = db.prepare(`
-    INSERT INTO opening_results (number, revision, opening_revision, collected_at, data) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT (number, revision, opening_revision) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
+    INSERT INTO opening_results (number, revision, opening_revision, collected_at, data, query_data) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (number, revision, opening_revision) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data, query_data = excluded.query_data
     WHERE excluded.collected_at >= opening_results.collected_at
   `);
   const findContract = db.prepare('SELECT data FROM contracts WHERE number = ? AND revision = ?');
   const saveContract = db.prepare(`
-    INSERT INTO contracts (number, revision, collected_at, data) VALUES (?, ?, ?, ?)
+    INSERT INTO contracts (number, revision, collected_at, data, query_data) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (number, revision) DO UPDATE SET
-      collected_at = excluded.collected_at, data = excluded.data
+      collected_at = excluded.collected_at, data = excluded.data, query_data = excluded.query_data
     WHERE excluded.collected_at >= contracts.collected_at
   `);
   const findContractRequest = db.prepare('SELECT data FROM contract_requests WHERE number = ? AND revision = ?');
   const saveContractRequest = db.prepare(`
-    INSERT INTO contract_requests (number, revision, collected_at, data) VALUES (?, ?, ?, ?)
-    ON CONFLICT (number, revision) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
+    INSERT INTO contract_requests (number, revision, collected_at, data, query_data) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (number, revision) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data, query_data = excluded.query_data
     WHERE excluded.collected_at >= contract_requests.collected_at
   `);
   const replaceOrderPlan = db.prepare(`
-    INSERT INTO order_plans (number, collected_at, data) VALUES (?, ?, ?)
-    ON CONFLICT (number) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
+    INSERT INTO order_plans (number, collected_at, data, query_data) VALUES (?, ?, ?, ?)
+    ON CONFLICT (number) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data, query_data = excluded.query_data
     WHERE excluded.collected_at >= order_plans.collected_at
   `);
   const findPriorSpec = db.prepare('SELECT data FROM prior_specs WHERE number = ?');
   const savePriorSpec = db.prepare(`
-    INSERT INTO prior_specs (number, collected_at, data) VALUES (?, ?, ?)
-    ON CONFLICT (number) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data
+    INSERT INTO prior_specs (number, collected_at, data, query_data) VALUES (?, ?, ?, ?)
+    ON CONFLICT (number) DO UPDATE SET collected_at = excluded.collected_at, data = excluded.data, query_data = excluded.query_data
     WHERE excluded.collected_at >= prior_specs.collected_at
   `);
   const saveOrderPlan = db.prepare(`
-    INSERT INTO order_plans (number, collected_at, data) VALUES (?, ?, ?)
+    INSERT INTO order_plans (number, collected_at, data, query_data) VALUES (?, ?, ?, ?)
     ON CONFLICT (number) DO NOTHING
   `);
   const saveOrderPlanAttachments = db.prepare(`
@@ -171,71 +123,72 @@ export function openG2bRepository(): G2bRepository {
     collectionDeletion: openCollectionDeletion(db),
     /**
      * 수집 중에도 업무별 건수가 같은 읽기 시점을 기준으로 집계되도록 한 문장으로 조회한다.
-     * @throws SQLite가 집계 쿼리 실행에 실패한 경우.
+     * @throws Turso가 집계 쿼리 실행에 실패한 경우.
      */
-    getCollectionCounts() {
-      return collectionCounts.get() as G2bCollectionCounts;
+    async getCollectionCounts() {
+      return await collectionCounts.get() as G2bCollectionCounts;
     },
     async list() {
-      return list.all() as NoticeSummary[];
+      return await list.all() as NoticeSummary[];
     },
     async find({ number, revision }) {
-      const row = find.get(number, revision);
+      const row = await find.get(number, revision);
       return row ? JSON.parse(String(row.data)) as Notice : null;
     },
-    findUsableNotice({ number, revision }) {
-      const row = find.get(number, revision);
+    async findUsableNotice({ number, revision }) {
+      const row = await find.get(number, revision);
       return row ? parseUsableNotice(String(row.data), { number, revision }) : null;
     },
     async save(notice) {
-      save.run(notice.number, notice.revision, notice.collectedAt, JSON.stringify(notice));
+      await save.run(notice.number, notice.revision, notice.collectedAt, JSON.stringify(notice), noticeQueryData(notice, Boolean(usableNotice(notice, notice))));
     },
-    findOpeningResult({ number, revision, openingRevision }) {
-      const row = findOpeningResult.get(number, revision, openingRevision);
+    async findOpeningResult({ number, revision, openingRevision }) {
+      const row = await findOpeningResult.get(number, revision, openingRevision);
       return row ? JSON.parse(String(row.data)) as OpeningResult : null;
     },
-    listOpeningResults({ number, revision }) {
-      return listOpeningResults.all(number, revision).map((row) => JSON.parse(String(row.data)) as OpeningResult);
+    async listOpeningResults({ number, revision }) {
+      return (await listOpeningResults.all(number, revision)).map((row) => JSON.parse(String(row.data)) as OpeningResult);
     },
-    saveOpeningResult(result) {
-      saveOpeningResult.run(result.number, result.revision, result.openingRevision, result.collectedAt, JSON.stringify(result));
+    async saveOpeningResult(result) {
+      await saveOpeningResult.run(result.number, result.revision, result.openingRevision, result.collectedAt, JSON.stringify(result), openingQueryData(result));
     },
-    findContract({ number, revision }) {
-      const row = findContract.get(number, revision);
+    async findContract({ number, revision }) {
+      const row = await findContract.get(number, revision);
       return row ? JSON.parse(String(row.data)) as Contract : null;
     },
-    saveContract(contract) {
-      saveContract.run(contract.number, contract.revision, contract.collectedAt, JSON.stringify(contract));
+    async saveContract(contract) {
+      await saveContract.run(contract.number, contract.revision, contract.collectedAt, JSON.stringify(contract), collectionQueryData("contracts", contract));
     },
-    findContractRequest({ number, revision }) {
-      const row = findContractRequest.get(number, revision);
+    async findContractRequest({ number, revision }) {
+      const row = await findContractRequest.get(number, revision);
       return row ? JSON.parse(String(row.data)) as ContractRequest : null;
     },
-    saveContractRequest({ number, revision, collectedAt, ...data }) {
-      saveContractRequest.run(number, revision, collectedAt, JSON.stringify({ number, revision, collectedAt, ...data }));
+    async saveContractRequest({ number, revision, collectedAt, ...data }) {
+      await saveContractRequest.run(number, revision, collectedAt, JSON.stringify({ number, revision, collectedAt, ...data }), collectionQueryData("contract-requests", data));
     },
-    findOrderPlan(number) {
-      const row = findOrderPlan.get(number);
+    async findOrderPlan(number) {
+      const row = await findOrderPlan.get(number);
       return row ? JSON.parse(String(row.data)) as OrderPlan : null;
     },
-    saveOrderPlan(plan) {
-      saveOrderPlan.run(plan.number, plan.collectedAt, JSON.stringify(plan));
+    async saveOrderPlan(plan) {
+      await saveOrderPlan.run(plan.number, plan.collectedAt, JSON.stringify(plan), collectionQueryData("order-plans", plan));
     },
-    saveOrderPlanAttachments(number, collectedAt, attachments) {
-      saveOrderPlanAttachments.run(JSON.stringify(attachments), number, collectedAt);
+    async saveOrderPlanAttachments(number, collectedAt, attachments) {
+      await saveOrderPlanAttachments.run(JSON.stringify(attachments), number, collectedAt);
     },
-    findNoticesForOrderPlan(number) {
-      return findNoticesForOrderPlan.all(number) as NoticeKey[];
+    async findNoticesForOrderPlan(number) {
+      return await findNoticesForOrderPlan.all(number) as NoticeKey[];
     },
-    replaceOrderPlan(plan) {
-      replaceOrderPlan.run(plan.number, plan.collectedAt, JSON.stringify(plan));
+    async replaceOrderPlan(plan) {
+      await replaceOrderPlan.run(plan.number, plan.collectedAt, JSON.stringify(plan), collectionQueryData("order-plans", plan));
     },
-    findPriorSpec(number) {
-      const row = findPriorSpec.get(number);
+    async findPriorSpec(number) {
+      const row = await findPriorSpec.get(number);
       return row ? JSON.parse(String(row.data)) as PriorSpec : null;
     },
-    savePriorSpec(spec) {
-      savePriorSpec.run(spec.number, spec.collectedAt, JSON.stringify(spec));
+    async savePriorSpec(spec) {
+      await savePriorSpec.run(spec.number, spec.collectedAt, JSON.stringify(spec), collectionQueryData("prior-specs", spec));
     },
   };
 }
+

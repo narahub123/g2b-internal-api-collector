@@ -21,7 +21,7 @@ export async function OrderPlanDetailPage({
   const { number } = await params;
   if (g2bNumber(number) !== number) notFound();
   const repository = getG2bRepository();
-  const plan = repository.findOrderPlan(number);
+  const plan = await repository.findOrderPlan(number);
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
@@ -30,7 +30,7 @@ export async function OrderPlanDetailPage({
       {plan ? (
         <OrderPlanDetail
           plan={plan}
-          notices={orderPlanNoticeReferences(plan, repository.findNoticesForOrderPlan(number))}
+          notices={orderPlanNoticeReferences(plan, await repository.findNoticesForOrderPlan(number))}
           noticePath={noticePath}
           priorSpecPath={priorSpecPath}
           actions={

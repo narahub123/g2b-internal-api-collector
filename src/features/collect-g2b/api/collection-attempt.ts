@@ -4,7 +4,7 @@ import type { CollectionTarget } from "@/server/g2b/repository/collection-attemp
 import type { NoticeAttemptCompletion } from "@/server/g2b/repository/notice-queue-types";
 import { reportCollectionMaintenance } from "./notice-queue-diagnostics";
 import { findMaintenance } from "@/shared/api/g2b/g2b-maintenance";
-import { collectionError, collectionStep, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
+import { collectionError, collectionAsyncStep, collectionStep, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
 
 const activeAttempts = new Set<number>();
 // 공고의 병렬 부가 수집도 같은 워커 Job에 연결한다.
@@ -31,10 +31,10 @@ export async function trackCollectionAttempt<Result>(
   const context = activeNoticeJob.getStore();
   try {
     history = getG2bRepository().collectionAttempts;
-    id = history.start(target, context?.id ?? job?.id);
+    id = await history.start(target, context?.id ?? job?.id);
   } catch (error) {
     console.error("[수집 이력 시작 실패]", target.section, target.number,
-      describeCollectionError(collectionError(error, { step: "SQLite 수집 이력 시작" })));
+      describeCollectionError(collectionError(error, { step: "저장소 수집 이력 시작" })));
     throw error;
   }
   activeAttempts.add(id);
@@ -42,23 +42,23 @@ export async function trackCollectionAttempt<Result>(
   const recordFailure = (error: unknown) => {
     partial.push(error);
   };
-  const finish = (status: NoticeAttemptCompletion["status"], error: string | null = null, diagnostics?: NoticeAttemptCompletion["diagnostics"]) => {
+  const finish = async (status: NoticeAttemptCompletion["status"], error: string | null = null, diagnostics?: NoticeAttemptCompletion["diagnostics"]) => {
     if (context) {
       context.attempts.push({ id, status, finishedAt: new Date().toISOString(), error, diagnostics });
     } else {
-      history.finish(id, status, error, diagnostics);
+      await history.finish(id, status, error, diagnostics);
     }
   };
-  const finishFailure = (error: unknown, errors: unknown[], status: "failed" | "deferred") => {
-    if (!job && activeNoticeJob.getStore() === undefined) reportCollectionMaintenance(error);
+  const finishFailure = async (error: unknown, errors: unknown[], status: "failed" | "deferred") => {
+    if (!job && activeNoticeJob.getStore() === undefined) await reportCollectionMaintenance(error);
     const diagnostics = describeCollectionError(errors.length
       ? new AggregateError([...errors, error], "나라장터 수집 중 여러 작업이 실패했습니다.")
       : error);
     try {
-      finish(status, (findMaintenance(error)?.message ?? diagnostics.message)?.slice(0, 300), diagnostics);
+      await finish(status, (findMaintenance(error)?.message ?? diagnostics.message)?.slice(0, 300), diagnostics);
     } catch (writeError) {
       console.error("[수집 실패 및 이력 저장 실패]", target.section, target.number, id, diagnostics,
-        describeCollectionError(collectionError(writeError, { step: "SQLite 수집 이력 종료" })));
+        describeCollectionError(collectionError(writeError, { step: "저장소 수집 이력 종료" })));
     }
   };
   try {
@@ -66,15 +66,15 @@ export async function trackCollectionAttempt<Result>(
     try {
       result = await collect(recordFailure);
     } catch (error) {
-      finishFailure(error, partial, findMaintenance(error) ? "deferred" : "failed");
+      await finishFailure(error, partial, findMaintenance(error) ? "deferred" : "failed");
       throw error;
     }
     if (partial.length) {
       const error = new AggregateError(partial, "일부 나라장터 자료를 수집하지 못했습니다.");
-      finishFailure(error, [], "failed");
+      await finishFailure(error, [], "failed");
       job?.onPartialFailure(error);
     } else {
-      finish("succeeded");
+      await finish("succeeded");
     }
     return result;
   } finally {
@@ -83,12 +83,12 @@ export async function trackCollectionAttempt<Result>(
 }
 
 /**
- * 기존 자료 조회에 실패한 경우에만 시도 이력을 만들고 실패한 SQLite 작업을 남긴다.
+ * 기존 자료 조회에 실패한 경우에만 시도 이력을 만들고 실패한 저장소 작업을 남긴다.
  * @throws 저장소 조회에서 발생한 원래 예외.
  */
-export async function trackCollectionLookup<T>(target: CollectionTarget, label: string, read: () => T, jobId?: number): Promise<T> {
+export async function trackCollectionLookup<T>(target: CollectionTarget, label: string, read: () => Promise<T>, jobId?: number): Promise<T> {
   try {
-    return collectionStep(`SQLite ${label} 조회`, read);
+    return await collectionAsyncStep(`저장소 ${label} 조회`, read);
   } catch (error) {
     try {
       await trackCollectionAttempt(target, async () => { throw error; }, jobId === undefined ? undefined : { id: jobId, onPartialFailure: () => {} });

@@ -1,4 +1,4 @@
-import { collectionStep, collectionError } from "@/shared/api/g2b/collection-diagnostic";
+import { collectionAsyncStep, collectionStep, collectionError } from "@/shared/api/g2b/collection-diagnostic";
 import { getG2bRepository } from "@/server/g2b/repository";
 import {
   groupOpeningResultQueries,
@@ -165,7 +165,7 @@ export async function collectOpeningResult(
             );
             const entry: OpeningResultEntry = {
               query,
-              detail: collectionStep("개찰결과 응답 검증", () =>
+              detail: await collectionStep("개찰결과 응답 검증", () =>
                 openingResultDetail(config.endpoint, payload, key, query)),
             };
             const previousReview = matchingPrevious(query)?.qualificationReview;
@@ -264,7 +264,7 @@ export async function collectOpeningResult(
           priceOutcome.status === "fulfilled"
         ) {
           try {
-            collectionStep("SQLite 개찰결과 저장", () => repository.saveOpeningResult({
+            await collectionAsyncStep("저장소 개찰결과 저장", () => repository.saveOpeningResult({
               ...key,
               collectedAt: new Date().toISOString(),
               results: updated,

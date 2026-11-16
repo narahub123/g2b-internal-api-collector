@@ -7,13 +7,16 @@
     "build": "next build --webpack",
     "start": "next start --hostname 127.0.0.1",
     "worker:notices": "node scripts/notice-worker.cjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "node scripts/g2b-migrate.cjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "@next/env": "^16.4.5",
     "@tanstack/react-query": "^5.107.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

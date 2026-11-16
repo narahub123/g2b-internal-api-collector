@@ -6,7 +6,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const id = Number((await params).id);
   if (!Number.isSafeInteger(id) || id < 1) return new Response(null, { status: 404 });
   try {
-    const job = getG2bRepository().noticeQueue.get(id);
+    const job = await getG2bRepository().noticeQueue.get(id);
     return job ? Response.json(job) : new Response(null, { status: 404 });
   } catch (error) {
     logNoticeQueueError("get-job", error, id);

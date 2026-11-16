@@ -7,7 +7,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const id = Number(rawId);
   if (!/^\d+$/.test(rawId) || !Number.isSafeInteger(id) || id < 1) return new Response(null, { status: 404 });
   try {
-    const run = getG2bRepository().noticeQueue.getRun(id);
+    const run = await getG2bRepository().noticeQueue.getRun(id);
     return run ? Response.json(run) : new Response(null, { status: 404 });
   } catch (error) {
     logNoticeQueueError("get-run", error, id);

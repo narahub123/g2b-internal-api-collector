@@ -43,19 +43,19 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
   if (g2bNumber(number) !== number) notFound();
   const repository = getG2bRepository();
   const key = { number, revision };
-  const orderPlanPath = (number: string) => repository.findOrderPlan(number)
+  const orderPlanPath = async (number: string) => (await repository.findOrderPlan(number))
     ? userDetailPath("order-plans", { number, revision: "" })
     : undefined;
-  const priorSpecPath = (number: string) => repository.findPriorSpec(number)
+  const priorSpecPath = async (number: string) => (await repository.findPriorSpec(number))
     ? userDetailPath("prior-specs", { number, revision: "" })
     : undefined;
 
   switch (section) {
     case "order-plans": {
-      const plan = repository.findOrderPlan(number);
+      const plan = await repository.findOrderPlan(number);
       if (!plan) notFound();
       // 공통 본문의 링크 함수는 동기이므로 연결된 공고의 저장 여부를 먼저 조회한다.
-      const notices = orderPlanNoticeReferences(plan, repository.findNoticesForOrderPlan(number));
+      const notices = orderPlanNoticeReferences(plan, await repository.findNoticesForOrderPlan(number));
       const noticePath = await savedNoticePaths(notices);
       return <OrderPlanDetail
         plan={plan}
@@ -65,19 +65,19 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
       />;
     }
     case "prior-specs": {
-      const spec = repository.findPriorSpec(number);
+      const spec = await repository.findPriorSpec(number);
       if (!spec) notFound();
       return <PriorSpecDetail spec={spec} orderPlanPath={orderPlanPath} />;
     }
     case "contract-requests": {
       if (contractRequestRevision(revision) !== revision) notFound();
-      const contractRequest = repository.findContractRequest(key);
+      const contractRequest = await repository.findContractRequest(key);
       if (!contractRequest) notFound();
       return <ContractRequestDetail contractRequest={contractRequest} />;
     }
     case "contracts": {
       if (contractRevision(revision) !== revision) notFound();
-      const contract = repository.findContract(key);
+      const contract = await repository.findContract(key);
       if (!contract) notFound();
       return <ContractDetail contract={contract} />;
     }
@@ -89,19 +89,19 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
         notice={notice}
         orderPlanNumber={notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload)}
         links={{
-          noticePath: (reference) => {
-            const related = repository.findUsableNotice(reference);
+          noticePath: async (reference) => {
+            const related = await repository.findUsableNotice(reference);
             return related && !isMockNotice(related) ? userDetailPath("notices", reference) : undefined;
           },
           orderPlanPath,
           priorSpecPath,
-          contractPath: (reference) => repository.findContract(reference)
+          contractPath: async (reference) => (await repository.findContract(reference))
             ? userDetailPath("contracts", reference)
             : undefined,
-          contractRequestPath: (reference) => repository.findContractRequest(reference)
+          contractRequestPath: async (reference) => (await repository.findContractRequest(reference))
             ? userDetailPath("contract-requests", reference)
             : undefined,
-          openingResultPath: (reference) => repository.listOpeningResults(reference).length
+          openingResultPath: async (reference) => (await repository.listOpeningResults(reference)).length
             ? userDetailPath("opening-results", reference)
             : undefined,
         }}
@@ -109,7 +109,7 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
     }
     case "opening-results": {
       if (!/^\d{3}$/.test(revision)) notFound();
-      const results = repository.listOpeningResults(key);
+      const results = await repository.listOpeningResults(key);
       if (!results.length) notFound();
       const references = results.flatMap((result) => result.results.flatMap(({ query, detail }) => {
         const reference = openingResultNoticeKey(query, detail);

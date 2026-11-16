@@ -58,7 +58,7 @@ type DisplayRow = {
 /**
  * URL에서 선택된 필터에 맞춰 저장 자료와 최신 실패 상태를 대상별 한 행으로 표시한다.
  * @param props.searchParams 수집 상태와 업무 목록에서 지원하는 검색·필터·정렬·페이지 조건.
- * @throws SQLite에서 업무 목록과 수집 이력을 읽지 못한 경우.
+ * @throws Turso에서 업무 목록과 수집 이력을 읽지 못한 경우.
  */
 export async function CollectionListPage({
   section,
@@ -68,12 +68,12 @@ export async function CollectionListPage({
   searchParams: Promise<CollectionSearchParams>;
 }) {
   const params = await searchParams;
-  const paginated = loadCollectionList(section, params);
+  const paginated = await loadCollectionList(section, params);
   const { counts } = paginated.result;
   const selected = paginated.query.status;
   const deletion = getG2bRepository().collectionDeletion;
-  const rows = paginated.result.rows.map((row): DisplayRow => {
-    const { target, blocked } = deletion.snapshot(section, row);
+  const rows = await Promise.all(paginated.result.rows.map(async (row): Promise<DisplayRow> => {
+    const { target, blocked } = await deletion.snapshot(section, row);
     // 화면을 조회한 뒤 다른 프로세스가 원본이나 이력을 바꿨다면 새 버전을 대신 제출하지 않는다.
     const eligible = !blocked && row.status !== "pending" &&
       (row.collectedAt !== null || row.status === "failed" || row.status === "deferred") &&
@@ -86,7 +86,7 @@ export async function CollectionListPage({
         ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error, diagnostics: row.diagnostics }
         : undefined,
     };
-  });
+  }));
   const href = `${ADMIN_G2B_PATH}/${section}`;
 
   return (

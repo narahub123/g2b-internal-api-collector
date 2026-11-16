@@ -20,7 +20,7 @@ export async function PriorSpecDetailPage({
   const { number } = await params;
   if (g2bNumber(number) !== number) notFound();
   const repository = getG2bRepository();
-  const spec = repository.findPriorSpec(number);
+  const spec = await repository.findPriorSpec(number);
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">

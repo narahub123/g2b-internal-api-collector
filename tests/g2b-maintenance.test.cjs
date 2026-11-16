@@ -1,10 +1,8 @@
 const assert = require('node:assert/strict');
 const { after, beforeEach, mock, test } = require('node:test');
-const { readFileSync, mkdtempSync, rmSync } = require('node:fs');
-const { tmpdir } = require('node:os');
+const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { registerHooks, Module } = require('node:module');
-const { DatabaseSync } = require('node:sqlite');
 const { transformSync } = require('next/dist/build/swc');
 
 // 앱과 같은 SWC로 TypeScript와 JSX를 불러오고 테스트 프로세스에서만 별칭을 해석한다.
@@ -18,12 +16,27 @@ for (const extension of ['.ts', '.tsx']) {
     module._compile(code, filename);
   };
 }
+async function renderMarkup(element) {
+  const { renderToReadableStream } = require('react-dom/server');
+  const stream = await renderToReadableStream(element);
+  await stream.allReady;
+  return new Response(stream).text();
+}
+
 const aliasHook = registerHooks({
   resolve(specifier, context, next) {
     return next(specifier.startsWith('@/') ? join(__dirname, '../src', specifier.slice(2)) : specifier, context);
   },
 });
 
+const { createClient } = require('@libsql/client');
+const { G2bDatabase } = require('../src/server/g2b/repository/database');
+const { migrateG2bDatabase } = require('../src/server/g2b/repository/migrations');
+async function testDatabase() {
+  const client = createClient({ url: ':memory:' });
+  await migrateG2bDatabase(client);
+  return new G2bDatabase(client);
+}
 const { G2bMaintenanceError, assertNotMaintenance, findMaintenance, maintenanceResponse } = require('../src/shared/api/g2b/g2b-maintenance');
 const { collectContractRequest, collectOrderPlan, collectPriorSpec } = require('../src/features/collect-g2b/server');
 const { getG2bRepository } = require('../src/server/g2b/repository');
@@ -40,7 +53,7 @@ const { GET: getOrderPlanAttachment } = require('../app/api/order-plans/[number]
 const { collectNotice } = require('../src/features/collect-g2b/api/notices');
 const { getNoticeDisplay, getNoticeAttachmentFiles } = require('../src/entities/notice/model/notice-display');
 
-test('관련공고는 상세 응답의 번호와 차수를 원본 순서로 연관정보에 표시한다', () => {
+test('관련공고는 상세 응답의 번호와 차수를 원본 순서로 연관정보에 표시한다', async () => {
   const display = (relaPbancNo) => getNoticeDisplay({ dmItemMap: { relaPbancNo } }, undefined, () => undefined)
     .find(({ title }) => title === '연관정보');
 
@@ -55,7 +68,7 @@ test('관련공고는 상세 응답의 번호와 차수를 원본 순서로 연�
   assert.equal(display(undefined), undefined);
 });
 
-test('사용자 상세의 목록 복귀 주소는 같은 업무의 홈 조회 조건만 허용한다', () => {
+test('사용자 상세의 목록 복귀 주소는 같은 업무의 홈 조회 조건만 허용한다', async () => {
   const { userDetailPath, userListReturnHref } = require('../src/_pages/g2b/config/routes');
   assert.equal(userDetailPath('order-plans', { number: 'PLAN-1', revision: '' }), '/g2b/order-plans/PLAN-1');
   assert.equal(userDetailPath('opening-results', { number: 'R26BK00001', revision: '000' }), '/g2b/opening-results/R26BK00001/000');
@@ -77,28 +90,22 @@ const group = '00000000-0000-0000-0000-000000000001';
 const collectedAt = '2026-11-01T00:00:00.000Z';
 const key = { number: 'R26BK00000001', revision: '000' };
 // 저장소가 작업 디렉터리를 기준으로 DB를 열므로 테스트는 임시 디렉터리로 격리한다.
-const priorCwd = process.cwd();
-const tempDir = mkdtempSync(join(tmpdir(), 'g2b-maintenance-'));
-const sqliteExec = DatabaseSync.prototype.exec;
-const databases = new Set();
-const execMock = mock.method(DatabaseSync.prototype, 'exec', function (sql) {
-  databases.add(this);
-  return sqliteExec.call(this, sql);
-});
-process.chdir(tempDir);
+process.env.TURSO_DATABASE_URL = ':memory:';
+process.env.TURSO_AUTH_TOKEN = 'test-token';
+const { getG2bDatabase } = require('../src/server/g2b/repository');
+const db = getG2bDatabase();
 const repository = getG2bRepository();
 const { executeNoticeJob } = require('../src/features/collect-g2b/server');
 const queue = repository.noticeQueue;
 
-beforeEach(() => {
-  const db = new DatabaseSync(join(tempDir, '.data', 'notices.sqlite'));
-  sqliteExec.call(db, 'DELETE FROM g2b_notice_walk_visits; DELETE FROM g2b_notice_walks; DELETE FROM g2b_notice_jobs; UPDATE g2b_notice_queue SET manual = 0, maintenance = 0');
-  db.close();
+beforeEach(async () => {
+  await migrateG2bDatabase(db.client);
+  await db.client.executeMultiple('DELETE FROM g2b_notice_walk_visits; DELETE FROM g2b_notice_runs; DELETE FROM g2b_notice_walks; DELETE FROM g2b_notice_jobs; UPDATE g2b_notice_queue SET manual = 0, maintenance = 0');
 });
 
 async function drainNoticeJobs() {
-  for (let job; (job = queue.claim(Date.now())); ) {
-    queue.finish(job.id, await executeNoticeJob(job), Date.now());
+  for (let job; (job = await queue.claim(Date.now())); ) {
+    await queue.finish(job.id, await executeNoticeJob(job), Date.now());
   }
 }
 
@@ -106,7 +113,7 @@ async function acceptedJob(response) {
   assert.equal(response.status, 202);
   const { jobId } = await response.json();
   await drainNoticeJobs();
-  return queue.get(jobId);
+  return await queue.get(jobId);
 }
 
 async function submitNotice(request) {
@@ -114,19 +121,16 @@ async function submitNotice(request) {
 }
 
 async function collectSingleNotice(input, allowPartial = false) {
-  const [id] = queue.enqueue([input], true);
-  const job = queue.claim(Date.now());
+  const [id] = await queue.enqueue([input], true);
+  const job = await queue.claim(Date.now());
   assert.equal(job.id, id);
   const outcome = await executeNoticeJob(job);
-  queue.finish(id, outcome, Date.now());
+  await queue.finish(id, outcome, Date.now());
   if (!allowPartial && outcome.kind !== 'success') throw new Error(outcome.error);
 }
 after(() => {
   aliasHook.deregister();
-  execMock.mock.restore();
-  for (const db of databases) db.close();
-  process.chdir(priorCwd);
-  rmSync(tempDir, { recursive: true, force: true });
+  db.client.close();
 });
 
 function mockFetch(t, respond, noticeList = () => []) {
@@ -162,8 +166,8 @@ test('통합공고는 목록에서 원본 차수를 복원해 기존 실패 이�
   }
   detail = { ...row, bidPbancNm: '통합공고' };
   const history = repository.collectionAttempts;
-  const id = history.start({ section: 'notices', ...input });
-  history.finish(id, 'failed');
+  const id = await history.start({ section: 'notices', ...input });
+  await history.finish(id, 'failed');
   const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
   const response = await retry(new Request('http://localhost', { method: 'POST' }), {
     params: Promise.resolve({ id: String(id) }),
@@ -188,17 +192,17 @@ test('코드 99는 요청 번호와 일치하는 사전규격 상세만 저장�
   });
 
   await collectPriorSpec(number);
-  const saved = repository.findPriorSpec(number);
+  const saved = await repository.findPriorSpec(number);
   assert.deepEqual(saved.payload.dlBfSpecM, detail);
   assert.equal(saved.payload.ErrorCode, '99');
 
   for (const invalidDetail of [undefined, { bfSpecRegNo: 'OTHER' }]) {
     detail = invalidDetail;
     await assert.rejects(collectPriorSpec(number, true));
-    assert.deepEqual(repository.findPriorSpec(number), saved);
+    assert.deepEqual(await repository.findPriorSpec(number), saved);
   }
   await assert.rejects(collectOrderPlan(number));
-  assert.equal(repository.findOrderPlan(number), null);
+  assert.equal(await repository.findOrderPlan(number), null);
 });
 
 test('발주계획 미존재 422는 공고를 정상 저장하고 재수집 성공 시 상태를 해제한다', async (t) => {
@@ -223,27 +227,27 @@ test('발주계획 미존재 422는 공고를 정상 저장하고 재수집 성�
 
   const { POST } = require('../app/api/order-plans/[number]/route');
   const history = repository.collectionAttempts;
-  const countsBefore = history.counts('order-plans');
-  const listByNumber = (status, q = number) => history.orderPlanList.page(parseOrderPlanListQuery({
+  const countsBefore = await history.counts('order-plans');
+  const listByNumber = async (status, q = number) => await history.orderPlanList.page(parseOrderPlanListQuery({
     field: 'number', q, status, page: '2',
   }, []));
   const collectDirectly = () => POST(new Request('http://localhost'), { params: Promise.resolve({ number }) });
   const response = await collectDirectly();
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { number, status: 'unprocessable-entity' });
-  assert.equal(listByNumber('uncollected').counts.uncollected, 1);
+  assert.equal((await listByNumber('uncollected')).counts.uncollected, 1);
   const recollect = () => collectSingleNotice({ ...noticeKey, methodCode: '' });
   await recollect();
   const saved = await repository.find(noticeKey);
   assert.equal(saved.orderPlanStatus, 'unprocessable-entity');
   assert.deepEqual(saved.payload.dmItemMap, detail);
-  assert.equal(repository.findOrderPlan(number), null);
-  assert.ok(!repository.collectionAttempts.overview('order-plans').failures.some((row) => row.number === number));
+  assert.equal(await repository.findOrderPlan(number), null);
+  assert.ok(!(await repository.collectionAttempts.overview('order-plans')).failures.some((row) => row.number === number));
   await repository.save({ ...saved, revision: '001' });
-  assert.deepEqual(history.counts('order-plans'), countsBefore);
-  assert.deepEqual(history.overview('order-plans').counts, countsBefore);
+  assert.deepEqual(await history.counts('order-plans'), countsBefore);
+  assert.deepEqual((await history.overview('order-plans')).counts, countsBefore);
   for (const status of ['total', 'uncollected']) {
-    const result = listByNumber(status);
+    const result = (await listByNumber(status));
     assert.deepEqual(result.counts, { total: 0, collected: 0, uncollected: 0 });
     assert.deepEqual(result.rows, []);
     assert.equal(result.totalPages, 0);
@@ -251,20 +255,20 @@ test('발주계획 미존재 422는 공고를 정상 저장하고 재수집 성�
   }
 
   const failedNumber = 'R26DD20928825';
-  const failedId = history.start({ section: 'order-plans', number: failedNumber });
-  history.finish(failedId, 'failed', '일반 조회 실패');
-  assert.equal(listByNumber('uncollected', failedNumber).rows[0].id, failedId);
+  const failedId = await history.start({ section: 'order-plans', number: failedNumber });
+  await history.finish(failedId, 'failed', '일반 조회 실패');
+  assert.equal((await listByNumber('uncollected', failedNumber)).rows[0].id, failedId);
 
   const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
   const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
   const { createElement } = require('react');
-  const { renderToStaticMarkup } = require('react-dom/server');
+
   const params = Promise.resolve(noticeKey);
   const admin = await NoticeDetailPage({ params });
   const user = await G2bDetailPage({ section: 'notices', params, searchParams: Promise.resolve({}) });
   for (const page of [admin, user]) {
     const body = page.props.children.find((child) => child?.props?.notice);
-    const html = renderToStaticMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
+    const html = await renderMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
     assert.match(html, /R26DD20928824/);
     assert.match(html, /나라장터에서 해당 발주계획 정보를 찾을 수 없습니다\./);
     assert.doesNotMatch(html, /href="[^"]*order-plans\/R26DD20928824/);
@@ -281,21 +285,21 @@ test('발주계획 미존재 422는 공고를 정상 저장하고 재수집 성�
   const updated = await repository.find(noticeKey);
   assert.equal(updated.orderPlanStatus, undefined);
   assert.equal(updated.orderPlanNumber, number);
-  const collected = listByNumber('collected');
+  const collected = (await listByNumber('collected'));
   assert.deepEqual(collected.counts, { total: 1, collected: 1, uncollected: 0 });
   assert.equal(collected.rows[0].number, number);
-  const savedPlan = repository.findOrderPlan(number);
+  const savedPlan = await repository.findOrderPlan(number);
   status = 422;
   message = '발주계획정보가 존재하지 않습니다.';
   assert.deepEqual(await (await collectDirectly()).json(), { number, status: 'unprocessable-entity' });
-  assert.deepEqual(repository.findOrderPlan(number), savedPlan);
+  assert.deepEqual(await repository.findOrderPlan(number), savedPlan);
 });
 
 test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번호로 연결한다', async (t) => {
   const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
   const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
   const { createElement } = require('react');
-  const { renderToStaticMarkup } = require('react-dom/server');
+
   const noticeKey = { number: 'R26BK01824855', revision: '000' };
   const detail = {
     bidPbancNo: noticeKey.number, bidPbancOrd: noticeKey.revision, bidPbancNm: '발주계획 연결 공고',
@@ -325,11 +329,11 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
 
   const recollect = () => collectSingleNotice({ ...noticeKey, methodCode: '' }, true);
   const history = repository.collectionAttempts;
-  const initialCounts = history.counts('order-plans');
+  const initialCounts = await history.counts('order-plans');
   for (returnedNumber of [undefined, 'R26BK20926396']) {
     await recollect();
     assert.equal((await repository.find(noticeKey)).orderPlanNumber, undefined);
-    assert.equal(repository.findOrderPlan('R26BK20926396'), null);
+    assert.equal(await repository.findOrderPlan('R26BK20926396'), null);
   }
 
   returnedNumber = responseNumber;
@@ -339,44 +343,44 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
   const saved = await repository.find(noticeKey);
   assert.deepEqual(saved.payload.dmItemMap, detail);
   assert.equal(saved.orderPlanNumber, responseNumber);
-  assert.equal(repository.findOrderPlan(responseNumber).attachments, undefined);
-  assert.equal(repository.findOrderPlan(detail.oderPlanUntyNo), null);
-  assert.deepEqual(history.counts('order-plans'), {
+  assert.equal((await repository.findOrderPlan(responseNumber)).attachments, undefined);
+  assert.equal(await repository.findOrderPlan(detail.oderPlanUntyNo), null);
+  assert.deepEqual(await history.counts('order-plans'), {
     total: initialCounts.total + 1, collected: initialCounts.collected + 1, uncollected: initialCounts.uncollected,
   });
-  const failure = history.overview('order-plans').failures.find(({ number }) => number === responseNumber);
+  const failure = (await history.overview('order-plans')).failures.find(({ number }) => number === responseNumber);
   assert.equal(failure.hasData, true);
-  assert.deepEqual(history.retryTarget(failure.id), { section: 'order-plans', number: responseNumber });
-  assert.deepEqual(history.orderPlanList.page(parseOrderPlanListQuery({
+  assert.deepEqual(await history.retryTarget(failure.id), { section: 'order-plans', number: responseNumber });
+  assert.deepEqual((await history.orderPlanList.page(parseOrderPlanListQuery({
     field: 'number', q: detail.oderPlanUntyNo, status: 'uncollected',
-  }, [])).rows, []);
-  const linkedNotices = () => repository.findNoticesForOrderPlan(responseNumber).map((row) => ({ ...row }));
-  assert.deepEqual(linkedNotices(), [noticeKey]);
-  assert.deepEqual(repository.findNoticesForOrderPlan(detail.oderPlanUntyNo), []);
+  }, []))).rows, []);
+  const linkedNotices = async () => (await repository.findNoticesForOrderPlan(responseNumber)).map((row) => ({ ...row }));
+  assert.deepEqual((await linkedNotices()), [noticeKey]);
+  assert.deepEqual(await repository.findNoticesForOrderPlan(detail.oderPlanUntyNo), []);
   await assert.rejects(collectOrderPlan(detail.oderPlanUntyNo, true), /발주계획의 상세 응답/);
 
   attachmentStatus = 200;
   detail.oderPlanUntyNo = 'R26DD20926397';
   await recollect();
-  assert.ok(repository.findOrderPlan(responseNumber).attachments);
-  const collected = repository.findOrderPlan(responseNumber);
+  assert.ok((await repository.findOrderPlan(responseNumber)).attachments);
+  const collected = await repository.findOrderPlan(responseNumber);
   await recollect();
-  assert.deepEqual(repository.findOrderPlan(responseNumber), collected);
+  assert.deepEqual(await repository.findOrderPlan(responseNumber), collected);
   assert.equal(attachmentCalls, 2);
 
   const anotherKey = { number: 'R26BK01824857', revision: '000' };
   await repository.save({ ...(await repository.find(noticeKey)), ...anotherKey });
   detail.oderPlanUntyNo = 'P81202600BB1-00';
   await recollect();
-  assert.equal(history.retryTarget(failure.id), 'conflict');
-  assert.equal(history.counts('order-plans').uncollected, initialCounts.uncollected);
+  assert.equal(await history.retryTarget(failure.id), 'conflict');
+  assert.equal((await history.counts('order-plans')).uncollected, initialCounts.uncollected);
   const admin = await NoticeDetailPage({ params: Promise.resolve(noticeKey) });
   const user = await G2bDetailPage({
     section: 'notices', params: Promise.resolve(noticeKey), searchParams: Promise.resolve({}),
   });
   for (const [page, prefix] of [[admin, '/admin'], [user, '']]) {
     const body = page.props.children.find((child) => child?.props?.notice);
-    const html = renderToStaticMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
+    const html = await renderMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
     assert.ok(html.includes(`href="${prefix}/g2b/order-plans/${responseNumber}">${detail.oderPlanUntyNo}</a>`));
   }
 
@@ -385,7 +389,7 @@ test('공고의 호출 번호를 표시하고 저장된 발주계획 응답 번�
     ...saved, ...legacyKey, orderPlanNumber: undefined,
     payload: { dmItemMap: { ...detail, oderPlanUntyNo: responseNumber } },
   });
-  assert.deepEqual(linkedNotices(), [noticeKey, legacyKey, anotherKey]);
+  assert.deepEqual((await linkedNotices()), [noticeKey, legacyKey, anotherKey]);
   const orderPlanPage = await G2bDetailPage({
     section: 'order-plans', params: Promise.resolve({ number: responseNumber }), searchParams: Promise.resolve({}),
   });
@@ -420,7 +424,7 @@ test('민간공고 21~24는 원본 상세 API를 사용하고 응답을 보존�
     assert.equal(notice.payload.dmItemMap.prcmBsneSeCd, businessCode);
     await getG2bRepository().save(notice);
   }
-  const { renderToStaticMarkup } = require('react-dom/server');
+
   const { createElement } = require('react');
   const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
   const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
@@ -428,7 +432,7 @@ test('민간공고 21~24는 원본 상세 API를 사용하고 응답을 보존�
   const user = await G2bDetailPage({ section: 'notices', params: Promise.resolve(key), searchParams: Promise.resolve({}) });
   for (const page of [admin, user]) {
     const body = page.props.children.find((child) => child?.props?.notice);
-    const html = renderToStaticMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
+    const html = await renderMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
     let previousIndex = -1;
     for (const heading of ['공고일반', '입찰 및 계약방법', '입찰진행', '현장설명회', '투찰제한', '입찰담당정보', '파일첨부']) {
       const index = html.indexOf(heading, previousIndex + 1);
@@ -443,7 +447,7 @@ test('민간공고 21~24는 원본 상세 API를 사용하고 응답을 보존�
   }
 });
 
-test('민간공고는 원본 조건에 따라 표시하고 빈 필드와 업무별 빈 표를 보존한다', () => {
+test('민간공고는 원본 조건에 따라 표시하고 빈 필드와 업무별 빈 표를 보존한다', async () => {
   const { getPrivateNoticeDisplay } = require('../src/entities/notice/model/private-notice-display');
   const result = {
     bidPbancMap: {
@@ -468,7 +472,7 @@ test('민간공고는 원본 조건에 따라 표시하고 빈 필드와 업무�
   assert.ok(!JSON.stringify(sections).includes('숨김 대상'));
 });
 
-test('민간 첨부의 저장된 코드표가 없어도 누리장터 문서구분을 표시한다', () => {
+test('민간 첨부의 저장된 코드표가 없어도 누리장터 문서구분을 표시한다', async () => {
   const { getPrivateNoticeAttachmentFiles } = require('../src/entities/notice/model/private-notice-display');
   const group = '11e81849-11c5-4dfb-92a9-4d73f48e5a47';
   const notice = {
@@ -510,7 +514,7 @@ test('민간 변경공고는 이전 차수의 공지 본문을 읽고 현재 차
   assert.equal(await fetchPrivateNoticePosts({ ...key, revision: '000' }, '공400002', fetch), undefined);
 });
 
-test('민간공고 기준금액은 개찰 상태 전까지 비공개 값을 숨긴다', () => {
+test('민간공고 기준금액은 개찰 상태 전까지 비공개 값을 숨긴다', async () => {
   const { getPrivateNoticeDisplay } = require('../src/entities/notice/model/private-notice-display');
   const detail = { pnprRlsYn: 'N', evlcrtAmt: 123456, bidPbancPgstCd: '진010008' };
   const sections = () => getPrivateNoticeDisplay({ bidPbancMap: detail });
@@ -631,25 +635,25 @@ function noticeRequest() {
   });
 }
 
-test('수집 이력은 기존 자료와 시도 대상을 합쳐 집계하고 늦게 끝난 시도로 최신 상태를 바꾸지 않는다', () => {
+test('수집 이력은 기존 자료와 시도 대상을 합쳐 집계하고 늦게 끝난 시도로 최신 상태를 바꾸지 않는다', async () => {
   const target = { section: 'contracts', number: 'HISTORY-1', revision: '00' };
-  repository.saveContract({ number: 'LEGACY-1', revision: '00', collectedAt });
+  await repository.saveContract({ number: 'LEGACY-1', revision: '00', collectedAt });
   const history = repository.collectionAttempts;
-  const older = history.start(target);
-  const latest = history.start(target);
-  history.finish(latest, 'failed', '조회 실패');
-  history.finish(older, 'succeeded');
-  const { counts, failures } = history.overview('contracts');
+  const older = await history.start(target);
+  const latest = await history.start(target);
+  await history.finish(latest, 'failed', '조회 실패');
+  await history.finish(older, 'succeeded');
+  const { counts, failures } = await history.overview('contracts');
   assert.deepEqual(counts, { total: 2, collected: 1, uncollected: 1 });
-  assert.deepEqual(history.counts('contracts'), counts);
+  assert.deepEqual(await history.counts('contracts'), counts);
   assert.equal(failures[0].id, latest);
   assert.equal(failures[0].hasData, false);
-  assert.deepEqual(history.retryTarget(latest, failures[0].startedAt), target);
-  assert.equal(history.retryTarget(latest, '2020-01-01T00:00:00.000Z'), 'conflict');
-  repository.saveContract({ number: target.number, revision: target.revision, collectedAt });
-  assert.equal(history.overview('contracts').failures[0].hasData, true);
-  history.finish(history.start(target), 'succeeded');
-  assert.equal(history.overview('contracts').failures.length, 0);
+  assert.deepEqual(await history.retryTarget(latest, failures[0].startedAt), target);
+  assert.equal(await history.retryTarget(latest, '2020-01-01T00:00:00.000Z'), 'conflict');
+  await repository.saveContract({ number: target.number, revision: target.revision, collectedAt });
+  assert.equal((await history.overview('contracts')).failures[0].hasData, true);
+  await history.finish(await history.start(target), 'succeeded');
+  assert.equal((await history.overview('contracts')).failures.length, 0);
 });
 
 test('수집 폼에서 기존 번호 형식 밖의 공고를 제출한다', async (t) => {
@@ -727,19 +731,19 @@ test('여섯 업무의 미저장 실패를 기록하고 이력의 입력으로 �
     unavailable = true;
     await assert.rejects(collect());
     const history = repository.collectionAttempts;
-    const failed = history.overview(section).failures.find((row) => row.number === number);
+    const failed = (await history.overview(section)).failures.find((row) => row.number === number);
     assert.equal(failed.status, 'failed', section);
     assert.equal(failed.hasData, false, section);
-    if (section === 'notices') assert.equal(history.retryTarget(failed.id).methodCode, notice.methodCode);
-    if (section === 'opening-results') assert.deepEqual(history.retryTarget(failed.id).queries, queries);
+    if (section === 'notices') assert.equal((await history.retryTarget(failed.id)).methodCode, notice.methodCode);
+    if (section === 'opening-results') assert.deepEqual((await history.retryTarget(failed.id)).queries, queries);
 
     unavailable = false;
     const context = { params: Promise.resolve({ id: String(failed.id) }) };
     const response = await retry(request, context);
     if (section === 'notices') assert.equal((await acceptedJob(response)).status, 'succeeded');
     else assert.equal(response.status, 204, response.status === 204 ? section : await response.text());
-    const updated = history.overview(section);
-    assert.deepEqual(history.counts(section), updated.counts, section);
+    const updated = await history.overview(section);
+    assert.deepEqual(await history.counts(section), updated.counts, section);
     assert.ok(updated.saved.some((row) => row.number === number), section);
     assert.ok(!updated.failures.some((row) => row.number === number), section);
     const count = calls.mock.callCount();
@@ -756,15 +760,15 @@ test('동시 수집 요청은 이력과 외부 요청을 공유하고 진행 중
   const calls = mockFetch(t, () => upstream.promise);
   const first = collectContract(target, true);
   const second = collectContract(target, true);
-  const pending = repository.collectionAttempts.overview('contracts').failures.find(({ number }) => number === target.number);
+  const pending = (await repository.collectionAttempts.overview('contracts')).failures.find(({ number }) => number === target.number);
   assert.equal(pending.status, 'pending');
   assert.equal((await retry(new Request('http://localhost', { method: 'POST' }), {
     params: Promise.resolve({ id: String(pending.id) }),
   })).status, 409);
   assert.equal(calls.mock.callCount(), 1);
   upstream.resolve(maintenancePage());
-  await Promise.all([assert.rejects(first, G2bMaintenanceError), assert.rejects(second, G2bMaintenanceError)]);
-  const deferred = repository.collectionAttempts.overview('contracts').failures.find(({ number }) => number === target.number);
+  await Promise.all([await assert.rejects(first, G2bMaintenanceError), await assert.rejects(second, G2bMaintenanceError)]);
+  const deferred = (await repository.collectionAttempts.overview('contracts')).failures.find(({ number }) => number === target.number);
   assert.equal(deferred.id, pending.id);
   assert.equal(deferred.status, 'deferred');
 });
@@ -854,7 +858,7 @@ test('관련공고 수집은 정상 저장 건을 거쳐 미수집 차수까지 
   assert.equal((await acceptedJob(await relatedNoticeRequest(a))).status, 'succeeded');
   assert.deepEqual(calls, [`${a}-000`, `${c}-000`, `${c}-001`]);
   assert.ok(start.mock.calls.every(({ arguments: [target] }) => target.number !== b));
-  const { renderToStaticMarkup } = require('react-dom/server');
+
   const { createElement } = require('react');
   const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
   const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
@@ -865,7 +869,7 @@ test('관련공고 수집은 정상 저장 건을 거쳐 미수집 차수까지 
   });
   for (const [page, prefix] of [[admin, '/admin'], [user, '']]) {
     const body = page.props.children.find((child) => child?.props?.notice);
-    const html = renderToStaticMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
+    const html = await renderMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
     assert.ok(html.includes(`href="${prefix}/g2b/notices/${c}/000"`));
   }
 });
@@ -882,8 +886,8 @@ test('모의공고는 사용자 목록과 상세 및 관련공고 내부 링크�
     } } });
   }
   const query = { field: 'number', q: simulated.number };
-  assert.equal(loadCollectionList('notices', query).result.rows[0].number, simulated.number);
-  assert.deepEqual(loadCollectionList('notices', query, 'collected', { excludeMockNotices: true }).result.rows, []);
+  assert.equal((await loadCollectionList('notices', query)).result.rows[0].number, simulated.number);
+  assert.deepEqual((await loadCollectionList('notices', query, 'collected', { excludeMockNotices: true })).result.rows, []);
   const userDetail = (key) => G2bDetailPage({
     section: 'notices', params: Promise.resolve(key), searchParams: Promise.resolve({}),
   });
@@ -893,27 +897,25 @@ test('모의공고는 사용자 목록과 상세 및 관련공고 내부 링크�
   const user = await userDetail(regular);
   const { links, notice } = user.props.children.find((child) => child?.props?.notice).props;
   assert.equal(notice.number, regular.number);
-  assert.equal(links.noticePath(simulated), undefined);
-  assert.equal(links.noticePath(regular), '/g2b/notices/T26BK00000992/000');
+  assert.equal(await links.noticePath(simulated), undefined);
+  assert.equal(await links.noticePath(regular), '/g2b/notices/T26BK00000992/000');
 });
 
 test('관련공고 수집은 손상된 상세를 복구하고 실패한 행을 보존하며 점검 시 중단한다', async (t) => {
   const [a, badJson, missing, mismatch, failed, next, deferred, skipped, lookupError, retryChild, failedShape] =
     Array.from({ length: 11 }, (_, index) => `R26BK${String(610 + index).padStart(8, '0')}`);
-  const db = new DatabaseSync(join(tempDir, '.data', 'notices.sqlite'));
-  t.after(() => db.close());
-  const insert = db.prepare('INSERT INTO notices VALUES (?, ?, ?, ?)');
+  const insert = db.prepare(`INSERT INTO notices VALUES (?, ?, ?, ?, '{}')`);
   const revision = '000';
   const wrongDetail = JSON.stringify({ payload: { dmItemMap: { bidPbancNo: a, bidPbancOrd: revision } } });
   for (const [number, data] of [
     [badJson, '{'], [missing, '{}'], [mismatch, wrongDetail], [failed, '{'], [failedShape, 'null'],
   ]) {
-    insert.run(number, revision, '2099-01-01T00:00:00.000Z', data);
+    await insert.run(number, revision, '2099-01-01T00:00:00.000Z', data);
   }
   const read = repository.findUsableNotice;
-  t.mock.method(repository, 'findUsableNotice', (key) => {
+  t.mock.method(repository, 'findUsableNotice', async (key) => {
     if (key.number === lookupError) throw new Error('SQLite 조회 테스트 오류');
-    return read(key);
+    return await read(key);
   });
   const calls = [];
   let retrying = false;
@@ -931,25 +933,25 @@ test('관련공고 수집은 손상된 상세를 복구하고 실패한 행을 �
   for (const number of [badJson, missing, mismatch, next]) {
     assert.equal((await repository.find({ number, revision })).payload.dmItemMap.bidPbancNo, number);
   }
-  assert.equal(db.prepare('SELECT data FROM notices WHERE number = ?').get(failed).data, '{');
-  assert.equal(db.prepare('SELECT data FROM notices WHERE number = ?').get(failedShape).data, 'null');
+  assert.equal((await db.prepare('SELECT data FROM notices WHERE number = ?').get(failed)).data, '{');
+  assert.equal((await db.prepare('SELECT data FROM notices WHERE number = ?').get(failedShape)).data, 'null');
   assert.equal(await repository.find({ number: skipped, revision }), null);
-  const failures = repository.collectionAttempts.overview('notices').failures;
+  const failures = (await repository.collectionAttempts.overview('notices')).failures;
   const failedAttempt = failures.find(({ number }) => number === failed);
   assert.equal(failedAttempt.status, 'failed');
-  assert.doesNotThrow(() => repository.collectionAttempts.noticeList.regions());
-  assert.doesNotThrow(() => repository.collectionAttempts.noticeList.businesses());
+  await assert.doesNotReject(() => repository.collectionAttempts.noticeList.regions());
+  await assert.doesNotReject(() => repository.collectionAttempts.noticeList.businesses());
   const { noticeList } = repository.collectionAttempts;
-  assert.doesNotThrow(() => noticeList.page(parseNoticeListQuery({}, noticeList.regions(), noticeList.businesses())));
+  await assert.doesNotReject(async () => await noticeList.page(parseNoticeListQuery({}, await noticeList.regions(), await noticeList.businesses())));
   assert.equal(failures.find(({ number }) => number === deferred).status, 'deferred');
-  assert.match(failures.find(({ number }) => number === lookupError).diagnostics, /SQLite 관련공고 조회/);
+  assert.match(failures.find(({ number }) => number === lookupError).diagnostics, /저장소 관련공고 조회/);
   const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
   const page = await NoticeDetailPage({ params: Promise.resolve({ number: a, revision }) });
   const body = page.props.children.find((child) => child?.props?.notice);
-  assert.equal(body.props.links.noticePath({ number: failed, revision }), undefined);
+  assert.equal(await body.props.links.noticePath({ number: failed, revision }), undefined);
   const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
   retrying = true;
-  queue.clearMaintenance(queue.maintenanceVersion());
+  await queue.clearMaintenance(await queue.maintenanceVersion());
   assert.equal((await acceptedJob(await retry(new Request('http://localhost', { method: 'POST' }), {
     params: Promise.resolve({ id: String(failedAttempt.id) }),
   }))).status, 'succeeded');
@@ -972,7 +974,7 @@ test('서로 참조하는 공고의 동시 접수는 큐에서 순차 실행된�
   assert.deepEqual(calls, [a, b]);
 });
 
-test('명시적인 점검 화면만 판별한다', () => {
+test('명시적인 점검 화면만 판별한다', async () => {
   assert.throws(() => assertNotMaintenance(maintenanceHtml), G2bMaintenanceError);
   assert.throws(() => assertNotMaintenance(`<h1>시스템\n <span>점검</span>&nbsp;안내</h1><p>${interruption}</p>`), G2bMaintenanceError);
   for (const body of [
@@ -1010,7 +1012,7 @@ test('공고 부가 조회 점검은 기존 행을 보존하고 다음 게시글
   });
   const job = await submitNotice(noticeRequest());
   assert.equal(job.status, 'pending');
-  assert.ok(queue.maintenanceVersion());
+  assert.ok(await queue.maintenanceVersion());
   assert.deepEqual(await repository.find(key), previous);
   assert.equal(calls.mock.calls.filter(({ arguments: [url] }) => new URL(url).pathname.endsWith('/selectPst.do')).length, 1);
 });
@@ -1075,7 +1077,7 @@ test('공고 수집은 연결된 계약 상세를 한 번 저장하고 재수집
 
   assert.equal((await submitNotice(noticeRequest())).status, 'succeeded');
   assert.deepEqual((await repository.find(key)).contracts, [contract]);
-  assert.deepEqual(repository.findContract(contract)?.detail, {
+  assert.deepEqual((await repository.findContract(contract))?.detail, {
     ctrtNo: contract.number, ctrtChgOrd: contract.revision,
   });
   assert.equal((await submitNotice(noticeRequest())).status, 'succeeded');
@@ -1107,7 +1109,7 @@ test('기타 업무진행의 BM 번호·차수로 연결 계약을 찾는다', a
   });
   const { notice } = await collectNotice(key, '');
   assert.deepEqual(notice.contracts, [contract]);
-  assert.ok(repository.findContract(contract));
+  assert.ok(await repository.findContract(contract));
 });
 
 test('일치하는 계약이 없으면 공고 수집에서 계약 상세를 조회하지 않는다', async (t) => {
@@ -1130,9 +1132,9 @@ test('계약 한 건의 조회 실패에도 공고와 정상 계약을 저장하
 
   assert.equal((await submitNotice(noticeRequest())).status, 'retry_wait');
   assert.deepEqual((await repository.find(key)).contracts, [failed, saved]);
-  assert.equal(repository.findContract(failed), null);
-  assert.equal(repository.findContract(saved)?.detail.ctrtNo, saved.number);
-  const attempt = repository.collectionAttempts.overview('contracts').failures
+  assert.equal(await repository.findContract(failed), null);
+  assert.equal((await repository.findContract(saved))?.detail.ctrtNo, saved.number);
+  const attempt = (await repository.collectionAttempts.overview('contracts')).failures
     .find(({ number }) => number === failed.number);
   assert.equal(attempt?.status, 'failed');
 });
@@ -1147,9 +1149,9 @@ test('연결된 계약 상세의 점검 응답은 공고 저장을 보류한다'
 
   const job = await submitNotice(noticeRequest());
   assert.equal(job.status, 'pending');
-  assert.ok(queue.maintenanceVersion());
+  assert.ok(await queue.maintenanceVersion());
   assert.deepEqual(await repository.find(key), previous);
-  const attempt = repository.collectionAttempts.overview('contracts').failures
+  const attempt = (await repository.collectionAttempts.overview('contracts')).failures
     .find((row) => row.number === number);
   assert.equal(attempt?.status, 'deferred');
 });
@@ -1157,7 +1159,7 @@ test('연결된 계약 상세의 점검 응답은 공고 저장을 보류한다'
 test('계약요청 상세 점검 이후에는 다음 품목 페이지를 조회하지 않는다', async (t) => {
   const contractKey = { number: 'REQ1', revision: '000' };
   const previous = { ...contractKey, collectedAt, detail: {}, items: [] };
-  repository.saveContractRequest(previous);
+  await repository.saveContractRequest(previous);
   let itemCalls = 0;
   mockFetch(t, async (path) => {
     if (path.endsWith('/srchDmndSttusSql.do')) return maintenancePage();
@@ -1170,7 +1172,7 @@ test('계약요청 상세 점검 이후에는 다음 품목 페이지를 조회�
   });
   await assert.rejects(collectContractRequest(contractKey, true), G2bMaintenanceError);
   assert.equal(itemCalls, 1);
-  assert.deepEqual(repository.findContractRequest(contractKey), previous);
+  assert.deepEqual(await repository.findContractRequest(contractKey), previous);
 });
 
 
@@ -1207,7 +1209,7 @@ test("계약요청 품목이 10건을 초과해도 한 번만 조회하고 전�
   await collectContractRequest(contractKey, true);
 
   assert.equal(itemCalls, 1);
-  assert.deepEqual(repository.findContractRequest(contractKey)?.items, items);
+  assert.deepEqual((await repository.findContractRequest(contractKey))?.items, items);
 });
 
 
@@ -1230,19 +1232,19 @@ test('발주계획과 사전규격의 첨부 점검은 저장과 대기 중인 �
   const pending = collectOrderPlan('PLAN1');
   const queued = collectOrderPlan('PLAN1', true);
   await Promise.all([
-    assert.rejects(pending, G2bMaintenanceError),
-    assert.rejects(queued, G2bMaintenanceError),
+    await assert.rejects(pending, G2bMaintenanceError),
+    await assert.rejects(queued, G2bMaintenanceError),
   ]);
   assert.equal(attachmentCalls, 1);
-  assert.equal(repository.findOrderPlan('PLAN1'), null);
+  assert.equal(await repository.findOrderPlan('PLAN1'), null);
   await assert.rejects(collectPriorSpec('SPEC1'), G2bMaintenanceError);
-  assert.equal(repository.findPriorSpec('SPEC1'), null);
+  assert.equal(await repository.findPriorSpec('SPEC1'), null);
 
   useMaintenance = false;
   await assert.rejects(collectOrderPlan('PLAN1'), /실패/);
   await assert.rejects(collectPriorSpec('SPEC1'), /실패/);
-  const plan = repository.findOrderPlan('PLAN1');
-  const spec = repository.findPriorSpec('SPEC1');
+  const plan = await repository.findOrderPlan('PLAN1');
+  const spec = await repository.findPriorSpec('SPEC1');
   assert.ok(plan && spec);
   assert.equal(plan.attachments, undefined);
   assert.equal(spec.attachments, undefined);
@@ -1250,8 +1252,8 @@ test('발주계획과 사전규격의 첨부 점검은 저장과 대기 중인 �
   useMaintenance = true;
   await assert.rejects(collectOrderPlan('PLAN1', true), G2bMaintenanceError);
   await assert.rejects(collectPriorSpec('SPEC1', true), G2bMaintenanceError);
-  assert.deepEqual(repository.findOrderPlan('PLAN1'), plan);
-  assert.deepEqual(repository.findPriorSpec('SPEC1'), spec);
+  assert.deepEqual(await repository.findOrderPlan('PLAN1'), plan);
+  assert.deepEqual(await repository.findPriorSpec('SPEC1'), spec);
 });
 
 test('유찰·입찰취소·재입찰과 구형 유찰의 일반·강제 수집은 예정가격을 조회하지 않는다', async (t) => {
@@ -1285,7 +1287,7 @@ test('유찰·입찰취소·재입찰과 구형 유찰의 일반·강제 수집�
       const openingKey = { number: 'R26BK90000125', revision: '000', openingRevision };
       const query = { ...openingKey, classification: '1', businessCode: '01', ...(status ? { status } : {}) };
       await collectOpeningResult(openingKey, [query], force);
-      const saved = repository.findOpeningResult(openingKey);
+      const saved = await repository.findOpeningResult(openingKey);
       const { detail } = saved.results[0];
       assert.equal((status === '재입찰' ? detail.bidPrgrs : detail).prcsRsn, detailVersion);
       assert.equal(saved.notice, null);
@@ -1326,14 +1328,14 @@ test('개찰완료 분류만 예정가격을 요청하며 강제 재수집 오�
   await collectOpeningResult(openingKey, queries);
   await collectOpeningResult(openingKey, queries);
   assert.deepEqual(priceCalls, ['2']);
-  const price = repository.findOpeningResult(openingKey).price;
+  const price = (await repository.findOpeningResult(openingKey)).price;
   assert.equal(price.pbancInfo.bidClsfNo, '2');
 
   failPrice = true;
   await assert.rejects(collectOpeningResult(openingKey, queries, true), AggregateError);
   assert.deepEqual(priceCalls, ['2', '2']);
-  assert.deepEqual(repository.findOpeningResult(openingKey).price, price);
-  const failure = repository.collectionAttempts.overview('opening-results').failures.find(
+  assert.deepEqual((await repository.findOpeningResult(openingKey)).price, price);
+  const failure = (await repository.collectionAttempts.overview('opening-results')).failures.find(
     ({ number, revision, openingRevision }) =>
       number === openingKey.number && revision === openingKey.revision && openingRevision === openingKey.openingRevision,
   );
@@ -1353,7 +1355,7 @@ test('개찰차수의 점검은 부분 저장을 보류하고 일반 오류는 �
       detail: { prcsRsn: '기존 결과' },
     })),
   };
-  repository.saveOpeningResult(previous);
+  await repository.saveOpeningResult(previous);
   let useMaintenance = true;
   mockFetch(t, (path, options) => {
     if (path === '/') return session();
@@ -1369,16 +1371,16 @@ test('개찰차수의 점검은 부분 저장을 보류하고 일반 오류는 �
   const deferred = await postOpeningResults(request, context);
   assert.equal(deferred.status, 503);
   assert.deepEqual((await deferred.json()).failedRevisions, ['001']);
-  assert.deepEqual(repository.findOpeningResult(openingKey), previous);
+  assert.deepEqual(await repository.findOpeningResult(openingKey), previous);
 
   useMaintenance = false;
   t.mock.method(console, 'error', () => {});
   assert.equal((await postOpeningResults(request, context)).status, 502);
-  const updated = repository.findOpeningResult(openingKey);
+  const updated = await repository.findOpeningResult(openingKey);
   assert.notEqual(updated.collectedAt, collectedAt);
   assert.equal(updated.results.find(({ query }) => query.classification === '1').detail.prcsRsn, '새 결과');
   assert.equal(updated.results.find(({ query }) => query.classification === '2').detail.prcsRsn, '기존 결과');
-  const failure = repository.collectionAttempts.overview('opening-results').failures.find(
+  const failure = (await repository.collectionAttempts.overview('opening-results')).failures.find(
     ({ number, revision, openingRevision }) =>
       number === openingKey.number && revision === openingKey.revision && openingRevision === openingKey.openingRevision,
   );
@@ -1404,7 +1406,7 @@ test('적격심사는 차수·분류별로 보충하고 재수집 오류 또는 
     etcData: {}, successBidInfo: [],
   });
   const queries = makeQueries(openingKey);
-  for (const key of [openingKey, nextKey]) repository.saveOpeningResult({
+  for (const key of [openingKey, nextKey]) await repository.saveOpeningResult({
     ...key, collectedAt, notice: null, price: null,
     results: makeQueries(key).map((query) => ({ query, detail: detail(query.classification, '기존 공고') })),
   });
@@ -1434,24 +1436,24 @@ test('적격심사는 차수·분류별로 보충하고 재수집 오류 또는 
   await collectOpeningResult(openingKey, queries);
   await collectOpeningResult(nextKey, makeQueries(nextKey));
   assert.deepEqual(reviews.sort(), [['001', '1'], ['001', '2'], ['002', '1'], ['002', '2']]);
-  const entries = (key) => repository.findOpeningResult(key).results;
-  const first = entries(openingKey)[0].qualificationReview;
+  const entries = async (key) => (await repository.findOpeningResult(key)).results;
+  const first = (await entries(openingKey))[0].qualificationReview;
   assert.equal(first.judgmentResponse.qlemRsltJdgmntList[0].grpNm, '업체-001-1');
-  assert.equal(entries(nextKey)[0].qualificationReview.judgmentResponse.qlemRsltJdgmntList[0].grpNm, '업체-002-1');
-  assert.equal(entries(openingKey)[1].qualificationReview, null);
-  assert.equal(entries(openingKey)[2].qualificationReview, undefined);
+  assert.equal((await entries(nextKey))[0].qualificationReview.judgmentResponse.qlemRsltJdgmntList[0].grpNm, '업체-002-1');
+  assert.equal((await entries(openingKey))[1].qualificationReview, null);
+  assert.equal((await entries(openingKey))[2].qualificationReview, undefined);
 
   failure = 'error';
   await assert.rejects(collectOpeningResult(openingKey, queries, true), (error) =>
     error.errors.length === 1 && error.errors[0].message === '적격심사결과 조회 실패');
-  assert.deepEqual(entries(openingKey)[0].qualificationReview, first);
-  assert.equal(entries(openingKey)[0].detail.bidInfo.bidPbancNm, '새 공고');
+  assert.deepEqual((await entries(openingKey))[0].qualificationReview, first);
+  assert.equal((await entries(openingKey))[0].detail.bidInfo.bidPbancNm, '새 공고');
   assert.equal(reviews.filter(([ord, clsf]) => ord === '001' && clsf === '2').length, 2);
 
-  const beforeMaintenance = repository.findOpeningResult(openingKey);
+  const beforeMaintenance = await repository.findOpeningResult(openingKey);
   failure = 'maintenance';
   await assert.rejects(collectOpeningResult(openingKey, queries, true), (error) => Boolean(findMaintenance(error)));
-  assert.deepEqual(repository.findOpeningResult(openingKey), beforeMaintenance);
+  assert.deepEqual(await repository.findOpeningResult(openingKey), beforeMaintenance);
 });
 
 test('연기공고의 HTTP 200 점검 HTML은 다른 공지 오류보다 우선하며 개찰차수를 보존한다', async (t) => {
@@ -1462,7 +1464,7 @@ test('연기공고의 HTTP 200 점검 HTML은 다른 공지 오류보다 우선�
   const previous = {
     ...openingKey, collectedAt, results: [{ query, detail: { prcsRsn: '기존 결과' } }],
   };
-  repository.saveOpeningResult(previous);
+  await repository.saveOpeningResult(previous);
   let postponementCalls = 0;
   mockFetch(t, async (path, options) => {
     if (path === '/') return session();
@@ -1493,7 +1495,7 @@ test('연기공고의 HTTP 200 점검 HTML은 다른 공지 오류보다 우선�
   assert.equal(result.code, 'g2b_maintenance');
   assert.deepEqual(result.failedRevisions, ['001']);
   assert.equal(postponementCalls, 1);
-  assert.deepEqual(repository.findOpeningResult(openingKey), previous);
+  assert.deepEqual(await repository.findOpeningResult(openingKey), previous);
 });
 
 test('미저장 공고의 전체 수집 결과를 개찰 요청에 공유하고 차수별 성공과 실패를 반환한다', async (t) => {
@@ -1545,7 +1547,7 @@ test('미저장 공고의 전체 수집 결과를 개찰 요청에 공유하고 
   assert.equal(ids[0], ids[1]);
   await drainNoticeJobs();
   for (const id of ids) {
-    const job = queue.get(id);
+    const job = await queue.get(id);
     assert.equal(job.status, 'retry_wait');
     const result = job.result;
     assert.equal(result.noticeSaved, true);
@@ -1582,7 +1584,7 @@ test('세션 발급과 다운로드 메타데이터의 점검을 감지한다', 
   await assert.rejects(collectOrderPlan('SESSION1'), G2bMaintenanceError);
   assert.equal(calls.mock.callCount(), 1);
 
-  repository.saveOrderPlan({
+  await repository.saveOrderPlan({
     number: 'DOWNLOAD1', collectedAt,
     payload: { dlOderPlanM: { oderPlanUntyAtchFileNo: group } },
     attachments: { dlUntyAtchFileL: [{
@@ -1597,33 +1599,33 @@ test('세션 발급과 다운로드 메타데이터의 점검을 감지한다', 
   assert.equal(calls.mock.callCount(), 2);
 });
 
-test('사전규격·개찰결과·계약현황은 원본 통화와 업무별 날짜를 사용한다', () => {
+test('사전규격·개찰결과·계약현황은 원본 통화와 업무별 날짜를 사용한다', async () => {
   const attempts = repository.collectionAttempts;
   const lists = {
     'prior-specs': [attempts.priorSpecList, parsePriorSpecListQuery],
     'opening-results': [attempts.openingResultList, parseOpeningResultListQuery],
     contracts: [attempts.contractList, parseContractListQuery],
   };
-  const page = (section, params) => {
+  const page = async (section, params) => {
     const [list, parse] = lists[section];
-    return list.page(parse(params, list.businesses()));
+    return await list.page(parse(params, await list.businesses()));
   };
   for (const [number, code] of [['TESTSPECWON', '01'], ['TESTSPECUSD', '02']]) {
-    repository.savePriorSpec({ number, collectedAt, payload: { dlBfSpecM: {
+    await repository.savePriorSpec({ number, collectedAt, payload: { dlBfSpecM: {
       bfSpecRegNo: number, bfSpecNm: '검증 사전규격', prcmBsneSeCd: code, dmstUntyGrpNm: '검증기관',
       specRlsDt: '2026/11/06 09:00', alotBgtPrspAmt: 500,
     } } });
   }
   const specQuery = { field: 'agency', q: '검증기관', dateTo: '2026-11-06' };
-  assert.deepEqual(page('prior-specs', { ...specQuery, budgetFrom: '0' }).rows.map(({ number }) => number), ['TESTSPECWON']);
-  assert.deepEqual(page('prior-specs', { ...specQuery, budgetUsdTo: '500' }).rows.map(({ number }) => number), ['TESTSPECUSD']);
-  assert.equal(page('prior-specs', { ...specQuery, budgetFrom: '0', budgetUsdTo: '500' }).counts.total, 2);
+  assert.deepEqual((await page('prior-specs', { ...specQuery, budgetFrom: '0' })).rows.map(({ number }) => number), ['TESTSPECWON']);
+  assert.deepEqual((await page('prior-specs', { ...specQuery, budgetUsdTo: '500' })).rows.map(({ number }) => number), ['TESTSPECUSD']);
+  assert.equal((await page('prior-specs', { ...specQuery, budgetFrom: '0', budgetUsdTo: '500' })).counts.total, 2);
 
   const number = 'TESTOPENING';
   const revision = '000';
   for (const openingRevision of ['001', '002']) {
     const query = { number, revision, openingRevision, businessCode: '03', classification: '001' };
-    repository.saveOpeningResult({ number, revision, openingRevision, collectedAt, results: [
+    await repository.saveOpeningResult({ number, revision, openingRevision, collectedAt, results: [
       { query, detail: { bidInfo: { bidPbancNm: '검증 개찰', dmstNm: '검증기관', realOnbsDt: '2026/11/03 10:00' } } },
       { query: { ...query, classification: '002' }, detail: openingRevision === '001'
         ? { bidInfo: { dmstNm: '검증기관', realOnbsDt: '2026/11/05 10:00' } }
@@ -1631,24 +1633,24 @@ test('사전규격·개찰결과·계약현황은 원본 통화와 업무별 날
     ] });
   }
   const openingQuery = { field: 'number', q: number, business: '03' };
-  assert.deepEqual(page('opening-results', { ...openingQuery, dateFrom: '2026-11-05' }).rows.map(({ openingRevision }) => openingRevision), ['001']);
-  assert.deepEqual(page('opening-results', { ...openingQuery, dateFrom: '2026-11-06' }).rows, []);
-  assert.equal(page('opening-results', { field: 'agency', q: '검증기관' }).counts.total, 2);
+  assert.deepEqual((await page('opening-results', { ...openingQuery, dateFrom: '2026-11-05' })).rows.map(({ openingRevision }) => openingRevision), ['001']);
+  assert.deepEqual((await page('opening-results', { ...openingQuery, dateFrom: '2026-11-06' })).rows, []);
+  assert.equal((await page('opening-results', { field: 'agency', q: '검증기관' })).counts.total, 2);
 
   for (const [number, date] of [['TESTCTRT1', '20261109'], ['TESTCTRT2', '20261108']]) {
-    repository.saveContract({ number, revision: '00', collectedAt, companies: [], services: [], items: [],
+    await repository.saveContract({ number, revision: '00', collectedAt, companies: [], services: [], items: [],
       detail: { ctrtNm: '검증 계약', ctrtView: number, dmstUntyGrpNm: '검증기관', prcmBsneSeCd: '05', frstCtrtDt: date },
     });
   }
   const contractQuery = { field: 'agency', q: '검증기관', business: '05', dateTo: '2026-11-09', sort: 'date-asc' };
-  assert.deepEqual(page('contracts', contractQuery).rows.map(({ number }) => number), ['TESTCTRT2', 'TESTCTRT1']);
-  assert.deepEqual(page('contracts', { ...contractQuery, status: 'uncollected' }).counts, { total: 2, collected: 2, uncollected: 0 });
+  assert.deepEqual((await page('contracts', contractQuery)).rows.map(({ number }) => number), ['TESTCTRT2', 'TESTCTRT1']);
+  assert.deepEqual((await page('contracts', { ...contractQuery, status: 'uncollected' })).counts, { total: 2, collected: 2, uncollected: 0 });
 });
 
-test('계약요청 세부품명은 표시되는 모든 물품 행에서 검색한 뒤 요청 단위로 페이지를 나눈다', () => {
+test('계약요청 세부품명은 표시되는 모든 물품 행에서 검색한 뒤 요청 단위로 페이지를 나눈다', async () => {
   const list = repository.collectionAttempts.contractRequestList;
   for (let index = 1; index <= 17; index++) {
-    repository.saveContractRequest({
+    await repository.saveContractRequest({
       number: 'TESTREQ' + String(index).padStart(2, '0'), revision: '000', collectedAt,
       detail: {
         bizNm: '검증 요청 ' + index, bizNo: 'RECEIPT' + index, dmstUntyGrpNm: '계약요청 검증기관',
@@ -1659,26 +1661,26 @@ test('계약요청 세부품명은 표시되는 모든 물품 행에서 검색�
       items: [{ dtlsPrnm: '다른 물품' }, { dtlsPrnm: '검증 &amp; 물품' }, { dtlsPrnm: '검증 &amp; 물품 추가' }],
     });
   }
-  const page = (params) => list.page(parseContractRequestListQuery(params, list.businesses()));
+  const page = async (params) => await list.page(parseContractRequestListQuery(params, await list.businesses()));
   const item = { field: 'item', q: '검증 & 물품' };
-  const first = page(item);
+  const first = await page(item);
   assert.deepEqual(first.counts, { total: 16, collected: 16, uncollected: 0 });
   assert.equal(first.rows.length, 15);
   assert.equal(first.rows[0].number, 'TESTREQ16');
-  assert.deepEqual(page({ ...item, page: '2' }).rows.map(({ number }) => number), ['TESTREQ15']);
-  assert.equal(page({ ...item, writtenTo: '2026-11-01', business: '일반용역' }).counts.total, 15);
-  assert.equal(page({ ...item, business: '기술용역' }).counts.total, 0);
-  assert.equal(page({ field: 'agency', q: '계약요청 검증기관' }).counts.total, 17);
-  assert.deepEqual(page({ field: 'number', q: 'RECEIPT16' }).rows.map(({ number }) => number), ['TESTREQ16']);
-  assert.deepEqual(page({ field: 'number', q: 'TESTREQ16 / 000' }).rows.map(({ number }) => number), ['TESTREQ16']);
-  assert.equal(page({ q: '검증 요청 17', sort: 'title-desc' }).rows[0].number, 'TESTREQ17');
+  assert.deepEqual((await page({ ...item, page: '2' })).rows.map(({ number }) => number), ['TESTREQ15']);
+  assert.equal((await page({ ...item, writtenTo: '2026-11-01', business: '일반용역' })).counts.total, 15);
+  assert.equal((await page({ ...item, business: '기술용역' })).counts.total, 0);
+  assert.equal((await page({ field: 'agency', q: '계약요청 검증기관' })).counts.total, 17);
+  assert.deepEqual((await page({ field: 'number', q: 'RECEIPT16' })).rows.map(({ number }) => number), ['TESTREQ16']);
+  assert.deepEqual((await page({ field: 'number', q: 'TESTREQ16 / 000' })).rows.map(({ number }) => number), ['TESTREQ16']);
+  assert.equal((await page({ q: '검증 요청 17', sort: 'title-desc' })).rows[0].number, 'TESTREQ17');
 });
 
-test('발주계획은 업무별 원화 예산과 검색 조건을 전체 결과에 적용한 뒤 페이지를 조회한다', () => {
+test('발주계획은 업무별 원화 예산과 검색 조건을 전체 결과에 적용한 뒤 페이지를 조회한다', async () => {
   const { collectionAttempts: attempts } = repository;
   const plans = attempts.orderPlanList;
   const agency = '발주계획 검증기관';
-  const save = (number, detail) => repository.saveOrderPlan({
+  const save = async (number, detail) => await repository.saveOrderPlan({
     number, collectedAt, payload: { dlOderPlanM: { oderInstNm: agency, ...detail } },
   });
   for (let index = 1; index <= 16; index++) {
@@ -1690,56 +1692,45 @@ test('발주계획은 업무별 원화 예산과 검색 조건을 전체 결과�
   save('TESTPLANSERVICE', { bizNm: '용역 검증', prcmBsneSeCd: '03', prchsPrnmntAmt: 0, srvBgtAmt: 150, releaseDt: '202611011000' });
   save('TESTPLANFOREIGN', { itemNm: '외자 &amp; 품명', prcmBsneSeCd: '02', prchsPrnmntAmt: 100, frncCvrsPrchsPrnmntAmt: 110 });
   save('TESTPLANCONSTRUCTION', { bizNm: '공사 검증', prcmBsneSeCd: '07', newLotmSeCd: '신120002', oderSumAmt: 0, tlbkpngAmt: 120, releaseDt: '2026/11/01 08:00' });
-  const failed = attempts.start({ section: 'order-plans', number: 'TESTPLANMISSING' });
-  attempts.finish(failed, 'failed', '테스트 실패');
-  const businesses = plans.businesses();
+  const failed = await attempts.start({ section: 'order-plans', number: 'TESTPLANMISSING' });
+  await attempts.finish(failed, 'failed', '테스트 실패');
+  const businesses = await plans.businesses();
   const query = parseOrderPlanListQuery({ field: 'agency', q: agency, business: ['01', '03', '07'], releasedFrom: '2026-11-01', releasedTo: '2026-11-01', budgetFrom: '100', budgetTo: '150' }, businesses);
-  const first = plans.page(query);
+  const first = await plans.page(query);
   assert.deepEqual(first.counts, { total: 18, collected: 18, uncollected: 0 });
   assert.equal(first.totalPages, 2);
   assert.equal(first.rows[0].number, 'TESTPLANSERVICE');
   assert.equal(first.rows.length, 15);
-  assert.deepEqual(plans.page({ ...query, page: 2 }).rows.map((row) => row.number), ['TESTPLAN15', 'TESTPLAN16', 'TESTPLANCONSTRUCTION']);
-  assert.deepEqual(plans.page({ ...query, status: 'uncollected' }).counts, first.counts);
-  const missing = plans.page(parseOrderPlanListQuery({ field: 'number', q: 'testplanmissing', status: 'uncollected' }, businesses));
+  assert.deepEqual((await plans.page({ ...query, page: 2 })).rows.map((row) => row.number), ['TESTPLAN15', 'TESTPLAN16', 'TESTPLANCONSTRUCTION']);
+  assert.deepEqual((await plans.page({ ...query, status: 'uncollected' })).counts, first.counts);
+  const missing = await plans.page(parseOrderPlanListQuery({ field: 'number', q: 'testplanmissing', status: 'uncollected' }, businesses));
   assert.deepEqual(missing.rows.map((row) => row.number), ['TESTPLANMISSING']);
   const title = parseOrderPlanListQuery({ q: '외자 & 품명', sort: 'title-asc' }, businesses);
-  assert.deepEqual(plans.page(title).rows.map((row) => row.number), ['TESTPLANFOREIGN']);
-  assert.deepEqual(plans.page({ ...title, filters: { budget: { from: 0 } } }).rows, []);
+  assert.deepEqual((await plans.page(title)).rows.map((row) => row.number), ['TESTPLANFOREIGN']);
+  assert.deepEqual((await plans.page({ ...title, filters: { budget: { from: 0 } } })).rows, []);
   const href = new URL(orderPlanListHref('/order-plans', { ...query, page: 2 }), 'http://localhost');
   assert.equal(href.searchParams.get('page'), '2');
   assert.deepEqual(new Set(href.searchParams.getAll('business')), new Set(['01', '03', '07']));
 });
 
-test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일정과 숨겨진 지역을 제외한다', () => {
-  const db = new DatabaseSync(':memory:');
+test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일정과 숨겨진 지역을 제외한다', async () => {
+  const db = await testDatabase();
   try {
-    db.exec(`
-      CREATE TABLE notices (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
-      CREATE TABLE order_plans (number TEXT, collected_at TEXT, data TEXT);
-      CREATE TABLE prior_specs (number TEXT, collected_at TEXT, data TEXT);
-      CREATE TABLE contract_requests (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
-      CREATE TABLE contracts (number TEXT, revision TEXT, collected_at TEXT, data TEXT);
-      CREATE TABLE opening_results (number TEXT, revision TEXT, opening_revision TEXT, collected_at TEXT, data TEXT);
-      CREATE TABLE g2b_collection_attempts (
-        id INTEGER PRIMARY KEY, section TEXT, number TEXT, revision TEXT, opening_revision TEXT,
-        input TEXT, started_at TEXT, finished_at TEXT, status TEXT DEFAULT 'pending', error TEXT
-      );
-      INSERT INTO g2b_collection_attempts VALUES (
-        1, 'contracts', 'LEGACY-DIAGNOSTICS', '00', '', '{}', '2026-11-01', '2026-11-01', 'failed', '이전 오류'
-      );
-    `);
+    await db.client.execute("INSERT INTO g2b_collection_attempts (id, section, number, revision, opening_revision, input, started_at, finished_at, status, error) VALUES (1, 'contracts', 'LEGACY-DIAGNOSTICS', '00', '', '{}', '2026-11-01', '2026-11-01', 'failed', '이전 오류')");
     const attempts = openCollectionAttempts(db);
-    const [legacy] = attempts.overview('contracts').failures;
+    const [legacy] = (await attempts.overview('contracts')).failures;
     assert.equal(legacy.error, '이전 오류');
     assert.equal(legacy.diagnostics, null);
-    const legacyRetry = attempts.start({ section: 'contracts', number: legacy.number, revision: '00' });
-    attempts.finish(legacyRetry, 'failed', '새 오류', { name: 'Error', code: 'ECONNRESET' });
-    assert.equal(JSON.parse(attempts.overview('contracts').failures[0].diagnostics).code, 'ECONNRESET');
-    const insert = db.prepare("INSERT INTO notices VALUES (?, '000', '2026-11-01', ?)");
+    const legacyRetry = await attempts.start({ section: 'contracts', number: legacy.number, revision: '00' });
+    await attempts.finish(legacyRetry, 'failed', '새 오류', { name: 'Error', code: 'ECONNRESET' });
+    assert.equal(JSON.parse((await attempts.overview('contracts')).failures[0].diagnostics).code, 'ECONNRESET');
+    const scopedRepository = require('../src/server/g2b/repository/turso').openG2bRepository(db);
+    const insert = { run: (number, raw) => scopedRepository.save({
+      ...JSON.parse(raw), number, revision: '000', collectedAt: '2026-11-01',
+    }) };
     for (let index = 1; index <= 23; index++) {
       const number = 'N' + String(index).padStart(2, '0');
-      insert.run(number, JSON.stringify({
+      await insert.run(number, JSON.stringify({
         title: index === 1 ? '공고 &#38; 검증' : number,
         payload: {
           dmItemMap: {
@@ -1758,33 +1749,33 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
         },
       }));
     }
-    const failed = attempts.start({ section: 'notices', number: 'MISSING', revision: '000', methodCode: '' });
-    attempts.finish(failed, 'failed', '테스트 실패');
-    const regions = attempts.noticeList.regions();
+    const failed = await attempts.start({ section: 'notices', number: 'MISSING', revision: '000', methodCode: '' });
+    await attempts.finish(failed, 'failed', '테스트 실패');
+    const regions = await attempts.noticeList.regions();
     assert.deepEqual(regions, ['경기도', '부산광역시', '서울특별시']);
-    const businesses = attempts.noticeList.businesses();
-    const page = (params) => attempts.noticeList.page(parseNoticeListQuery(params, regions, businesses));
-    const numbers = (params) => page(params).rows.map((row) => row.number);
-    assert.deepEqual(numbers({ field: 'agency', q: '수요기관', region: ['경기도', '서울특별시'], postedTo: '2026-11-01', submissionFrom: '2026-11-05', budgetTo: '1' }), ['N01']);
-    assert.deepEqual(numbers({ q: '& 검증' }), ['N01']);
-    assert.deepEqual(numbers({ field: 'number', q: 'missing', status: 'uncollected' }), ['MISSING']);
-    assert.deepEqual(numbers({ field: 'number', q: 'N01 - 000' }), ['N01']);
+    const businesses = await attempts.noticeList.businesses();
+    const page = async (params) => await attempts.noticeList.page(parseNoticeListQuery(params, regions, businesses));
+    const numbers = async (params) => (await page(params)).rows.map((row) => row.number);
+    assert.deepEqual((await numbers({ field: 'agency', q: '수요기관', region: ['경기도', '서울특별시'], postedTo: '2026-11-01', submissionFrom: '2026-11-05', budgetTo: '1' })), ['N01']);
+    assert.deepEqual((await numbers({ q: '& 검증' })), ['N01']);
+    assert.deepEqual((await numbers({ field: 'number', q: 'missing', status: 'uncollected' })), ['MISSING']);
+    assert.deepEqual((await numbers({ field: 'number', q: 'N01 - 000' })), ['N01']);
     const regionQuery = { region: ['경기도', '부산광역시'], sort: 'budget-asc' };
-    assert.deepEqual(numbers({ ...regionQuery, business: ['03', '01'] }), ['N01', 'N02']);
-    assert.deepEqual(numbers(regionQuery), ['N01', 'N02', 'N04']);
-    const noUncollected = page({ ...regionQuery, status: 'uncollected', page: '2' });
+    assert.deepEqual((await numbers({ ...regionQuery, business: ['03', '01'] })), ['N01', 'N02']);
+    assert.deepEqual((await numbers(regionQuery)), ['N01', 'N02', 'N04']);
+    const noUncollected = (await page({ ...regionQuery, status: 'uncollected', page: '2' }));
     assert.deepEqual(noUncollected.counts, { total: 3, collected: 3, uncollected: 0 });
     assert.deepEqual(noUncollected.rows, []);
     assert.equal(noUncollected.totalPages, 0);
     for (const status of ['total', 'collected', 'uncollected']) {
-      assert.deepEqual(page({ status, field: 'number', q: '000' }).counts, { total: 24, collected: 23, uncollected: 1 });
-      assert.deepEqual(page({ status, field: 'number', q: '존재하지 않음' }).counts, { total: 0, collected: 0, uncollected: 0 });
+      assert.deepEqual((await page({ status, field: 'number', q: '000' })).counts, { total: 24, collected: 23, uncollected: 1 });
+      assert.deepEqual((await page({ status, field: 'number', q: '존재하지 않음' })).counts, { total: 0, collected: 0, uncollected: 0 });
     }
-    assert.deepEqual(numbers({ submissionTo: '2026-11-02' }), []);
-    assert.deepEqual(numbers({ sort: 'budget-desc', page: '2' }), ['N08', 'N07', 'N06', 'N05', 'N04', 'N03', 'N02', 'N01', 'MISSING']);
-    assert.equal(page({ page: '999' }).page, 2);
+    assert.deepEqual((await numbers({ submissionTo: '2026-11-02' })), []);
+    assert.deepEqual((await numbers({ sort: 'budget-desc', page: '2' })), ['N08', 'N07', 'N06', 'N05', 'N04', 'N03', 'N02', 'N01', 'MISSING']);
+    assert.equal((await page({ page: '999' })).page, 2);
     for (const sort of ['posted-asc', 'submission-asc', 'deadline-desc', 'title-asc', 'budget-asc']) {
-      assert.equal(page({ sort }).rows.length, 15);
+      assert.equal((await page({ sort })).rows.length, 15);
     }
     const query = parseNoticeListQuery({ field: 'agency', q: '기관', region: regions, business: '03', page: '2', sort: 'deadline-asc' }, regions, businesses);
     const href = new URL(noticeListHref('/notices', query), 'http://localhost');
@@ -1792,16 +1783,16 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
     assert.equal(href.searchParams.get('sort'), 'deadline-asc');
     assert.equal(href.searchParams.get('business'), '03');
     assert.deepEqual(href.searchParams.getAll('region'), regions);
-    insert.run('R26BK01792130', JSON.stringify({
+    await insert.run('R26BK01792130', JSON.stringify({
       title: '기타 공고',
       payload: { dlUntyBidPbancM: {
         prcmBsneSeCd: '09', dmstNm: '기타 수요기관', pbancPstgDt: '202610260900',
         slprRcptBgngDt: '202610270900', slprRcptDdlnDt: '202611040900', bgtAmt: '1000',
       } },
     }));
-    const updatedBusinesses = attempts.noticeList.businesses();
+    const updatedBusinesses = await attempts.noticeList.businesses();
     assert.ok(updatedBusinesses.some(({ value, label }) => value === '09' && label === '기타'));
-    const etc = attempts.noticeList.page(parseNoticeListQuery({
+    const etc = await attempts.noticeList.page(parseNoticeListQuery({
       business: '09', field: 'agency', q: '기타 수요기관', postedTo: '2026-10-26',
       submissionFrom: '2026-10-27', budgetFrom: '1000', sort: 'deadline-asc',
     }, regions, updatedBusinesses));
@@ -1811,34 +1802,33 @@ test('입찰공고 조건은 페이지 조회 전에 적용하며 협정서 일�
       '모의공고&#40;재공고&#41;', ' 모의공고 ', '모의공고(등록공고)',
     ];
     for (let index = 0; index < 20; index++) {
-      insert.run('RMOCK' + index, JSON.stringify({ title: '테스트 공고', payload: {
+      await insert.run('RMOCK' + index, JSON.stringify({ title: '테스트 공고', payload: {
         dmItemMap: {
           pbancKndNm: mockKinds[index % mockKinds.length], prcmBsneSeCd: '02',
           rgnLmtYn: 'Y', rgnLmtCn: '[광주광역시]', alotBgtAmt: 1000,
         },
       } }));
     }
-    insert.run('TREGULAR', JSON.stringify({ title: '테스트 공고', payload: {
+    await insert.run('TREGULAR', JSON.stringify({ title: '테스트 공고', payload: {
       dmItemMap: { pbancKndNm: '일반공고', alotBgtAmt: 999 },
     } }));
     const publicOptions = { excludeMockNotices: true };
     const list = attempts.noticeList;
-    assert.ok(list.regions().includes('광주광역시'));
-    assert.ok(list.businesses().some(({ value }) => value === '02'));
-    assert.ok(!list.regions(publicOptions).includes('광주광역시'));
-    assert.ok(!list.businesses(publicOptions).some(({ value }) => value === '02'));
+    assert.ok((await list.regions()).includes('광주광역시'));
+    assert.ok((await list.businesses()).some(({ value }) => value === '02'));
+    assert.ok(!(await list.regions(publicOptions)).includes('광주광역시'));
+    assert.ok(!(await list.businesses(publicOptions)).some(({ value }) => value === '02'));
     const publicQuery = parseNoticeListQuery({ status: 'collected', sort: 'budget-desc' }, [], []);
-    assert.equal(list.page(publicQuery).totalPages, 3);
-    const publicPage = list.page(publicQuery, publicOptions);
+    assert.equal((await list.page(publicQuery)).totalPages, 3);
+    const publicPage = await list.page(publicQuery, publicOptions);
     assert.deepEqual(publicPage.counts, { total: 26, collected: 25, uncollected: 1 });
     assert.equal(publicPage.totalPages, 2);
     assert.ok(publicPage.rows.some(({ number }) => number === 'TREGULAR'));
-    assert.ok(list.page({ ...publicQuery, page: 2 }, publicOptions).rows.some(({ number }) => number === 'N01'));
-    assert.deepEqual(list.page(parseNoticeListQuery({ q: '테스트 공고' }, [], []), publicOptions)
+    assert.ok((await list.page({ ...publicQuery, page: 2 }, publicOptions)).rows.some(({ number }) => number === 'N01'));
+    assert.deepEqual((await list.page(parseNoticeListQuery({ q: '테스트 공고' }, [], []), publicOptions))
       .rows.map(({ number }) => number), ['TREGULAR']);
   } finally {
-    databases.delete(db);
-    db.close();
+    db.client.close();
   }
 });
 
@@ -1852,7 +1842,7 @@ test('수집 이력에서 네트워크 하위 원인과 각각의 스택을 확�
     trackCollectionAttempt(target, () => postG2b('/test.do', 'test', {}, async () => { throw error; })),
     error,
   );
-  const attempt = repository.collectionAttempts.overview('contracts').failures.find(({ number }) => number === target.number);
+  const attempt = (await repository.collectionAttempts.overview('contracts')).failures.find(({ number }) => number === target.number);
   const diagnostics = JSON.parse(attempt.diagnostics);
   assert.equal(diagnostics.request.path, '/test.do');
   assert.equal(diagnostics.cause.code, 'ECONNRESET');
@@ -1862,7 +1852,7 @@ test('수집 이력에서 네트워크 하위 원인과 각각의 스택을 확�
 
 test('관리자 목록은 업무 오류, HTTP 오류, JSON 파싱 진단을 접힌 아코디언으로 제공한다', async () => {
   const { createElement } = require('react');
-  const { renderToStaticMarkup } = require('react-dom/server');
+
   const { CollectionFailureDetails } = require('../src/_pages/admin/g2b/ui/CollectionFailureDetails');
   const { trackCollectionAttempt } = require('../src/features/collect-g2b/api/collection-attempt');
   const { postG2b } = require('../src/features/collect-g2b/api/request');
@@ -1876,12 +1866,12 @@ test('관리자 목록은 업무 오류, HTTP 오류, JSON 파싱 진단을 접�
     const target = { section: 'contracts', number: 'DIAGRESPONSE' + index, revision: '00' };
     await assert.rejects(trackCollectionAttempt(target, () => postG2b('/test.do', 'test', {}, async () => response)));
     const query = parseContractListQuery({ status: 'uncollected', field: 'number', q: target.number }, []);
-    const row = repository.collectionAttempts.contractList.page(query).rows.find(({ number }) => number === target.number);
+    const row = (await repository.collectionAttempts.contractList.page(query)).rows.find(({ number }) => number === target.number);
     const diagnostic = JSON.parse(row.diagnostics);
     assert.equal(diagnostic.step, step);
     assert.equal(diagnostic.response.status, status);
     assert.doesNotMatch(row.diagnostics, /secret-value|raw-private-body/);
-    const html = renderToStaticMarkup(createElement(CollectionFailureDetails, { diagnostics: row.diagnostics }));
+    const html = await renderMarkup(createElement(CollectionFailureDetails, { diagnostics: row.diagnostics }));
     const [, triggerAttributes] = html.match(/<button\b([^>]*)>원인 보기/) ?? [];
     assert.ok(triggerAttributes, '원인 보기 버튼이 있어야 한다');
     assert.match(triggerAttributes, /\baria-expanded="false"/);
@@ -1912,25 +1902,24 @@ test('계약현황의 응답 키 불일치와 실제 SQLite 저장 오류를 기
     dlCtrtMngLstM: { ctrtNo: number, ctrtChgOrd: 0 },
     dlCtrtEtpsLstL: [], dlCtrtEtpsSvsLstL: [], dlCtrtItemLstL: [],
   }));
-  const latest = () => JSON.parse(repository.collectionAttempts.overview('contracts').failures
+  const latest = async () => JSON.parse((await repository.collectionAttempts.overview('contracts')).failures
     .find((row) => row.number === key.number).diagnostics);
   await assert.rejects(collectContract(key, true));
-  assert.equal(latest().details['기대한 번호'], key.number);
-  assert.equal(latest().details['응답 번호'], number);
+  assert.equal((await latest()).details['기대한 번호'], key.number);
+  assert.equal((await latest()).details['응답 번호'], number);
 
   number = key.number;
-  const db = [...databases][0];
-  db.exec(`CREATE TRIGGER diagnostic_contract_failure BEFORE INSERT ON contracts
+  await db.client.executeMultiple(`CREATE TRIGGER diagnostic_contract_failure BEFORE INSERT ON contracts
     WHEN NEW.number = 'DIAG-SQLITE' BEGIN SELECT RAISE(ABORT, 'diagnostic constraint'); END;`);
   try {
     await assert.rejects(collectContract(key, true), /diagnostic constraint/);
-    const diagnostic = latest();
-    assert.equal(diagnostic.step, 'SQLite 계약현황 저장');
-    assert.equal(diagnostic.code, 'ERR_SQLITE_ERROR');
+    const diagnostic = await latest();
+    assert.equal(diagnostic.step, '저장소 계약현황 저장');
+    assert.equal(diagnostic.code, 'SQLITE_CONSTRAINT');
     assert.equal(typeof diagnostic.errcode, 'number');
     assert.match(diagnostic.stack, /diagnostic constraint/);
   } finally {
-    db.exec('DROP TRIGGER diagnostic_contract_failure');
+    await db.client.executeMultiple('DROP TRIGGER diagnostic_contract_failure');
   }
 });
 
@@ -1953,13 +1942,13 @@ test('큐 관리 API가 실행 중 수동 중단 요청을 저장하고 등록 �
   const response = await postNotice(noticeRequest());
   assert.equal(response.status, 202);
   const { jobId } = await response.json();
-  assert.equal(queue.claim(Date.now()).id, jobId);
+  assert.equal((await queue.claim(Date.now())).id, jobId);
   const pause = await PATCH(new Request('http://localhost', { method: 'PATCH', body: '{"manual":true}' }));
   assert.equal(pause.status, 204);
-  assert.equal((await GET().json()).active, jobId);
-  assert.equal((await GET().json()).manual, true);
-  queue.finish(jobId, { kind: 'success', related: [], result: {} }, Date.now());
-  assert.equal((await GET().json()).active, null);
+  assert.equal((await (await GET()).json()).active, jobId);
+  assert.equal((await (await GET()).json()).manual, true);
+  await queue.finish(jobId, { kind: 'success', related: [], result: {} }, Date.now());
+  assert.equal((await (await GET()).json()).active, null);
 
   const log = t.mock.method(console, 'error', () => {});
   t.mock.method(queue, 'enqueue', () => { throw new Error('DB 쓰기 실패'); });

@@ -9,7 +9,7 @@ import { attachmentGroup } from "@/shared/model/g2b/g2b-attachments";
 import { trackCollectionAttempt, trackCollectionLookup } from "./collection-attempt";
 import type { NoticeJob, NoticeJobOutcome, NoticeQueueInput } from "@/server/g2b/repository/notice-queue-types";
 import { collectNotice, NoticeCollectionDeferred } from "./notices";
-import { collectionError, collectionStep, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
+import { collectionError, collectionAsyncStep, collectionStep, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
 import { findMaintenance } from "@/shared/api/g2b/g2b-maintenance";
 
 function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFailure: (error: unknown) => void) {
@@ -32,7 +32,7 @@ function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFa
     if (documents?.unavailable?.length || missingPosts || missingBaseAmount || missingPrivatePosts || missingPrivateCodes ||
         notice.contractRequests === undefined || notice.contracts === undefined) {
       // 일시적인 문서 조회 실패 때문에 이전에 저장한 원본 목록을 잃지 않도록 한다.
-      const previous = collectionStep("SQLite 이전 공고 조회", () =>
+      const previous = await collectionAsyncStep("저장소 이전 공고 조회", () =>
         repository.findUsableNotice(input));
       if (documents) {
         for (const kind of documents.unavailable ?? []) {
@@ -84,7 +84,7 @@ function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFa
       }
     }
     await repository.save(notice).catch((error: unknown) => {
-      throw collectionError(error, { step: "SQLite 공고 저장" });
+      throw collectionError(error, { step: "저장소 공고 저장" });
     });
     if (input.opening && !openingReport.targetRevisions.length) {
       recordFailure(new Error("조회할 개찰결과 상세를 찾을 수 없습니다."));
@@ -97,16 +97,16 @@ function saveCollectedNotice(input: NoticeQueueInput, jobId: number, onPartialFa
  * 저장된 발주계획의 원본 공고 참조를 일반 탐색 입력으로 변환한다.
  * @throws 저장된 발주계획을 읽지 못한 경우.
  */
-export function relatedPlanInputs(number: string): NoticeQueueInput[] {
-  const plan = getG2bRepository().findOrderPlan(number);
+export async function relatedPlanInputs(number: string): Promise<NoticeQueueInput[]> {
+  const plan = await getG2bRepository().findOrderPlan(number);
   return plan ? orderPlanNoticeReferences(plan).map((key) => ({ ...key, methodCode: "" })) : [];
 }
 
-function relatedInputs(notice: Notice): NoticeQueueInput[] {
+async function relatedInputs(notice: Notice): Promise<NoticeQueueInput[]> {
   const references = getRelatedNoticeKeys(notice.payload).map((key) => ({ ...key, methodCode: "" }));
   if (notice.orderPlanStatus) return references;
   const planNumber = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
-  return planNumber ? [...references, ...relatedPlanInputs(planNumber)] : references;
+  return planNumber ? [...references, ...await relatedPlanInputs(planNumber)] : references;
 }
 
 /**
@@ -129,7 +129,7 @@ export async function executeNoticeJob({ id, input, force, executions }: NoticeJ
       succeededRevisions: report?.succeededRevisions ?? [],
       failedRevisions: report?.failures.map(({ revision }) => revision) ?? [],
     };
-    const related = relatedInputs(notice);
+    const related = await relatedInputs(notice);
     const openingFailure = report?.failures[0]?.error;
     if (partial || openingFailure || (input.opening && !result.targetRevisions.length)) {
       const error = partial || openingFailure ? describeCollectionError(partial ?? openingFailure).message : "조회할 개찰결과 상세를 찾을 수 없습니다.";

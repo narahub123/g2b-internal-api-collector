@@ -27,9 +27,9 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
   const repository = getG2bRepository();
   const key = await params;
   const notice = await repository.find(key);
-  const failure = repository.collectionAttempts.latestNoticeFailure(key.number, key.revision);
+  const failure = await repository.collectionAttempts.latestNoticeFailure(key.number, key.revision);
   if (!notice) {
-    const target = repository.noticeQueue.findRunNotice(key.number, key.revision);
+    const target = await repository.noticeQueue.findRunNotice(key.number, key.revision);
     if (!target) notFound();
     return (
       <div className="grid min-w-0 gap-6">
@@ -54,7 +54,7 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
 
   const number = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
   const orderPlanNumber =
-    number && repository.findOrderPlan(number) ? number : undefined;
+    number && (await repository.findOrderPlan(number)) ? number : undefined;
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
       <DetailNavigation section="notices" />
@@ -70,7 +70,7 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
         links={{
           contractPath,
           contractRequestPath,
-          noticePath: (key) => repository.findUsableNotice(key) ? noticePath(key) : undefined,
+          noticePath: async (key) => (await repository.findUsableNotice(key)) ? noticePath(key) : undefined,
           openingResultPath,
           orderPlanPath,
           priorSpecPath,

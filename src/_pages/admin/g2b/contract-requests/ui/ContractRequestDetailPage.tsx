@@ -27,7 +27,7 @@ export async function ContractRequestDetailPage({
     contractRequestRevision(key.revision) !== key.revision
   )
     notFound();
-  const contractRequest = getG2bRepository().findContractRequest(key);
+  const contractRequest = await getG2bRepository().findContractRequest(key);
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">

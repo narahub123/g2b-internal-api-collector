@@ -1,4 +1,4 @@
-import { collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
+import { collectionAsyncStep, collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 import { contractRequestRevision, type ContractRequestKey } from "@/entities/contract-request/model/contract-request";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { findMaintenance, throwIfMaintenance } from "@/shared/api/g2b/g2b-maintenance";
@@ -147,7 +147,7 @@ export async function collectContractRequest(
           throw collectionValidationError("요청한 계약요청의 상세 응답을 받지 못했습니다.", "dlTotalSrchL", key,
             { number: first?.bizNo, revision: first?.bizOrd });
         }
-        collectionStep("SQLite 계약요청 저장", () => repository.saveContractRequest({
+        await collectionAsyncStep("저장소 계약요청 저장", () => repository.saveContractRequest({
           ...key,
           collectedAt,
           detail,

@@ -32,7 +32,7 @@ export function OrderPlanDetail({
   plan: OrderPlan;
   notices: ReturnType<typeof orderPlanNoticeReferences>;
   noticePath: (key: { number: string; revision: string }) => string | undefined;
-  priorSpecPath: (number: string) => string | undefined;
+  priorSpecPath: (number: string) => string | undefined | Promise<string | undefined>;
   actions?: ReactNode;
 }) {
   const detail = plan.payload.dlOderPlanM;
@@ -100,8 +100,8 @@ export function OrderPlanDetail({
               <dd className="min-h-5">
                 {specifications.length > 0 && (
                   <ul className="grid gap-2">
-                    {specifications.map((number, index) => {
-                      const href = priorSpecPath(number);
+                    {specifications.map(async (number, index) => {
+                      const href = await priorSpecPath(number);
                       return (
                         <li key={JSON.stringify([number, index])} className="wrap-anywhere">
                           {href ? <Link href={href} className={linkClass}>{number}</Link> : number}

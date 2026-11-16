@@ -1,6 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { G2bDatabase } from "./database";
 import type { OpeningResultQuery } from "@/entities/opening-result/model/opening-result";
-import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import { orderPlanUnprocessableStatus } from "@/shared/config/g2b-order-plan";
 import type { G2bCollectionCounts } from "./types";
 import { openNoticeList } from "./notice-list";
@@ -9,7 +8,6 @@ import { openContractRequestList } from "./contract-request-list";
 import { openPriorSpecList } from "./prior-spec-list";
 import { openOpeningResultList } from "./opening-result-list";
 import { openContractList } from "./contract-list";
-import { cleanText } from "./collection-list-query";
 import type { CollectionDiagnostic } from "@/shared/api/g2b/collection-diagnostic";
 
 export type CollectionSection = keyof G2bCollectionCounts;
@@ -67,7 +65,7 @@ type RetryRow = { input: string; status: AttemptStatus; latestId: number; starte
 // 저장된 계획으로 연결되는 호출 번호만 합친다. 서로 다른 계획에 연결되면 원래 이력 번호를 유지한다.
 export const orderPlanAttemptKeys = `
   order_plan_links AS (
-    SELECT notice_order_plan_lookup(data) AS lookup_number,
+    SELECT json_extract(query_data, '$.orderPlanLookup') AS lookup_number,
       json_extract(data, '$.orderPlanNumber') AS plan_number
     FROM notices
     WHERE CASE WHEN json_valid(data) THEN json_type(data, '$.orderPlanNumber') = 'text' END
@@ -103,14 +101,14 @@ const savedQueries: Record<CollectionSection, string> = {
         json_extract(data, '$.payload.dlOderPlanM.itemNm')) AS title,
       json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCd') AS businessCode,
       json_extract(data, '$.payload.dlOderPlanM.prcmBsneSeCdNm') AS businessLabel,
-      data
+      data, query_data, json_extract(query_data, '$.searchTitle') AS searchTitle
     FROM order_plans`,
   "prior-specs": `
     SELECT number, '' AS revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.payload.dlBfSpecM.bfSpecNm') AS title,
       json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCd') AS businessCode,
       json_extract(data, '$.payload.dlBfSpecM.prcmBsneSeCdNm') AS businessLabel,
-      data
+      data, query_data, json_extract(query_data, '$.searchTitle') AS searchTitle
     FROM prior_specs`,
   notices: `
     SELECT number, revision, '' AS opening_revision, collected_at,
@@ -118,21 +116,21 @@ const savedQueries: Record<CollectionSection, string> = {
       COALESCE(json_extract(data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),
         json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd')) AS businessCode,
       json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel,
-      data
+      data, query_data, json_extract(query_data, '$.searchTitle') AS searchTitle
     FROM notices WHERE json_valid(data)`,
   "contract-requests": `
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.detail.bizNm') AS title,
       NULL AS businessCode,
       json_extract(data, '$.detail.prcmBsneAreaNm') AS businessLabel,
-      data
+      data, query_data, json_extract(query_data, '$.searchTitle') AS searchTitle
     FROM contract_requests`,
   contracts: `
     SELECT number, revision, '' AS opening_revision, collected_at,
       json_extract(data, '$.detail.ctrtNm') AS title,
       json_extract(data, '$.detail.prcmBsneSeCd') AS businessCode,
       json_extract(data, '$.detail.prcmBsneSeNm') AS businessLabel,
-      data
+      data, query_data, json_extract(query_data, '$.searchTitle') AS searchTitle
     FROM contracts`,
   "opening-results": `
     SELECT result.number, result.revision, result.opening_revision, result.collected_at,
@@ -146,13 +144,16 @@ const savedQueries: Record<CollectionSection, string> = {
         WHERE name IS NOT NULL LIMIT 1)
       ) AS title,
       COALESCE(NULLIF(TRIM(json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeCd')), ''),
-        (SELECT MIN(json_extract(entry.value, '$.query.businessCode'))
-          FROM json_each(result.data, '$.results') AS entry
-          HAVING COUNT(DISTINCT json_extract(entry.value, '$.query.businessCode')) = 1)
+        (SELECT CASE WHEN COUNT(DISTINCT json_extract(entry.value, '$.query.businessCode')) = 1
+          THEN MIN(json_extract(entry.value, '$.query.businessCode')) END
+          FROM json_each(result.data, '$.results') AS entry)
       ) AS businessCode,
       json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel,
-      result.data,
-      json_extract(notice.data, '$.payload.dmItemMap.dmstUntyGrpNm') AS linkedAgency
+      result.data, result.query_data,
+      COALESCE(json_extract(notice.query_data, '$.openingSearchTitle'), json_extract(result.query_data, '$.searchTitle')) AS searchTitle,
+      json_extract(notice.query_data, '$.linkedAgency') AS linkedAgency,
+      json_extract(notice.query_data, '$.linkedCode') AS linkedCode,
+      json_extract(notice.query_data, '$.linkedBusiness') AS linkedBusiness
     FROM opening_results AS result
     LEFT JOIN notices AS notice ON notice.number = result.number AND notice.revision = result.revision
       AND json_valid(notice.data)`,
@@ -163,54 +164,7 @@ const savedQueries: Record<CollectionSection, string> = {
  * 기존 시도 이력을 보존하며 누락된 진단 열을 추가한다.
  * @throws 스키마 초기화 또는 쿼리 준비에 실패한 경우.
  */
-export function openCollectionAttempts(db: DatabaseSync) {
-  db.function("notice_order_plan_lookup", { deterministic: true }, (data) => {
-    if (typeof data !== "string") return null;
-    const payload = JSON.parse(data)?.payload;
-    return payload ? getNoticeOrderPlanNumber(payload) ?? null : null;
-  });
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS g2b_collection_attempts (
-      id INTEGER PRIMARY KEY,
-      section TEXT NOT NULL,
-      number TEXT NOT NULL,
-      revision TEXT NOT NULL,
-      opening_revision TEXT NOT NULL,
-      input TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      finished_at TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      error TEXT,
-      diagnostics TEXT
-    );
-    CREATE INDEX IF NOT EXISTS g2b_collection_attempts_target
-      ON g2b_collection_attempts (section, number, revision, opening_revision, id DESC);
-  `);
-  // 동시에 시작한 프로세스도 열 확인과 추가를 쓰기 트랜잭션에서 직렬화한다.
-  if (!db.prepare("SELECT 1 FROM pragma_table_info('g2b_collection_attempts') WHERE name = 'diagnostics'").get()) {
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      if (!db.prepare("SELECT 1 FROM pragma_table_info('g2b_collection_attempts') WHERE name = 'diagnostics'").get()) {
-        db.exec("ALTER TABLE g2b_collection_attempts ADD COLUMN diagnostics TEXT");
-      }
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-  if (!db.prepare("SELECT 1 FROM pragma_table_info('g2b_collection_attempts') WHERE name = 'job_id'").get()) {
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      if (!db.prepare("SELECT 1 FROM pragma_table_info('g2b_collection_attempts') WHERE name = 'job_id'").get()) {
-        db.exec("ALTER TABLE g2b_collection_attempts ADD COLUMN job_id INTEGER");
-      }
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
-  }
+export function openCollectionAttempts(db: G2bDatabase) {
   const insert = db.prepare(`
     INSERT INTO g2b_collection_attempts (section, number, revision, opening_revision, input, started_at, job_id)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -240,7 +194,7 @@ export function openCollectionAttempts(db: DatabaseSync) {
     const orderPlans = section === "order-plans";
     // 미존재가 확인된 호출 번호는 이력에서만 추가되는 목록 대상에서 제외한다.
     const unavailablePlans = `unavailable_order_plans AS (
-      SELECT DISTINCT notice_order_plan_lookup(data) AS number
+      SELECT DISTINCT json_extract(query_data, '$.orderPlanLookup') AS number
       FROM notices
       WHERE CASE WHEN json_valid(data)
         THEN json_extract(data, '$.orderPlanStatus') = '${orderPlanUnprocessableStatus}'
@@ -279,7 +233,6 @@ export function openCollectionAttempts(db: DatabaseSync) {
     return [section, { counts, overview, targets }] as const;
   }));
 
-  db.function("collection_search_text", { deterministic: true }, (value) => cleanText(value).toLowerCase());
   return {
     noticeList: openNoticeList(db, summaries.get("notices")!.targets),
     orderPlanList: openOrderPlanList(db, summaries.get("order-plans")!.targets),
@@ -291,10 +244,10 @@ export function openCollectionAttempts(db: DatabaseSync) {
      * 외부 조회 직전에 입력과 시작 시각을 기록한다.
      * @param jobId 공고 워커가 시작한 경우 연결할 영속 작업 ID.
      * @returns 종료 결과를 기록하거나 재시도할 때 쓰는 시도 ID.
-     * @throws SQLite가 이력 행을 저장하지 못한 경우.
+     * @throws Turso가 이력 행을 저장하지 못한 경우.
      */
-    start(target: CollectionTarget, jobId?: number): number {
-      return Number(insert.run(
+    async start(target: CollectionTarget, jobId?: number): Promise<number> {
+      return Number((await insert.run(
         target.section,
         target.number,
         "revision" in target ? target.revision : "",
@@ -302,15 +255,15 @@ export function openCollectionAttempts(db: DatabaseSync) {
         JSON.stringify(target),
         new Date().toISOString(),
         jobId ?? null,
-      ).lastInsertRowid);
+      )).lastInsertRowid);
     },
 
     /**
      * 지정한 시도만 종료 처리한다. 다른 시도의 시작 순서와 결과는 보존된다.
-     * @throws SQLite가 결과를 저장하지 못한 경우.
+     * @throws Turso가 결과를 저장하지 못한 경우.
      */
-    finish(id: number, status: FinishedStatus, error: string | null = null, diagnostics?: CollectionDiagnostic): void {
-      finish.run(new Date().toISOString(), status, error, diagnostics ? JSON.stringify(diagnostics) : null, id);
+    async finish(id: number, status: FinishedStatus, error: string | null = null, diagnostics?: CollectionDiagnostic): Promise<void> {
+      await finish.run(new Date().toISOString(), status, error, diagnostics ? JSON.stringify(diagnostics) : null, id);
     },
 
     /**
@@ -320,13 +273,13 @@ export function openCollectionAttempts(db: DatabaseSync) {
      * @returns 없는 이력은 missing, 이미 성공했거나 화면의 이력이 바뀌었으면 conflict.
      * @throws SQLite 조회나 저장 입력 역직렬화가 실패한 경우.
      */
-    retryTarget(id: number, startedAt?: string): CollectionTarget | "missing" | "conflict" {
-      const row = retry.get(id) as RetryRow | undefined;
+    async retryTarget(id: number, startedAt?: string): Promise<CollectionTarget | "missing" | "conflict"> {
+      const row = await retry.get(id) as RetryRow | undefined;
       if (!row) return "missing";
       if (row.status === "succeeded" || (startedAt !== undefined && row.startedAt !== startedAt)) return "conflict";
       const target = JSON.parse(row.input) as CollectionTarget;
       if (target.section === "order-plans") {
-        const resolved = retryOrderPlan.get(id) as { number: string; latestId: number } | undefined;
+        const resolved = await retryOrderPlan.get(id) as { number: string; latestId: number } | undefined;
         return resolved?.latestId === id ? { ...target, number: resolved.number } : "conflict";
       }
       return row.latestId === id ? target : "conflict";
@@ -334,10 +287,10 @@ export function openCollectionAttempts(db: DatabaseSync) {
 
     /**
      * 같은 공고·차수의 최신 시도가 실패했을 때 화면에 표시할 진단을 반환한다.
-     * @throws SQLite에서 수집 이력을 읽지 못한 경우.
+     * @throws Turso에서 수집 이력을 읽지 못한 경우.
      */
-    latestNoticeFailure(number: string, revision: string) {
-      const row = db.prepare(`SELECT status, error, diagnostics FROM g2b_collection_attempts
+    async latestNoticeFailure(number: string, revision: string) {
+      const row = await db.prepare(`SELECT status, error, diagnostics FROM g2b_collection_attempts
         WHERE section = 'notices' AND number = ? AND revision = ?
         ORDER BY id DESC LIMIT 1`).get(number, revision) as
         { status: string; error: string | null; diagnostics: string | null } | undefined;
@@ -346,19 +299,19 @@ export function openCollectionAttempts(db: DatabaseSync) {
 
     /**
      * 목록 본문을 읽지 않고 랜딩 카드의 전체·수집·미수집 건수를 조회한다.
-     * @throws SQLite가 수집 건수를 집계하지 못한 경우.
+     * @throws Turso가 수집 건수를 집계하지 못한 경우.
      */
-    counts(section: CollectionSection): CollectionOverview["counts"] {
-      const { total, collected, uncollected } = summaries.get(section)!.counts.get(section) as CollectionOverview["counts"];
+    async counts(section: CollectionSection): Promise<CollectionOverview["counts"]> {
+      const { total, collected, uncollected } = await summaries.get(section)!.counts.get(section) as CollectionOverview["counts"];
       return { total, collected, uncollected };
     },
 
     /**
      * 저장 키와 시도 키의 합집합으로 집계하고 최신 실패와 미확인 시도를 함께 반환한다.
-     * @throws SQLite가 목록을 조회하지 못한 경우.
+     * @throws Turso가 목록을 조회하지 못한 경우.
      */
-    overview(section: CollectionSection): CollectionOverview {
-      const rows = summaries.get(section)!.overview.all(section) as CollectionListRow[];
+    async overview(section: CollectionSection): Promise<CollectionOverview> {
+      const rows = await summaries.get(section)!.overview.all(section) as CollectionListRow[];
       const saved: SavedTarget[] = [];
       const failures: FailedAttempt[] = [];
       for (const { number, revision, openingRevision, collectedAt, title, businessCode, businessLabel, id, startedAt, status, error, diagnostics } of rows) {

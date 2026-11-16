@@ -1,4 +1,4 @@
-import { collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
+import { collectionAsyncStep, collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type { PriorSpec } from "@/entities/prior-spec/model/prior-spec";
 import { createG2bSession } from "@/shared/api/g2b/g2b-session";
@@ -55,10 +55,10 @@ export async function collectPriorSpec(number: string, force = false) {
       }
       const group = attachmentGroup(spec.payload.dlBfSpecM.untyAtchFileNo);
       const attachments = group
-        ? await collectAttachments(group, "prior-spec", request).catch((error: unknown) => {
+        ? await collectAttachments(group, "prior-spec", request).catch(async (error: unknown) => {
             if (!findMaintenance(error) && !force && needsDetail) {
               try {
-                collectionStep("SQLite 사전규격 부분 저장", () => repository.savePriorSpec(spec));
+                await collectionAsyncStep("저장소 사전규격 부분 저장", () => repository.savePriorSpec(spec));
               } catch (saveError) {
                 recordFailure(error);
                 throw saveError;
@@ -68,7 +68,7 @@ export async function collectPriorSpec(number: string, force = false) {
           })
         : undefined;
       if (force || needsDetail || attachments)
-        collectionStep("SQLite 사전규격 저장", () => repository.savePriorSpec({ ...spec, attachments }));
+        await collectionAsyncStep("저장소 사전규격 저장", () => repository.savePriorSpec({ ...spec, attachments }));
     });
   });
 }

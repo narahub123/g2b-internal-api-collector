@@ -1,4 +1,4 @@
-import { collectionStep, collectionValidationError, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
+import { collectionAsyncStep, collectionStep, collectionValidationError, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { orderPlanAttachmentGroup } from "@/entities/order-plan/model/order-plan";
 import { createG2bSession } from "@/shared/api/g2b/g2b-session";
@@ -74,7 +74,7 @@ export async function collectOrderPlan(
         }
         if (responseNumber !== number) {
           // 여러 공고가 같은 응답 번호로 연결될 수 있으므로 이미 저장한 본문과 첨부를 재사용한다.
-          plan = collectionStep("SQLite 응답 발주계획 조회", () => repository.findOrderPlan(responseNumber));
+          plan = await collectionAsyncStep("저장소 응답 발주계획 조회", () => repository.findOrderPlan(responseNumber));
           needsSave = !plan;
         }
         plan ??= { number: responseNumber, collectedAt, payload };
@@ -91,7 +91,7 @@ export async function collectOrderPlan(
           if (!findMaintenance(error) && !force) {
             if (needsSave) {
               try {
-                collectionStep("SQLite 발주계획 부분 저장", () => repository.saveOrderPlan(plan));
+                await collectionAsyncStep("저장소 발주계획 부분 저장", () => repository.saveOrderPlan(plan));
               } catch (saveError) {
                 recordFailure(error);
                 throw saveError;
@@ -105,10 +105,10 @@ export async function collectOrderPlan(
           throw error;
         }
       }
-      if (force) collectionStep("SQLite 발주계획 저장", () => repository.replaceOrderPlan({ ...plan, attachments }));
-      else if (needsSave) collectionStep("SQLite 발주계획 저장", () => repository.saveOrderPlan({ ...plan, attachments }));
+      if (force) await collectionAsyncStep("저장소 발주계획 저장", () => repository.replaceOrderPlan({ ...plan, attachments }));
+      else if (needsSave) await collectionAsyncStep("저장소 발주계획 저장", () => repository.saveOrderPlan({ ...plan, attachments }));
       else if (attachments)
-        collectionStep("SQLite 발주계획 첨부 저장", () => repository.saveOrderPlanAttachments(
+        await collectionAsyncStep("저장소 발주계획 첨부 저장", () => repository.saveOrderPlanAttachments(
           savedNumber,
           plan.collectedAt,
           attachments,

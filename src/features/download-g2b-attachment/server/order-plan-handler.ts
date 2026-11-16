@@ -10,7 +10,7 @@ import { resolvePublicAttachmentDownload } from '@/features/download-g2b-attachm
  */
 export async function downloadOrderPlanAttachment(_request: Request, { params }: { params: Promise<{ number: string; seq: string }> }) {
   const { number, seq } = await params;
-  const plan = getG2bRepository().findOrderPlan(number);
+  const plan = await getG2bRepository().findOrderPlan(number);
   if (!plan) return Response.json({ error: '발주계획을 찾을 수 없습니다.' }, { status: 404 });
 
   try {

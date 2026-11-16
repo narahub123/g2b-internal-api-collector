@@ -1,4 +1,4 @@
-import { collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
+import { collectionAsyncStep, collectionStep, collectionValidationError } from "@/shared/api/g2b/collection-diagnostic";
 import { contractRevision, contractSearchBody, parseContractResponse, type ContractKey } from "@/entities/contract/model/contract";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { postG2b } from "./request";
@@ -39,7 +39,7 @@ export async function collectContract(key: ContractKey, force = false) {
             result[field].some((row: unknown) => row === null || typeof row !== "object" || Array.isArray(row)));
           throw collectionValidationError(message, invalid.join(", "));
         }
-        collectionStep("SQLite 계약현황 저장", () => repository.saveContract({ ...key, collectedAt, ...contract }));
+        await collectionAsyncStep("저장소 계약현황 저장", () => repository.saveContract({ ...key, collectedAt, ...contract }));
       });
     },
   );

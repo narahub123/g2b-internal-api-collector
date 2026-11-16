@@ -23,7 +23,7 @@ export async function OpeningResultDetailPage({ params }: { params: Promise<Noti
     notFound();
   const repository = getG2bRepository();
   const notice = await repository.find(key);
-  const results = repository.listOpeningResults(key);
+  const results = await repository.listOpeningResults(key);
   if (
     !results.length &&
     (!notice || !openingResultQueries(notice.payload).length)

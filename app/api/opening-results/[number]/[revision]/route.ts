@@ -21,9 +21,9 @@ import { maintenanceResponse } from "@/shared/api/g2b/g2b-maintenance";
  */
 function mergeSavedQueries(
   groups: Map<string, OpeningResultQuery[]>,
-  saved: ReturnType<
+  saved: Awaited<ReturnType<
     ReturnType<typeof getG2bRepository>["listOpeningResults"]
-  >,
+  >>,
 ) {
   for (const result of saved) {
     const queries = groups.get(result.openingRevision) ?? [];
@@ -88,7 +88,7 @@ export async function POST(
   if (notice) {
     await checkNoticeQueueMaintenance();
     const groups = groupOpeningResultQueries(openingResultQueries(notice.payload));
-    mergeSavedQueries(groups, repository.listOpeningResults(key));
+    mergeSavedQueries(groups, await repository.listOpeningResults(key));
     report = await collectOpeningGroups(groups, true);
   } else {
     return acceptNoticeJob({ ...input, opening: true });

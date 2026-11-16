@@ -10,7 +10,7 @@ export { logNoticeQueueError } from "./notice-queue-diagnostics";
 export async function checkNoticeQueueMaintenance() {
   try {
     const queue = getG2bRepository().noticeQueue;
-    const version = queue.maintenanceVersion();
+    const version = await queue.maintenanceVersion();
     if (!version) return;
     try {
       await createG2bSession();
@@ -18,7 +18,7 @@ export async function checkNoticeQueueMaintenance() {
       // 통신 장애와 점검 응답 모두 정상 복귀의 근거가 될 수 없다.
       return;
     }
-    queue.clearMaintenance(version);
+    await queue.clearMaintenance(version);
   } catch (error) {
     logNoticeQueueError("check-maintenance", error);
   }
@@ -28,7 +28,7 @@ export async function checkNoticeQueueMaintenance() {
 export async function acceptNoticeJob(input: NoticeQueueInput, retryAttemptId?: number) {
   let jobId: number;
   try {
-    [jobId] = getG2bRepository().noticeQueue.enqueue([input], true, retryAttemptId);
+    [jobId] = await getG2bRepository().noticeQueue.enqueue([input], true, retryAttemptId);
   } catch (error) {
     logNoticeQueueError("enqueue", error);
     return Response.json({ error: "공고 수집 요청을 접수하지 못했습니다." }, { status: 503 });
@@ -51,7 +51,7 @@ export async function collectPlanAndEnqueueNotices(number: string) {
   const plan = await collectOrderPlan(number, true);
   if (plan.status) return { number: plan.number, status: plan.status };
   try {
-    getG2bRepository().noticeQueue.enqueue(relatedPlanInputs(plan.number), false);
+    await getG2bRepository().noticeQueue.enqueue(await relatedPlanInputs(plan.number), false);
   } catch (error) {
     logNoticeQueueError("enqueue-plan-notices", error);
     throw new QueueRegistrationError("발주계획은 저장됐지만 관련 공고를 접수하지 못했습니다.", { cause: error });

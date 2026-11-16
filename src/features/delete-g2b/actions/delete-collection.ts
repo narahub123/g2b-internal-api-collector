@@ -17,7 +17,7 @@ export async function deleteCollection(section: unknown, input: unknown) {
   if (!request) return { ok: false, error: "삭제 대상이 올바르지 않습니다." } as const;
 
   try {
-    const result = getG2bRepository().collectionDeletion.remove(request.section, request.targets);
+    const result = await getG2bRepository().collectionDeletion.remove(request.section, request.targets);
     if (result.ok === false) {
       return {
         ok: false,

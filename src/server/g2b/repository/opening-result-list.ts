@@ -1,11 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { G2bDatabase } from "./database";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { cleanText, openCollectionList, sortDate } from "./collection-list-query";
 
-function listFields(raw: unknown, rawCode: unknown, rawLabel: unknown, linkedAgency: unknown) {
+/** 수집 원본에서 목록 검색과 정렬에 필요한 파생값을 계산한다. */
+export function openingResultFields(raw: unknown) {
   const data = typeof raw === "string" ? JSON.parse(raw) : null;
-  const business = resolveG2bBusiness(rawCode, rawLabel);
-  const businesses = business ? [business] : [];
+  const businesses: NonNullable<ReturnType<typeof resolveG2bBusiness>>[] = [];
   const results = Array.isArray(data?.results) ? data.results : [];
   // 한 개찰차수에 분류별 결과가 여럿이면 가장 늦은 실제개찰일시를 사용한다.
   // 유찰 등 실제개찰일시가 없는 응답에 예정일시는 대입하지 않는다.
@@ -16,22 +16,27 @@ function listFields(raw: unknown, rawCode: unknown, rawLabel: unknown, linkedAge
     if (actual && (date === null || actual > date)) date = actual;
     const agency = cleanText(result?.detail?.bidInfo?.dmstNm);
     if (agency) agencies.add(agency);
-    if (!business) {
-      const fallback = resolveG2bBusiness(result?.query?.businessCode, undefined);
-      if (fallback) businesses.push(fallback);
-    }
+    const business = resolveG2bBusiness(result?.query?.businessCode, undefined);
+    if (business) businesses.push(business);
   }
-  if (!agencies.size && cleanText(linkedAgency)) agencies.add(cleanText(linkedAgency));
   return JSON.stringify({ date, agencies: [...agencies], businesses });
 }
 
 /**
  * 개찰결과 원본에서 목록 조회용 필드를 추출하고 공통 페이지 조회에 연결한다.
- * @throws SQLite 함수 등록 또는 조회문 준비가 실패한 경우.
+ * @throws Turso에서 목록 조회에 실패한 경우.
  */
-export function openOpeningResultList(db: DatabaseSync, targets: string) {
-  db.function("opening_result_list_fields", { deterministic: true }, listFields);
+export function openOpeningResultList(db: G2bDatabase, targets: string) {
   return openCollectionList(db, "opening-results", targets,
-    "opening_result_list_fields(saved.data, saved.businessCode, saved.businessLabel, saved.linkedAgency)",
+    `CASE WHEN saved.query_data IS NULL THEN NULL ELSE json_set(
+      json_extract(saved.query_data, '$.fields'),
+      '$.businesses', json(COALESCE(
+        CASE WHEN saved.linkedCode IS NULL THEN json_extract(saved.query_data, '$.singleBusiness') END,
+        saved.linkedBusiness,
+        json_extract(saved.query_data, '$.fields.businesses')
+      )),
+      '$.agencies', CASE WHEN json_array_length(saved.query_data, '$.fields.agencies') = 0 AND COALESCE(saved.linkedAgency, '') <> ''
+        THEN json_array(saved.linkedAgency) ELSE json_extract(saved.query_data, '$.fields.agencies') END
+    ) END`,
   );
 }

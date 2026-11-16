@@ -4,11 +4,11 @@ import { G2bDashboardCard } from "./G2bDashboardCard";
 
 /**
  * 요청 시점에 저장된 나라장터 업무별 건수를 조회해 관리자 대시보드에 표시한다.
- * @throws SQLite 저장소를 열거나 저장 건수를 집계하지 못한 경우.
+ * @throws Turso 저장소를 열거나 저장 건수를 집계하지 못한 경우.
  */
 export default async function AdminDashboardPage() {
   await connection();
-  const counts = getG2bRepository().getCollectionCounts();
+  const counts = await getG2bRepository().getCollectionCounts();
 
   return (
     <section className="space-y-6">

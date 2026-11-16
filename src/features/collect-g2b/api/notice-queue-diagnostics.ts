@@ -11,10 +11,10 @@ export function logNoticeQueueError(operation: string, error: unknown, jobId?: n
 }
 
 /** 업무 수집에서 확인된 점검을 큐에 전파하고 저장 실패는 운영 로그에 남긴다. */
-export function reportCollectionMaintenance(error: unknown) {
+export async function reportCollectionMaintenance(error: unknown) {
   if (!findMaintenance(error)) return;
   try {
-    getG2bRepository().noticeQueue.markMaintenance();
+    await getG2bRepository().noticeQueue.markMaintenance();
   } catch (writeError) {
     logNoticeQueueError("mark-maintenance", writeError);
   }

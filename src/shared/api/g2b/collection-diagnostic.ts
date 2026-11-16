@@ -43,6 +43,18 @@ export function collectionStep<T>(step: string, run: () => T): T {
   }
 }
 
+/**
+ * 비동기 저장소 호출의 거부에 진단 단계명을 연결한다.
+ * @throws 저장소 호출 또는 입력 검증이 실패한 경우 원래 예외를 전달한다.
+ */
+export async function collectionAsyncStep<T>(step: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    throw collectionError(error, { step });
+  }
+}
+
 function cleanText(value: string, limit = 500, frame = false): string {
   // 본문이 포함된 메시지는 본문 경계부터 제거하고 키·헤더로 드러난 자격 증명은 마스킹한다.
   const text = frame ? value : value.replace(/(?:\b(?:response|request)?\s*body\s*[:=]|[<{])[\s\S]*$/i, "[본문 생략]");
@@ -93,8 +105,10 @@ export function describeCollectionError(reason: unknown): CollectionDiagnostic {
       code: scalar(fields.code),
       errno: scalar(fields.errno),
       syscall: typeof fields.syscall === "string" ? cleanText(fields.syscall) : undefined,
-      errcode: typeof fields.errcode === "number" ? fields.errcode : undefined,
-      errstr: typeof fields.errstr === "string" ? cleanText(fields.errstr) : undefined,
+      errcode: typeof fields.errcode === "number" ? fields.errcode :
+        typeof fields.rawCode === "number" ? fields.rawCode : undefined,
+      errstr: typeof fields.errstr === "string" ? cleanText(fields.errstr) :
+        typeof fields.extendedCode === "string" ? cleanText(fields.extendedCode) : undefined,
       cause: value.cause === undefined ? undefined : visit(value.cause, depth + 1),
       errors: value instanceof AggregateError ? value.errors.slice(0, Math.max(remaining, 1)).map((error) => visit(error, depth + 1)) : undefined,
     };

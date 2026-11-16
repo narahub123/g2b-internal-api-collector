@@ -76,7 +76,7 @@ export function PriorSpecDetail({
   actions,
 }: {
   spec: PriorSpec;
-  orderPlanPath: (number: string) => string | undefined;
+  orderPlanPath: (number: string) => string | undefined | Promise<string | undefined>;
   actions?: ReactNode;
 }) {
   const endpoint = `/api/prior-specs/${encodeURIComponent(spec.number)}`;
@@ -112,10 +112,10 @@ export function PriorSpecDetail({
       >
         <DetailAccordionSection title="기본정보" heading="h3">
           <dl className="grid gap-3 text-sm">
-            {rows.map(({ key, label, value, extra, link, prefix, suffix }) => {
+            {rows.map(async ({ key, label, value, extra, link, prefix, suffix }) => {
               const orderPlan =
                 key === "oderPlanNo" ? g2bNumber(value) : undefined;
-              const orderPlanHref = orderPlan && orderPlanPath(orderPlan);
+              const orderPlanHref = orderPlan && await orderPlanPath(orderPlan);
               return (
                 <div
                   key={key}
