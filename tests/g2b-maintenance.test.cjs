@@ -1216,6 +1216,96 @@ test('발주계획과 사전규격의 첨부 점검은 저장과 대기 중인 �
   assert.deepEqual(repository.findPriorSpec('SPEC1'), spec);
 });
 
+test('유찰·입찰취소·재입찰과 구형 유찰의 일반·강제 수집은 예정가격을 조회하지 않는다', async (t) => {
+  const { collectOpeningResult } = require('../src/features/collect-g2b/api/opening-results');
+  let detailVersion = '최초 수집';
+  const priceCalls = [];
+  mockFetch(t, (path, options) => {
+    if (path === '/') return session();
+    const input = JSON.parse(options.body);
+    if (path.endsWith('/selectRsvePrceInfo.do')) {
+      priceCalls.push(input.dlSrchPbancInfoInM.bidPrgrsOrd);
+      return success({ pbancInfo: input.dlSrchPbancInfoInM, rsvePrceList: [] });
+    }
+    if (path.endsWith('/selectOnbsRsltRbid.do')) {
+      return success({ result: {
+        bidPrgrs: { ...input.dlSrchOnbsRsltBidInM, prcsRsn: detailVersion },
+        reBidInfo: [],
+      } });
+    }
+    if (path.endsWith('/selectOnbsRsltFbid.do')) {
+      return success({ result: { bidPrgrs: { ...input.dlSrchOnbsRsltBidInM, prcsRsn: detailVersion } } });
+    }
+    assert.ok(path.endsWith('/selectNtcPstList.do'), path);
+    return success({ dlPstL: [] });
+  });
+  const cases = [
+    ['001', '유찰'], ['002', '입찰취소'], ['003', '재입찰'], ['004', undefined],
+  ];
+  for (const force of [false, true]) {
+    for (const [openingRevision, status] of cases) {
+      const openingKey = { number: 'R26BK90000125', revision: '000', openingRevision };
+      const query = { ...openingKey, classification: '1', businessCode: '01', ...(status ? { status } : {}) };
+      await collectOpeningResult(openingKey, [query], force);
+      const saved = repository.findOpeningResult(openingKey);
+      const { detail } = saved.results[0];
+      assert.equal((status === '재입찰' ? detail.bidPrgrs : detail).prcsRsn, detailVersion);
+      assert.equal(saved.notice, null);
+    }
+    detailVersion = '강제 재수집';
+  }
+  assert.deepEqual(priceCalls, []);
+});
+
+test('개찰완료 분류만 예정가격을 요청하며 강제 재수집 오류는 기존 가격을 보존하고 실패로 기록한다', async (t) => {
+  const { collectOpeningResult } = require('../src/features/collect-g2b/api/opening-results');
+  const openingKey = { number: 'R26BK90000124', revision: '000', openingRevision: '001' };
+  const queries = [
+    { ...openingKey, classification: '1', businessCode: '01', status: '유찰' },
+    { ...openingKey, classification: '2', businessCode: '01', status: '개찰완료' },
+    { ...openingKey, classification: '3', businessCode: '01', status: '개찰완료' },
+  ];
+  const priceCalls = [];
+  let failPrice = false;
+  mockFetch(t, (path, options) => {
+    if (path === '/') return session();
+    const input = JSON.parse(options.body);
+    if (path.endsWith('/selectRsvePrceInfo.do')) {
+      const pbancInfo = input.dlSrchPbancInfoInM;
+      priceCalls.push(pbancInfo.bidClsfNo);
+      return failPrice ? new Response(null, { status: 500 }) : success({ pbancInfo, rsvePrceList: [] });
+    }
+    if (path.endsWith('/selectOnbsRsltFbid.do')) {
+      return success({ result: { bidPrgrs: input.dlSrchOnbsRsltBidInM } });
+    }
+    if (path.endsWith('/selectOnbsRsltSbidGods.do')) {
+      return success({ result: { bidInfo: input.dlSrchOnbsRsltBidInM, etcData: {}, successBidInfo: [] } });
+    }
+    assert.ok(path.endsWith('/selectNtcPstList.do'), path);
+    return success({ dlPstL: [] });
+  });
+
+  await collectOpeningResult(openingKey, queries);
+  await collectOpeningResult(openingKey, queries);
+  assert.deepEqual(priceCalls, ['2']);
+  const price = repository.findOpeningResult(openingKey).price;
+  assert.equal(price.pbancInfo.bidClsfNo, '2');
+
+  failPrice = true;
+  await assert.rejects(collectOpeningResult(openingKey, queries, true), AggregateError);
+  assert.deepEqual(priceCalls, ['2', '2']);
+  assert.deepEqual(repository.findOpeningResult(openingKey).price, price);
+  const failure = repository.collectionAttempts.overview('opening-results').failures.find(
+    ({ number, revision, openingRevision }) =>
+      number === openingKey.number && revision === openingKey.revision && openingRevision === openingKey.openingRevision,
+  );
+  const [diagnostic] = JSON.parse(failure.diagnostics).errors;
+  assert.equal(failure.status, 'failed');
+  assert.match(diagnostic.message, /예정가격/);
+  assert.equal(diagnostic.cause.response.status, 500);
+  assert.match(diagnostic.cause.stack, /request\.ts:\d+:\d+/);
+});
+
 test('개찰차수의 점검은 부분 저장을 보류하고 일반 오류는 성공 자료를 저장한다', async (t) => {
   const openingKey = { ...key, openingRevision: '001' };
   const previous = {
@@ -1234,7 +1324,6 @@ test('개찰차수의 점검은 부분 저장을 보류하고 일반 오류는 �
       if (input.bidClsfNo === '2') return useMaintenance ? maintenancePage() : new Response(null, { status: 500 });
       return success({ result: { bidPrgrs: { ...input, prcsRsn: '새 결과' } } });
     }
-    if (path.endsWith('/selectRsvePrceInfo.do')) return new Response(null, { status: 500 });
     return success({ dlPstL: [] });
   });
   const request = new Request('http://localhost', { method: 'POST' });
@@ -1258,13 +1347,10 @@ test('개찰차수의 점검은 부분 저장을 보류하고 일반 오류는 �
   assert.equal(failure.status, 'failed');
   assert.equal(failure.hasData, true);
   const diagnostics = JSON.parse(failure.diagnostics);
-  assert.equal(diagnostics.errors.length, 2);
+  assert.equal(diagnostics.errors.length, 1);
   assert.equal(diagnostics.errors[0].details['개찰 분류'], '2');
   assert.equal(diagnostics.errors[0].cause.response.status, 500);
-  assert.match(diagnostics.errors[1].message, /예정가격/);
-  assert.equal(diagnostics.errors[1].cause.response.status, 500);
   assert.match(diagnostics.errors[0].cause.stack, /request\.ts:\d+:\d+/);
-  assert.match(diagnostics.errors[1].cause.stack, /request\.ts:\d+:\d+/);
 });
 
 test('적격심사는 차수·분류별로 보충하고 재수집 오류 또는 점검에서 기존 자료를 보존한다', async (t) => {

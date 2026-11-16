@@ -106,7 +106,8 @@ async function collectOpeningNotice(
 }
 
 /**
- * 개찰결과·공지사항·예정가격을 조회하고 대상 분류의 적격심사결과를 함께 저장한다.
+ * 개찰결과·공지사항과 대상 분류의 적격심사결과를 저장한다.
+ * 예정가격은 개찰완료 분류가 있을 때 첫 번째 해당 분류로 차수당 한 번 조회한다.
  * 일반 수집은 이미 확인한 자료를 건너뛰며, 일반 오류가 섞이면 성공 결과를 먼저 저장한다.
  * 점검을 확인하면 성공 결과가 있어도 해당 차수를 갱신하지 않는다.
  *
@@ -145,7 +146,8 @@ export async function collectOpeningResult(
       });
       // null은 조회 완료 후 공지가 없다는 결과이므로 undefined인 경우에만 다시 조회한다.
       const needsNotice = force || saved?.notice === undefined;
-      const priceQuery = queries[0];
+      // 유찰·입찰취소·재입찰과 상태 없는 구형 유찰은 예정가격 조회 대상에서 제외한다.
+      const priceQuery = queries.find(({ status }) => status === "개찰완료");
       const needsPrice =
         Boolean(priceQuery) && (force || saved?.price === undefined);
       if (!missing.length && !savedReviewTargets.length && !needsNotice && !needsPrice) return;
