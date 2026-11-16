@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { OpeningResultQuery } from "@/entities/opening-result/model/opening-result";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
+import { orderPlanUnprocessableStatus } from "@/shared/config/g2b-order-plan";
 import type { G2bCollectionCounts } from "./types";
 import { openNoticeList } from "./notice-list";
 import { openOrderPlanList } from "./order-plan-list";
@@ -237,8 +238,16 @@ export function openCollectionAttempts(db: DatabaseSync) {
   const summaries = new Map(Object.entries(savedQueries).map(([section, savedQuery]) => {
     // 두 화면에서 저장 자료와 시도 이력의 합집합을 동일한 기준으로 집계한다.
     const orderPlans = section === "order-plans";
+    // 미존재가 확인된 호출 번호는 이력에서만 추가되는 목록 대상에서 제외한다.
+    const unavailablePlans = `unavailable_order_plans AS (
+      SELECT DISTINCT notice_order_plan_lookup(data) AS number
+      FROM notices
+      WHERE CASE WHEN json_valid(data)
+        THEN json_extract(data, '$.orderPlanStatus') = '${orderPlanUnprocessableStatus}'
+      END
+    )`;
     const targets = `
-      WITH ${orderPlans ? `${orderPlanAttemptKeys},` : ""} saved AS (${savedQuery}),
+      WITH ${orderPlans ? `${orderPlanAttemptKeys}, ${unavailablePlans},` : ""} saved AS (${savedQuery}),
       latest AS (
         SELECT MAX(id) AS id, number, revision, opening_revision
         FROM ${orderPlans ? "order_plan_attempt_keys" : "g2b_collection_attempts"}
@@ -248,6 +257,7 @@ export function openCollectionAttempts(db: DatabaseSync) {
       targets AS (
         SELECT number, revision, opening_revision FROM saved
         UNION SELECT number, revision, opening_revision FROM latest
+        ${orderPlans ? "WHERE NOT EXISTS (SELECT 1 FROM unavailable_order_plans WHERE number = latest.number)" : ""}
       )`;
     const counts = db.prepare(`${targets}
       SELECT COUNT(*) AS total, (SELECT COUNT(*) FROM saved) AS collected,

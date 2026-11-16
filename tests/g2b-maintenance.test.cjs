@@ -222,10 +222,16 @@ test('발주계획 미존재 422는 공고를 정상 저장하고 재수집 성�
   });
 
   const { POST } = require('../app/api/order-plans/[number]/route');
+  const history = repository.collectionAttempts;
+  const countsBefore = history.counts('order-plans');
+  const listByNumber = (status, q = number) => history.orderPlanList.page(parseOrderPlanListQuery({
+    field: 'number', q, status, page: '2',
+  }, []));
   const collectDirectly = () => POST(new Request('http://localhost'), { params: Promise.resolve({ number }) });
   const response = await collectDirectly();
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { number, status: 'unprocessable-entity' });
+  assert.equal(listByNumber('uncollected').counts.uncollected, 1);
   const recollect = () => collectSingleNotice({ ...noticeKey, methodCode: '' });
   await recollect();
   const saved = await repository.find(noticeKey);
@@ -233,6 +239,21 @@ test('발주계획 미존재 422는 공고를 정상 저장하고 재수집 성�
   assert.deepEqual(saved.payload.dmItemMap, detail);
   assert.equal(repository.findOrderPlan(number), null);
   assert.ok(!repository.collectionAttempts.overview('order-plans').failures.some((row) => row.number === number));
+  await repository.save({ ...saved, revision: '001' });
+  assert.deepEqual(history.counts('order-plans'), countsBefore);
+  assert.deepEqual(history.overview('order-plans').counts, countsBefore);
+  for (const status of ['total', 'uncollected']) {
+    const result = listByNumber(status);
+    assert.deepEqual(result.counts, { total: 0, collected: 0, uncollected: 0 });
+    assert.deepEqual(result.rows, []);
+    assert.equal(result.totalPages, 0);
+    assert.equal(result.page, 1);
+  }
+
+  const failedNumber = 'R26DD20928825';
+  const failedId = history.start({ section: 'order-plans', number: failedNumber });
+  history.finish(failedId, 'failed', '일반 조회 실패');
+  assert.equal(listByNumber('uncollected', failedNumber).rows[0].id, failedId);
 
   const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
   const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
@@ -260,6 +281,9 @@ test('발주계획 미존재 422는 공고를 정상 저장하고 재수집 성�
   const updated = await repository.find(noticeKey);
   assert.equal(updated.orderPlanStatus, undefined);
   assert.equal(updated.orderPlanNumber, number);
+  const collected = listByNumber('collected');
+  assert.deepEqual(collected.counts, { total: 1, collected: 1, uncollected: 0 });
+  assert.equal(collected.rows[0].number, number);
   const savedPlan = repository.findOrderPlan(number);
   status = 422;
   message = '발주계획정보가 존재하지 않습니다.';
