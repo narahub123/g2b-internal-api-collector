@@ -11,6 +11,59 @@ async function testDatabase() {
 }
 const { openNoticeQueue } = require('../src/server/g2b/repository/notice-queue.ts');
 
+test('큐 조회는 버전 4 업그레이드 후 인덱스로 최근 50건을 정렬한다', async () => {
+  const db = await testDatabase();
+  const queue = openNoticeQueue(db);
+  const explain = async (client) => (await client.execute(
+    "EXPLAIN QUERY PLAN SELECT * FROM g2b_notice_jobs ORDER BY status = 'running' DESC, id DESC LIMIT 50",
+  )).rows.map(({ detail }) => detail).join('\n');
+
+  try {
+    // 버전 5의 변경만 되돌려 작업 이력이 남아 있는 버전 4 상태를 재현한다.
+    await db.client.executeMultiple(`
+      DROP INDEX IF EXISTS g2b_notice_jobs_overview;
+      DELETE FROM g2b_schema_migrations WHERE version = 5;
+    `);
+    assert.match(await explain(db.client), /USE TEMP B-TREE FOR ORDER BY/);
+    assert.deepEqual((await queue.overview()).jobs, []);
+
+    await db.client.execute(`
+      WITH RECURSIVE ids(id) AS (VALUES (1) UNION ALL SELECT id + 1 FROM ids WHERE id < 60)
+      INSERT INTO g2b_notice_jobs (id, number, revision, input, force, status)
+      SELECT id, 'R26BK' || id, '000', '{}', 0, CASE WHEN id = 1 THEN 'running' ELSE 'pending' END
+      FROM ids
+    `);
+
+    await migrateG2bDatabase(db.client);
+    await migrateG2bDatabase(db.client);
+
+    const upgradedPlan = await explain(db.client);
+    assert.match(upgradedPlan, /USING INDEX g2b_notice_jobs_overview/);
+    assert.doesNotMatch(upgradedPlan, /USE TEMP B-TREE FOR ORDER BY/);
+    const fresh = await testDatabase();
+    try {
+      assert.equal(await explain(fresh.client), upgradedPlan);
+    } finally {
+      fresh.client.close();
+    }
+
+    const recentIds = Array.from({ length: 50 }, (_, index) => 60 - index);
+    const running = await queue.overview();
+    assert.equal(running.active, 1);
+    assert.deepEqual(running.jobs.map(({ id }) => id), [1, ...recentIds.slice(0, 49)]);
+
+    await db.client.execute("UPDATE g2b_notice_jobs SET status = 'succeeded' WHERE id = 1");
+    const idle = await queue.overview();
+    assert.equal(idle.active, null);
+    assert.deepEqual(idle.jobs.map(({ id }) => id), recentIds);
+
+    await db.client.execute('DELETE FROM g2b_notice_jobs WHERE id > 3');
+    assert.deepEqual((await queue.overview()).jobs.map(({ id }) => id), [3, 2, 1]);
+  } finally {
+    db.client.close();
+  }
+});
+
 test('기간 실행은 최초 건수를 고정하고 재시도와 연관 공고를 같은 실행으로 집계한다', async () => {
   const db = await testDatabase();
   const queue = openNoticeQueue(db);
