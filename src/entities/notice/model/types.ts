@@ -3,6 +3,7 @@ import type { ContractKey } from '@/entities/contract/model/contract';
 import type { NoticeBaseAmount } from './base-amount';
 import type { NoticePosts } from './notice-posts';
 import type { orderPlanUnprocessableStatus } from '@/shared/config/g2b-order-plan';
+import type { priorSpecUnavailableStatus } from '@/shared/config/g2b-prior-spec';
 
 export type NoticeKey = { number: string; revision: string };
 
@@ -19,6 +20,8 @@ export type Notice = NoticeSummary & {
   orderPlanNumber?: string;
   // 원본 발주계획번호의 상세를 조회했으나 나라장터에서 미존재를 확인한 경우에만 저장한다.
   orderPlanStatus?: typeof orderPlanUnprocessableStatus;
+  // 공고 원본의 등록번호를 유지하면서 사전규격 상세 조회 불가를 표시한다.
+  priorSpecStatus?: typeof priorSpecUnavailableStatus;
   posts?: NoticePosts;
   baseAmount?: NoticeBaseAmount;
   // 누리장터 변경·취소 공지의 원본 조회 응답이다.

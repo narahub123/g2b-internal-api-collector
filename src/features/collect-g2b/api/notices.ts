@@ -192,6 +192,7 @@ async function collectNoticeBaseAmount(
  * 업무 진행 내역으로 상세 API를 선택하고 상세, 문서와 계약 연결을 수집한다.
  * 일반 공고는 공지사항, 발주계획, 사전규격과 개찰결과도 수집한다.
  * 일반 부가 조회 오류는 허용하며, 점검을 확인하면 공고 행을 저장할 호출자에게 오류를 전달한다.
+ * 사전규격 상세 조회 불가 응답은 공고의 표시 상태로 반환한다.
  * 독립적으로 완료된 관련 자료는 저장될 수 있다.
  * @param key 공고번호와 차수.
  * @param methodCode 상세 조회에 전달하는 낙찰방법 코드.
@@ -301,7 +302,7 @@ export async function collectNotice(
     !isEtc && !privateSource && noticeBaseAmountRows(payload).length
       ? collectNoticeBaseAmount(key, recordFailure) : undefined,
   ]);
-  const [attachments, proposal, contractLinks, openingResults, posts, orderPlan, , privatePosts, privateCodeNames, baseAmount] = outcomes;
+  const [attachments, proposal, contractLinks, openingResults, posts, orderPlan, priorSpec, privatePosts, privateCodeNames, baseAmount] = outcomes;
   const collectedOrderPlan = orderPlan.status === "fulfilled" ? orderPlan.value : undefined;
   if (recordFailure) {
     if (collectedOrderPlan?.attachmentFailure) recordFailure(collectedOrderPlan.attachmentFailure.reason);
@@ -346,6 +347,7 @@ export async function collectNotice(
       payload,
       orderPlanNumber: collectedOrderPlan?.status === undefined ? collectedOrderPlan?.number : undefined,
       orderPlanStatus: collectedOrderPlan?.status,
+      priorSpecStatus: priorSpec.status === "fulfilled" ? priorSpec.value?.status : undefined,
       privateCodeNames: privateCodeNames.status === "fulfilled" ? privateCodeNames.value : undefined,
       privatePosts: privatePosts.status === "fulfilled" ? privatePosts.value : undefined,
       posts: posts.status === "fulfilled" ? posts.value : undefined,

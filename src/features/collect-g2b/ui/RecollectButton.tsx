@@ -6,13 +6,14 @@ import { waitForNoticeJob } from "../api/wait-for-notice-job";
 import { Button } from "@/shared/ui/button";
 import { RefreshCw } from "lucide-react";
 import { orderPlanUnavailableMessage, orderPlanUnprocessableStatus } from "@/shared/config/g2b-order-plan";
+import { priorSpecUnavailableMessage, priorSpecUnavailableStatus } from "@/shared/config/g2b-prior-spec";
 
 /**
  * 재수집을 요청하고 성공하면 현재 페이지의 서버 데이터를 갱신한다.
  * 실패 목록에서는 새 실패 이력을 반영하도록 실패 시에도 페이지를 갱신할 수 있다.
  *
  * 재수집 중에는 중복 요청을 막기 위해 버튼을 비활성화하며, 요청 실패 시 오류를 표시한다.
- * 발주계획 미존재는 상태 안내로 표시한다. `compact`에서는 안내를 버튼 아래에 겹쳐 표시한다.
+ * 발주계획 미존재와 사전규격 상세 조회 불가는 상태 안내로 표시한다. `compact`에서는 안내를 버튼 아래에 겹쳐 표시한다.
  *
  * @param props 수집 요청 주소, 최초 수집 여부, 선택적 요청 본문 및 버튼 표시 방식
  * @returns 수집 진행 상태와 실패 메시지를 포함한 재수집 버튼
@@ -70,6 +71,10 @@ export function RecollectButton({
         const data = await response.json().catch(() => null);
         if (data?.status === orderPlanUnprocessableStatus) {
           setMessage(orderPlanUnavailableMessage);
+          return;
+        }
+        if (data?.status === priorSpecUnavailableStatus) {
+          setMessage(priorSpecUnavailableMessage);
           return;
         }
       }

@@ -205,6 +205,89 @@ test('코드 99는 요청 번호와 일치하는 사전규격 상세만 저장�
   assert.equal(await repository.findOrderPlan(number), null);
 });
 
+test('사전규격 상세 조회 불가는 공고를 정상 저장하고 재수집 성공 시 링크를 복구한다', async (t) => {
+  const noticeKey = { number: 'R26BK01828765', revision: '000' };
+  const number = 'R26BD00000001';
+  const detail = {
+    bidPbancNo: noticeKey.number, bidPbancOrd: noticeKey.revision, bidPbancNm: '사전규격 조회 불가 공고',
+    bfSpecRegNo: number,
+  };
+  const message = '조회하는데 에러가 발생하였습니다.';
+  const unavailable = { number, status: 'unavailable' };
+  let priorSpecResponse = () => Response.json({ ErrorCode: -1, ErrorMsg: message }, { status: 500 });
+  mockFetch(t, (path) => {
+    if (path === '/') return session();
+    if (path.endsWith('/srchWorkPrgs.do')) return success({ dlWorkPrgsL: [] });
+    if (path.endsWith('/selectNtcPstList.do')) return success({ dlPstL: [] });
+    if (path.endsWith('/selectItemAnncMngV.do')) return success({ dmItemMap: detail });
+    assert.ok(path.endsWith('/selectBfSpec.do'), path);
+    return priorSpecResponse();
+  });
+
+  const recollectNotice = () => collectSingleNotice({ ...noticeKey, methodCode: '' });
+  const { POST } = require('../app/api/prior-specs/[number]/route');
+  const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
+  const collectDirectly = () => POST(new Request('http://localhost'), { params: Promise.resolve({ number }) });
+  const history = repository.collectionAttempts;
+  const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
+  const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
+  const { createElement } = require('react');
+  const href = new RegExp(`href="[^"]*prior-specs/${number}`);
+  const renderDetails = async () => {
+    const params = Promise.resolve(noticeKey);
+    const pages = [
+      await NoticeDetailPage({ params }),
+      await G2bDetailPage({ section: 'notices', params, searchParams: Promise.resolve({}) }),
+    ];
+    return Promise.all(pages.map((page) => {
+      const body = page.props.children.find((child) => child?.props?.notice);
+      return renderMarkup(createElement(body.type, { ...body.props, renderActions: undefined }));
+    }));
+  };
+
+  await recollectNotice();
+  const saved = await repository.find(noticeKey);
+  assert.equal(saved.priorSpecStatus, 'unavailable');
+  assert.deepEqual(saved.payload.dmItemMap, detail);
+  assert.equal(await repository.findPriorSpec(number), null);
+  assert.ok(!(await history.overview('prior-specs')).failures.some((row) => row.number === number));
+  for (const html of await renderDetails()) {
+    assert.match(html, new RegExp(number));
+    assert.ok(html.includes('나라장터에서 해당 사전규격 정보를 조회할 수 없습니다.'));
+    assert.doesNotMatch(html, href);
+  }
+
+  priorSpecResponse = () => Response.json({ ErrorCode: '-1', ErrorMsg: message }, { status: 500 });
+  const directResponse = await collectDirectly();
+  assert.equal(directResponse.status, 200);
+  assert.deepEqual(await directResponse.json(), unavailable);
+  const id = await history.start({ section: 'prior-specs', number });
+  await history.finish(id, 'failed');
+  const retryResponse = await retry(new Request('http://localhost'), { params: Promise.resolve({ id: String(id) }) });
+  assert.equal(retryResponse.status, 200);
+  assert.deepEqual(await retryResponse.json(), unavailable);
+
+  for (const [status, code, description] of [[502, -1, message], [500, -2, message], [500, -1, '다른 오류']]) {
+    priorSpecResponse = () => Response.json({ ErrorCode: code, ErrorMsg: description }, { status });
+    assert.equal((await collectDirectly()).status, 502);
+  }
+  priorSpecResponse = () => { throw new DOMException('응답 제한 시간 초과', 'TimeoutError'); };
+  assert.equal((await collectDirectly()).status, 502);
+  priorSpecResponse = () => success({ dlBfSpecM: { bfSpecRegNo: number } });
+  await recollectNotice();
+  assert.equal((await repository.find(noticeKey)).priorSpecStatus, undefined);
+  for (const html of await renderDetails()) assert.match(html, href);
+
+  const storedSpec = { ...await repository.findPriorSpec(number), attachments: { dlFileL: [] } };
+  await repository.savePriorSpec(storedSpec);
+  priorSpecResponse = () => Response.json({ ErrorCode: -1, ErrorMsg: message }, { status: 500 });
+  assert.deepEqual(await (await collectDirectly()).json(), unavailable);
+  assert.deepEqual(await repository.findPriorSpec(number), storedSpec);
+
+  priorSpecResponse = maintenancePage;
+  assert.equal((await collectDirectly()).status, 503);
+});
+
 test('발주계획 미존재 422는 공고를 정상 저장하고 재수집 성공 시 상태를 해제한다', async (t) => {
   const noticeKey = { number: 'R26BK01828764', revision: '000' };
   const number = 'R26DD20928824';
