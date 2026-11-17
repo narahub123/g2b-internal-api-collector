@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { noticeRetryDelayMs } from "./notice-queue-types";
 import type { G2bDatabase } from "./database";
 import { openNoticeAutomatic } from "./notice-automatic";
-import type { NoticeJob, NoticeQueue, NoticeQueueInput, NoticeRun, NoticeRunPeriod, NoticeSource } from "./notice-queue-types";
+import type { NoticeJob, NoticeQueue, NoticeQueueInput, NoticeRun, NoticeRunNoticePage, NoticeRunPeriod, NoticeSource } from "./notice-queue-types";
 
 type JobRow = Omit<NoticeJob, "input" | "result" | "force"> & { input: string; result: string | null; force: number };
 
@@ -240,6 +240,63 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
           maintenance ? "maintenance" : manual ? "manual" : automaticPaused && run.source === "automatic" ? "automatic" : null;
         return { id: run.id, startMinute: run.startMinute, endMinute: run.endMinute, status, pauseReason,
           initialCount: run.initialCount, totalCount: notices.length, succeededCount, failedCount, error: run.error, notices };
+      }, false);
+    },
+    getRunSummary(id) {
+      return transaction(async () => {
+        const row = await db.prepare(`
+          SELECT r.id, r.startMinute, r.endMinute, r.phase, r.initialCount, r.error,
+            COALESCE(c.total, 0) AS totalCount, COALESCE(c.completed, 0) AS succeededCount,
+            COALESCE(c.failed, 0) AS failedCount, q.manual, q.maintenance
+          FROM g2b_notice_runs r CROSS JOIN g2b_notice_queue q
+          LEFT JOIN g2b_notice_period_counts c ON c.walk_id = r.walkId
+          WHERE q.id = 1 AND r.source = 'manual' AND r.id = COALESCE(?, (
+            SELECT id FROM g2b_notice_runs INDEXED BY g2b_notice_manual_runs
+            WHERE source = 'manual' ORDER BY id DESC LIMIT 1
+          ))`).get(id ?? null) as (NoticeRunPeriod & {
+            id: number; phase: NoticeRun["status"]; initialCount: number | null; error: string | null;
+            totalCount: number; succeededCount: number; failedCount: number; manual: number; maintenance: number;
+          }) | undefined;
+        if (!row) return;
+        const { phase, manual, maintenance, ...summary } = row;
+        const status = phase === "collecting" && summary.succeededCount + summary.failedCount === summary.totalCount
+          ? "completed" : phase;
+        const pauseReason = status === "completed" || status === "failed" ? null
+          : maintenance ? "maintenance" : manual ? "manual" : null;
+        return { ...summary, status, pauseReason };
+      }, false);
+    },
+    listRunNotices(id, kind, cursor) {
+      return transaction(async () => {
+        const run = await db.prepare("SELECT walkId FROM g2b_notice_runs WHERE id = ? AND source = 'manual'").get(id);
+        if (!run) return;
+        const walkId = run.walkId;
+        async function readPage(boundary?: typeof cursor) {
+          const reverse = boundary?.direction === "before";
+          const order = reverse ? "DESC" : "ASC";
+          const range = boundary ? (reverse ? "AND v.rowid < ?" : "AND v.rowid > ?") : "";
+          const index = kind === "failed" ? "g2b_notice_period_failed" : "g2b_notice_period_visits";
+          const filter = kind === "failed" ? "AND v.periodStatus = 'failed'" : "";
+          // 방문 인덱스에서 21건으로 제한하고, 해당 작업만 기본 키로 읽는다.
+          const rows = await db.prepare(`
+            SELECT v.rowid AS visitId, j.* FROM g2b_notice_walk_visits v INDEXED BY ${index}
+            CROSS JOIN g2b_notice_jobs j ON j.id = v.job_id
+            WHERE v.walk_id = ? ${filter} ${range} ORDER BY v.rowid ${order} LIMIT 21
+          `).all(walkId, ...(boundary ? [boundary.visitId] : [])) as (JobRow & { visitId: number })[];
+          const items = rows.slice(0, 20).map((row) => ({ ...runNotice(row), id: row.visitId }));
+          if (reverse) items.reverse();
+          return { items, more: rows.length > 20 };
+        }
+        let { items, more } = await readPage(cursor);
+        const boundary = items.length ? cursor : undefined;
+        if (!items.length && cursor) ({ items, more } = await readPage(undefined));
+        const first = items[0];
+        const last = items.at(-1);
+        const previous: NoticeRunNoticePage["previous"] = first && (boundary?.direction === "before" ? more : boundary)
+          ? { direction: "before", visitId: first.id } : null;
+        const next: NoticeRunNoticePage["next"] = last && (boundary?.direction === "before" || more)
+          ? { direction: "after", visitId: last.id } : null;
+        return { items, previous, next, resetCursor: Boolean(cursor && !previous) };
       }, false);
     },
     async findRunNotice(number, revision) {

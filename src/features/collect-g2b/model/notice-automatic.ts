@@ -18,6 +18,7 @@ export type NoticeAutomaticSettings = {
   status: "stopped" | "stopping" | "scheduled" | "pending" | "running" | "maintenance" | "queue_paused";
   counts: { total: number; pending: number; running: number; completed: number; failed: number };
   round: NoticeAutomaticRound | null;
+  currentNotice: Pick<NoticeRun["notices"][number], "number" | "revision" | "title"> | null;
 };
 
 export type NoticeAutomaticRound = { walkId: number; startMinute: string; endMinute: string };

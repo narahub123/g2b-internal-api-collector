@@ -33,7 +33,7 @@ export type NoticeRunOutcome =
   | { kind: "targets"; targets: (CollectNoticeInput & { title: string })[] }
   | { kind: "failure" | "maintenance"; error: string };
 
-export type NoticeRun = NoticeRunPeriod & {
+export type NoticeRunSummary = NoticeRunPeriod & {
   id: number;
   status: "pending" | "discovering" | "collecting" | "completed" | "failed";
   pauseReason: "manual" | "maintenance" | "automatic" | null;
@@ -42,7 +42,16 @@ export type NoticeRun = NoticeRunPeriod & {
   succeededCount: number;
   failedCount: number;
   error: string | null;
+};
+export type NoticeRun = NoticeRunSummary & {
   notices: (CollectNoticeInput & { title: string; status: NoticeJobStatus; error: string | null })[];
+};
+export type NoticeRunCursor = { direction: "before" | "after"; visitId: number };
+export type NoticeRunNoticePage = {
+  items: (NoticeRun["notices"][number] & { id: number })[];
+  previous: NoticeRunCursor | null;
+  next: NoticeRunCursor | null;
+  resetCursor: boolean;
 };
 
 export type NoticeJob = {
@@ -83,6 +92,10 @@ export interface NoticeQueue {
   finishRun(id: number, outcome: NoticeRunOutcome, now?: number): Promise<void>;
   /** 실행과 소속 공고를 같은 읽기 시점에서 반환한다. ID 생략 시 최근 실행을 조회한다. */
   getRun(id?: number): Promise<NoticeRun | undefined>;
+  /** 저장된 집계와 실행 상태를 조회한다. ID 생략 시 최근 기간 실행을 복원한다. */
+  getRunSummary(id?: number): Promise<NoticeRunSummary | undefined>;
+  /** 기간 실행의 방문 순서로 최대 20건을 반환하며 실패 목록은 최종 실패만 포함한다. */
+  listRunNotices(id: number, kind: "all" | "failed", cursor?: NoticeRunCursor): Promise<NoticeRunNoticePage | undefined>;
   /** 저장된 상세가 없는 공고의 최근 기간 수집 결과를 조회한다. */
   findRunNotice(number: string, revision: string): Promise<NoticeRun["notices"][number] | undefined>;
   /** 자동 수집이 꺼져 있을 때 점검 종료 확인이 필요한 수동 대기 작업이 있는지 조회한다. */

@@ -244,6 +244,67 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (6);
       `);
     }
+    const periodUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 7");
+    if (periodUpgrade.rows.length === 0) {
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_notice_walk_visits ADD COLUMN periodStatus TEXT;
+        CREATE INDEX g2b_notice_manual_runs ON g2b_notice_runs (id DESC) WHERE source = 'manual';
+        CREATE UNIQUE INDEX g2b_notice_manual_run_walk ON g2b_notice_runs (walkId)
+          WHERE source = 'manual' AND walkId IS NOT NULL;
+        CREATE INDEX g2b_notice_period_visits ON g2b_notice_walk_visits (walk_id);
+        CREATE TABLE g2b_notice_period_counts (
+          walk_id INTEGER PRIMARY KEY,
+          total INTEGER NOT NULL,
+          completed INTEGER NOT NULL,
+          failed INTEGER NOT NULL
+        );
+        UPDATE g2b_notice_walk_visits AS v
+          SET periodStatus = CASE WHEN j.status IN ('succeeded', 'failed') THEN j.status ELSE 'active' END
+          FROM g2b_notice_runs r JOIN g2b_notice_jobs j
+          WHERE r.source = 'manual' AND r.walkId = v.walk_id AND j.id = v.job_id;
+        INSERT INTO g2b_notice_period_counts
+          SELECT walk_id, COUNT(*), SUM(periodStatus = 'succeeded'), SUM(periodStatus = 'failed')
+          FROM g2b_notice_walk_visits WHERE periodStatus IS NOT NULL GROUP BY walk_id;
+        CREATE INDEX g2b_notice_period_failed ON g2b_notice_walk_visits (walk_id) WHERE periodStatus = 'failed';
+        CREATE INDEX g2b_notice_period_job ON g2b_notice_walk_visits (job_id) WHERE periodStatus IS NOT NULL;
+        -- 초기 방문은 회차에 walkId를 기록할 때 등록하고 연관 공고는 방문을 추가할 때 등록한다.
+        CREATE TRIGGER g2b_notice_period_run AFTER UPDATE OF walkId ON g2b_notice_runs
+          WHEN NEW.source = 'manual' AND OLD.walkId IS NULL AND NEW.walkId IS NOT NULL
+          BEGIN
+            UPDATE g2b_notice_walk_visits SET periodStatus = (
+              SELECT CASE WHEN status IN ('succeeded', 'failed') THEN status ELSE 'active' END
+              FROM g2b_notice_jobs WHERE id = job_id
+            ) WHERE walk_id = NEW.walkId;
+          END;
+        CREATE TRIGGER g2b_notice_period_visit AFTER INSERT ON g2b_notice_walk_visits
+          WHEN EXISTS (SELECT 1 FROM g2b_notice_runs WHERE source = 'manual' AND walkId = NEW.walk_id)
+          BEGIN
+            UPDATE g2b_notice_walk_visits SET periodStatus = (
+              SELECT CASE WHEN status IN ('succeeded', 'failed') THEN status ELSE 'active' END
+              FROM g2b_notice_jobs WHERE id = NEW.job_id
+            ) WHERE rowid = NEW.rowid;
+          END;
+        CREATE TRIGGER g2b_notice_period_job_status AFTER UPDATE OF status ON g2b_notice_jobs
+          WHEN OLD.status <> NEW.status
+            AND (OLD.status IN ('succeeded', 'failed') OR NEW.status IN ('succeeded', 'failed'))
+          BEGIN
+            UPDATE g2b_notice_walk_visits SET periodStatus =
+              CASE WHEN NEW.status IN ('succeeded', 'failed') THEN NEW.status ELSE 'active' END
+              WHERE job_id = NEW.id AND periodStatus IS NOT NULL;
+          END;
+        CREATE TRIGGER g2b_notice_period_count AFTER UPDATE OF periodStatus ON g2b_notice_walk_visits
+          WHEN OLD.periodStatus IS NOT NEW.periodStatus AND NEW.periodStatus IS NOT NULL
+          BEGIN
+            INSERT INTO g2b_notice_period_counts (walk_id, total, completed, failed)
+              VALUES (NEW.walk_id, 1, NEW.periodStatus = 'succeeded', NEW.periodStatus = 'failed')
+              ON CONFLICT(walk_id) DO UPDATE SET
+                total = total + (OLD.periodStatus IS NULL),
+                completed = completed + excluded.completed - (OLD.periodStatus IS 'succeeded'),
+                failed = failed + excluded.failed - (OLD.periodStatus IS 'failed');
+          END;
+        INSERT INTO g2b_schema_migrations (version) VALUES (7);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

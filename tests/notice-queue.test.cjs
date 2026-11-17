@@ -165,7 +165,7 @@ test('기간 수집 API 접수 후 워커가 초기 공고와 연관 공고를 �
       assert.equal((await (await post(period)).json()).id, id);
       assert.equal((await post({ ...period, endMinute: '2026-11-12T00:00' })).status, 409);
       assert.equal((await (await GET()).json()).status, 'pending');
-      assert.equal((await byId(null, { params: Promise.resolve({ id: '999' }) })).status, 404);
+      assert.equal((await byId(new Request('http://localhost/'), { params: Promise.resolve({ id: '999' }) })).status, 404);
 
       const stop = new AbortController();
       const input = { number: 'R26BK1', revision: '000', methodCode: '', title: '최초 공고' };
@@ -181,10 +181,18 @@ test('기간 수집 API 접수 후 워커가 초기 공고와 연관 공고를 �
         return [input];
       });
       assert.equal(discoveries, 1);
-      const run = await (await byId(null, { params: Promise.resolve({ id: String(id) }) })).json();
+      const readRun = (query = '') => byId(new Request('http://localhost/' + query), {
+        params: Promise.resolve({ id: String(id) }),
+      });
+      const run = await (await readRun()).json();
       assert.deepEqual([run.status, run.initialCount, run.totalCount, run.succeededCount, run.failedCount],
         ['completed', 1, 2, 1, 1]);
       assert.equal(run.notices[1].error, '상세 실패');
+      const { notices, ...expectedSummary } = run;
+      assert.deepEqual(await (await readRun('?view=summary')).json(), expectedSummary);
+      assert.deepEqual(await (await GET(new Request('http://localhost/?view=summary'))).json(), expectedSummary);
+      assert.equal((await (await readRun('?kind=failed')).json()).items[0].error, '상세 실패');
+      assert.equal((await readRun('?kind=failed&cursor=invalid')).status, 400);
     })().catch((error) => { console.error(error); process.exitCode = 1; });
   `;
   try {
@@ -799,6 +807,19 @@ test('자동 집계는 중복 접수, 동시 요청, 롤백과 회차 이동 후
     assert.ok(job);
     assert.equal(duplicate, undefined);
     await check([1, 1, 0, 0]);
+    const reads = [];
+    const prepareCurrent = db.prepare.bind(db);
+    db.prepare = (sql) => {
+      if (sql.includes('INDEXED BY g2b_notice_jobs_running')) reads.push(sql);
+      return prepareCurrent(sql);
+    };
+    assert.deepEqual({ ...(await queue.automatic.get()).currentNotice }, {
+      number: target(1).number, revision: '000', title: target(1).title,
+    });
+    db.prepare = prepareCurrent;
+    assert.equal(reads.length, 1);
+    const currentPlan = await client.execute('EXPLAIN QUERY PLAN ' + reads[0]);
+    assert.match(currentPlan.rows[0].detail, /SEARCH .* USING INDEX g2b_notice_jobs_running/);
     const success = { kind: 'success', related: [], result: {} };
     await assert.rejects(db.transaction(async () => {
       await queue.finish(job.id, success, 0);
@@ -807,6 +828,7 @@ test('자동 집계는 중복 접수, 동시 요청, 롤백과 회차 이동 후
     await check([1, 1, 0, 0]);
     await both(() => queue.finish(job.id, success, 0), () => other.finish(job.id, success, 0));
     await check([1, 0, 1, 0]);
+    assert.equal((await queue.automatic.get()).currentNotice, null);
     await queue.finish((await queue.claim(0)).id, { kind: 'failure', error: '일시 오류' }, 0);
     await check([1, 0, 1, 0]);
     const later = await queue.enqueueRun(period, undefined, 'automatic');
@@ -829,6 +851,17 @@ test('자동 집계는 중복 접수, 동시 요청, 롤백과 회차 이동 후
       () => complete(second, 4),
     );
     await check([1, 0, 2, 0]);
+    const manual = await queue.enqueueRun(period);
+    await queue.claimRun('manual');
+    const manualTargets = { kind: 'targets', targets: [target(5), target(5)] };
+    await both(() => queue.finishRun(manual, manualTargets), () => other.finishRun(manual, manualTargets));
+    const [manualJob] = await both(() => queue.claim(0, 'manual'), () => other.claim(0, 'manual'));
+    const failure = { kind: 'internal_error', error: '상세 실패' };
+    await both(() => queue.finish(manualJob.id, failure, 0), () => other.finish(manualJob.id, failure, 0));
+    const { notices, ...rawSummary } = await queue.getRun(manual);
+    assert.equal(notices.length, 1);
+    assert.deepEqual(await queue.getRunSummary(manual), rawSummary);
+    assert.equal(rawSummary.failedCount, 1);
   } finally {
     second.close();
     client.close();
@@ -928,4 +961,70 @@ test('자동 목록은 대량 이력에서도 인덱스 범위로 읽고 집계�
   } finally {
     db.client.close();
   }
+});
+test('기간 요약과 실패 페이지는 원본 공고 상태를 반영하고 등록 순서를 유지한다', async () => {
+  const db = await testDatabase();
+  const queue = openNoticeQueue(db);
+  try {
+    const period = { startMinute: '2026-11-12T10:00', endMinute: '2026-11-12T10:59' };
+    const id = await queue.enqueueRun(period);
+    await queue.claimRun();
+    await queue.finishRun(id, { kind: 'targets', targets: Array.from({ length: 45 }, (_, n) => ({
+      number: 'PERIOD' + n, revision: '000', methodCode: '', title: String(n),
+    })) });
+    assert.equal((await queue.getRunSummary(id)).totalCount, 45);
+    await db.client.execute("UPDATE g2b_notice_jobs SET status = 'failed' WHERE id <= 22");
+    // 버전 6의 방문 기록에서도 같은 요약과 실패 순서를 복원한다.
+    await db.client.executeMultiple(`
+      DROP TRIGGER g2b_notice_period_run;
+      DROP TRIGGER g2b_notice_period_visit;
+      DROP TRIGGER g2b_notice_period_job_status;
+      DROP TRIGGER g2b_notice_period_count;
+      DROP INDEX g2b_notice_manual_runs;
+      DROP INDEX g2b_notice_manual_run_walk;
+      DROP INDEX g2b_notice_period_visits;
+      DROP INDEX g2b_notice_period_failed;
+      DROP INDEX g2b_notice_period_job;
+      DROP TABLE g2b_notice_period_counts;
+      ALTER TABLE g2b_notice_walk_visits DROP COLUMN periodStatus;
+      DELETE FROM g2b_schema_migrations WHERE version = 7;
+    `);
+    await migrateG2bDatabase(db.client);
+    await migrateG2bDatabase(db.client);
+    const statements = [];
+    const prepare = db.prepare.bind(db);
+    db.prepare = (sql) => {
+      const statement = prepare(sql);
+      return {
+        ...statement,
+        all: (...args) => { statements.push({ sql, args }); return statement.all(...args); },
+        get: (...args) => { if (sql.includes('period_counts')) statements.push({ sql, args }); return statement.get(...args); },
+      };
+    };
+    const first = await queue.listRunNotices(id, 'failed');
+    assert.equal(first.items.length, 20);
+    assert.equal(first.items[0].number, 'PERIOD0');
+    const second = await queue.listRunNotices(id, 'failed', first.next);
+    assert.equal(second.items.length, 2);
+    assert.deepEqual((await queue.listRunNotices(id, 'failed', second.previous)).items, first.items);
+    assert.equal((await queue.listRunNotices(id, 'all')).items.length, 20);
+    assert.equal((await queue.getRunSummary(id)).failedCount, 22);
+    for (const { sql, args } of statements.splice(0)) {
+      const { rows } = await db.client.execute({ sql: 'EXPLAIN QUERY PLAN ' + sql, args });
+      const plan = rows.map(({ detail }) => detail).join('\n');
+      assert.doesNotMatch(plan, /USE TEMP B-TREE|SCAN [vc]\b/);
+      if (sql.includes('LIMIT 21')) assert.match(plan, /USING INDEX g2b_notice_period_(visits|failed)/);
+      else assert.match(plan, /SEARCH c USING INTEGER PRIMARY KEY/);
+    }
+    await assert.rejects(db.transaction(async () => {
+      await db.prepare("UPDATE g2b_notice_jobs SET status = 'succeeded' WHERE id = 1").run();
+      throw Error('rollback');
+    }), /rollback/);
+    assert.equal((await queue.getRunSummary(id)).failedCount, 22);
+    await db.client.execute("UPDATE g2b_notice_jobs SET status = 'succeeded'");
+    const summary = await queue.getRunSummary(id);
+    assert.deepEqual([summary.status, summary.totalCount, summary.succeededCount, summary.failedCount],
+      ['completed', 45, 45, 0]);
+    assert.deepEqual((await queue.listRunNotices(id, 'failed', first.next)).items, []);
+  } finally { db.client.close(); }
 });

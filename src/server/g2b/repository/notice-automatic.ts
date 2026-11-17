@@ -75,6 +75,12 @@ export function openNoticeAutomatic(db: G2bDatabase) {
           }
           counts.total += count;
         }
+        const currentNotice = counts.running ? await db.prepare(`
+          SELECT number, revision,
+            COALESCE(NULLIF(json_extract(input, '$.title'), ''), json_extract(result, '$.title'), '') AS title
+          FROM g2b_notice_jobs INDEXED BY g2b_notice_jobs_running
+          WHERE status = 'running' AND automaticWalkId IS NOT NULL LIMIT 1
+        `).get() as NoticeAutomaticSettings["currentNotice"] | undefined : null;
         let status: NoticeAutomaticSettings["status"];
         if (!enabled) status = work?.running ? "stopping" : "stopped";
         else if (work?.running) status = "running";
@@ -83,6 +89,7 @@ export function openNoticeAutomatic(db: G2bDatabase) {
         else status = immediate || work?.pending ? "pending" : "scheduled";
         return {
           enabled: Boolean(enabled), interval, startMinute, nextAt, status, counts, round,
+          currentNotice: currentNotice ?? null,
         };
       }, false);
     },
