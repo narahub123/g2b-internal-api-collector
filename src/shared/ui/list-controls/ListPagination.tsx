@@ -6,10 +6,11 @@ import { Pagination, PaginationContent, PaginationItem } from "@/shared/ui/pagin
 import { getPageNumbers } from "./model";
 
 /** 이동할 수 있는 항목은 링크로, 경계의 이동 항목은 비활성 버튼으로 렌더링한다. */
-function PageControl({ href, label, current, children }: {
+function PageControl({ href, label, current, shallow, children }: {
   href?: string;
   label: string;
   current?: boolean;
+  shallow?: boolean;
   children: ReactNode;
 }) {
   const variant = current ? "outline" : "ghost";
@@ -23,7 +24,11 @@ function PageControl({ href, label, current, children }: {
         </Button>
       ) : (
         <Button asChild variant={variant} size="sm" className={className}>
-          <Link href={href} prefetch={false} title={label} aria-label={label} aria-current={current ? "page" : undefined}>
+          <Link href={href} prefetch={false} title={label} aria-label={label} aria-current={current ? "page" : undefined}
+            onNavigate={shallow ? (event) => {
+              event.preventDefault();
+              window.history.pushState(null, "", href);
+            } : undefined}>
             {children}
           </Link>
         </Button>
@@ -68,6 +73,22 @@ export function ListPagination({ page, totalPages, hrefForPage }: {
         <PageControl href={canGoForward ? hrefForPage(totalPages) : undefined} label="마지막으로">
           <ChevronsRight aria-hidden="true" />
         </PageControl>
+      </PaginationContent>
+    </Pagination>
+  );
+}
+
+/** 전체 페이지 수를 집계하지 않는 목록에 이전·다음 링크를 제공한다. */
+export function ListCursorPagination({ previousHref, nextHref }: {
+  previousHref?: string;
+  nextHref?: string;
+}) {
+  if (!previousHref && !nextHref) return null;
+  return (
+    <Pagination>
+      <PaginationContent>
+        <PageControl href={previousHref} shallow label="이전"><ChevronLeft aria-hidden="true" /></PageControl>
+        <PageControl href={nextHref} shallow label="다음"><ChevronRight aria-hidden="true" /></PageControl>
       </PaginationContent>
     </Pagination>
   );

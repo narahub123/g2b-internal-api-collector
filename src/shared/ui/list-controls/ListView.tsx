@@ -4,7 +4,7 @@ import { useId, useState, type ComponentProps, type ReactNode } from "react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/ui/accordion";
 import { Button } from "@/shared/ui/button";
 import { ListFilters } from "./ListFilters";
-import { ListPagination } from "./ListPagination";
+import { ListCursorPagination, ListPagination } from "./ListPagination";
 import { ListSearch } from "./ListSearch";
 import { ListSort } from "./ListSort";
 
@@ -12,7 +12,7 @@ type ListViewProps = {
   search?: ComponentProps<typeof ListSearch>;
   filters?: Omit<ComponentProps<typeof ListFilters>, "formId">;
   sort?: ComponentProps<typeof ListSort>;
-  pagination?: ComponentProps<typeof ListPagination>;
+  pagination?: ComponentProps<typeof ListPagination> | (ComponentProps<typeof ListCursorPagination> & { mode: "cursor" });
   controlsLabel?: string;
   onReset?: () => void;
   children: ReactNode;
@@ -84,7 +84,9 @@ export function ListView({ search, filters, sort, pagination, controlsLabel, onR
           controls
         ))}
       <div className="min-w-0">{children}</div>
-      {pagination && <ListPagination {...pagination} />}
+      {pagination && ("mode" in pagination
+        ? <ListCursorPagination {...pagination} />
+        : <ListPagination {...pagination} />)}
     </div>
   );
 }

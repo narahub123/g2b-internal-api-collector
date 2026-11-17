@@ -11,6 +11,8 @@ import {
 } from "@/features/collect-g2b/model/notice-automatic";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
+import { collectionCountFormat } from "./collection-count-labels";
+import { NoticeAutomaticList } from "./NoticeAutomaticList";
 
 const endpoint = "/api/g2b/notice-queue/automatic";
 const queryKey = [endpoint] as const;
@@ -24,14 +26,24 @@ const statuses = {
   queue_paused: "전체 큐 일시 중단",
 };
 const intervals = { 30: "30분", 60: "1시간", 120: "2시간" };
+const counts = [
+  ["total", "전체"], ["pending", "대기"], ["running", "수집 중"], ["completed", "완료"], ["failed", "실패"],
+] as const;
 
-/** 기존 공고 큐와 독립적으로 자동 수집 일정과 시작·중단 상태를 조작한다. */
+function refreshInterval(settings?: Settings) {
+  if (settings && (settings.counts.running > 0 || ["pending", "running", "stopping"].includes(settings.status))) {
+    return 5_000;
+  }
+  return 30_000;
+}
+
+/** 자동 수집 일정을 관리하고 공고 집계와 상태별 목록을 확인한다. */
 export function NoticeAutomaticSettings() {
   const [startMinute, setStartMinute] = useState("");
   const queryClient = useQueryClient();
   const settings = useQuery<Settings>({
     queryKey,
-    refetchInterval: 1500,
+    refetchInterval: (query) => refreshInterval(query.state.data),
     queryFn: async ({ signal }) => {
       const response = await fetch(endpoint, { signal, cache: "no-store" });
       if (!response.ok)
@@ -56,7 +68,6 @@ export function NoticeAutomaticSettings() {
       await queryClient.cancelQueries({ queryKey });
       queryClient.setQueryData(queryKey, result);
       if (command.action === "start") setStartMinute("");
-      await queryClient.invalidateQueries({ queryKey });
     },
   });
   const current = settings.data;
@@ -167,6 +178,23 @@ export function NoticeAutomaticSettings() {
                   : "자동 수집 시작"}
             </Button>
           </form>
+          <dl className="grid grid-cols-2 gap-3 rounded-md border p-3 sm:grid-cols-5">
+            {counts.map(([key, label]) => (
+              <div key={key}>
+                <dt className="text-sm text-muted-foreground">{label}</dt>
+                <dd className={`font-semibold tabular-nums${key === "failed" ? " text-destructive" : ""}`}>
+                  {collectionCountFormat.format(current.counts[key])}건
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {current.round && (
+            <p className="text-sm text-muted-foreground">
+              기준 회차 {current.round.startMinute.replace("T", " ")} ~ {current.round.endMinute.replace("T", " ")}
+            </p>
+          )}
+          <NoticeAutomaticList kind="all" settings={current} interval={refreshInterval(current)} />
+          <NoticeAutomaticList kind="failed" settings={current} interval={refreshInterval(current)} />
         </>
       )}
     </section>

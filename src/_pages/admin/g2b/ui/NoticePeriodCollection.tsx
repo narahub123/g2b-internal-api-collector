@@ -1,7 +1,5 @@
 "use client";
 
-import Link from "next/link";
-import { decodeHTMLStrict } from "entities";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { noticePath } from "@/_pages/admin/config/routes";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/ui/accordion";
@@ -9,7 +7,7 @@ import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import type { NoticeRun, NoticeRunPeriod } from "@/server/g2b/repository/notice-queue-types";
 import { collectionCountFormat } from "./collection-count-labels";
-import { noticeRunJobLabels } from "./notice-run-status";
+import { NoticeRunNoticeRow } from "./NoticeRunNoticeRow";
 import { NoticeRunFailedList } from "./NoticeRunFailedList";
 
 const endpoint = "/api/g2b/notice-collection-runs";
@@ -189,21 +187,7 @@ export function NoticePeriodCollection() {
                     {run.notices.length === 0 ? <p className="text-muted-foreground">수집 대상 공고가 없습니다.</p> : (
                       <ul className="divide-y">
                         {run.notices.map((notice) => (
-                          <li key={noticePath(notice)}>
-                            <Link href={noticePath(notice)} prefetch={false}
-                              className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 rounded-sm px-2 py-2 hover:bg-muted focus-visible:outline-ring sm:gap-4">
-                              {/* 저장 원본은 유지하고 공고명 표시와 툴팁에만 HTML 문자 참조를 디코딩한다. */}
-                              <span className="truncate" title={decodeHTMLStrict(notice.title)}>{decodeHTMLStrict(notice.title) || "공고명 미확인"}</span>
-                              <span className="tabular-nums">{notice.number}</span>
-                              <span aria-label={`차수 ${notice.revision}`}>{notice.revision}</span>
-                              <span className={notice.status === "failed" ? "text-destructive" : "text-muted-foreground"}>
-                                {noticeRunJobLabels[notice.status]}
-                              </span>
-                            </Link>
-                            {notice.status === "failed" && notice.error && (
-                              <p className="break-all px-2 pb-2 text-xs text-destructive">{notice.error}</p>
-                            )}
-                          </li>
+                          <NoticeRunNoticeRow key={noticePath(notice)} notice={notice} />
                         ))}
                       </ul>
                     )}

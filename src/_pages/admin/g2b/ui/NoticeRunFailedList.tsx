@@ -1,5 +1,3 @@
-import Link from "next/link";
-import { decodeHTMLStrict } from "entities";
 import { noticePath } from "@/_pages/admin/config/routes";
 import {
   Accordion,
@@ -9,10 +7,13 @@ import {
 } from "@/shared/ui/accordion";
 import type { NoticeRun } from "@/server/g2b/repository/notice-queue-types";
 
+import { NoticeRunNoticeRow } from "./NoticeRunNoticeRow";
+
 type NoticeRunFailedListProps = {
   notices: NoticeRun["notices"];
 };
 
+/** 기간 수집 결과에 최종 실패가 있을 때 실패 공고와 건수를 접이식 목록으로 표시한다. */
 export function NoticeRunFailedList({ notices }: NoticeRunFailedListProps) {
   const failedNotices = notices.filter((notice) => notice.status === "failed");
 
@@ -33,34 +34,7 @@ export function NoticeRunFailedList({ notices }: NoticeRunFailedListProps) {
         <AccordionContent>
           <ul className="divide-y">
             {failedNotices.map((notice) => (
-              <li key={noticePath(notice)}>
-                <Link
-                  href={noticePath(notice)}
-                  prefetch={false}
-                  className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 rounded-sm px-2 py-2 hover:bg-muted focus-visible:outline-ring sm:gap-4"
-                >
-                  <span
-                    className="truncate"
-                    title={decodeHTMLStrict(notice.title)}
-                  >
-                    {decodeHTMLStrict(notice.title) || "공고명 미확인"}
-                  </span>
-
-                  <span className="tabular-nums">{notice.number}</span>
-
-                  <span aria-label={`차수 ${notice.revision}`}>
-                    {notice.revision}
-                  </span>
-
-                  <span className="text-destructive">실패</span>
-                </Link>
-
-                {notice.error && (
-                  <p className="break-all px-2 pb-2 text-xs text-destructive">
-                    {notice.error}
-                  </p>
-                )}
-              </li>
+              <NoticeRunNoticeRow key={noticePath(notice)} notice={notice} />
             ))}
           </ul>
         </AccordionContent>
