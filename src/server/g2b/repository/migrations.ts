@@ -114,6 +114,19 @@ const initialSchema = `
     INSERT OR IGNORE INTO g2b_notice_worker_lease (id) VALUES (1);
 `;
 
+// 진행 중 작업은 회차를 넘겨 처리하므로 0번에, 종료 결과는 마지막 자동 탐색에 집계한다.
+const automaticBucket = (row: string) =>
+  `CASE WHEN ${row}.status IN ('succeeded', 'failed') THEN ${row}.automaticWalkId ELSE 0 END`;
+const automaticStatus = (row: string) =>
+  `CASE WHEN ${row}.status = 'retry_wait' THEN 'pending' ELSE ${row}.status END`;
+const addAutomaticCount = `
+  INSERT INTO g2b_notice_automatic_counts (bucket, status, count)
+  SELECT ${automaticBucket("NEW")}, ${automaticStatus("NEW")}, 1 WHERE NEW.automaticWalkId IS NOT NULL
+  ON CONFLICT(bucket, status) DO UPDATE SET count = count + 1;`;
+const removeAutomaticCount = `
+  UPDATE g2b_notice_automatic_counts SET count = count - 1
+    WHERE OLD.automaticWalkId IS NOT NULL AND bucket = ${automaticBucket("OLD")} AND status = ${automaticStatus("OLD")};`;
+
 /**
  * 스키마 변경과 적용 이력을 같은 쓰기 트랜잭션으로 기록한다.
  * @throws 연결 또는 스키마 적용에 실패하면 원래 오류를 전달한다.
@@ -178,6 +191,168 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       await transaction.executeMultiple(`
         CREATE INDEX g2b_notice_jobs_overview ON g2b_notice_jobs ((status = 'running') DESC, id DESC);
         INSERT INTO g2b_schema_migrations (version) VALUES (5);
+      `);
+    }
+    const automaticListsUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 6");
+    if (automaticListsUpgrade.rows.length === 0) {
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_notice_jobs ADD COLUMN automaticWalkId INTEGER;
+        WITH membership AS MATERIALIZED (
+          SELECT v.job_id, MAX(v.walk_id) AS walkId
+          FROM g2b_notice_runs r JOIN g2b_notice_walk_visits v ON v.walk_id = r.walkId
+          WHERE r.source = 'automatic' GROUP BY v.job_id
+        )
+        UPDATE g2b_notice_jobs AS j SET automaticWalkId = membership.walkId
+          FROM membership WHERE j.id = membership.job_id;
+        CREATE TABLE g2b_notice_automatic_counts (
+          bucket INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          count INTEGER NOT NULL CHECK (count >= 0),
+          PRIMARY KEY (bucket, status)
+        ) WITHOUT ROWID;
+        INSERT INTO g2b_notice_automatic_counts
+          SELECT ${automaticBucket("j")}, ${automaticStatus("j")}, COUNT(*)
+          FROM g2b_notice_jobs j WHERE j.automaticWalkId IS NOT NULL GROUP BY 1, 2;
+        CREATE TRIGGER g2b_notice_automatic_count_insert AFTER INSERT ON g2b_notice_jobs
+          WHEN NEW.automaticWalkId IS NOT NULL BEGIN ${addAutomaticCount} END;
+        CREATE TRIGGER g2b_notice_automatic_count_delete AFTER DELETE ON g2b_notice_jobs
+          WHEN OLD.automaticWalkId IS NOT NULL BEGIN ${removeAutomaticCount} END;
+        CREATE TRIGGER g2b_notice_automatic_count_update AFTER UPDATE OF status, automaticWalkId ON g2b_notice_jobs
+          WHEN (OLD.automaticWalkId IS NOT NULL OR NEW.automaticWalkId IS NOT NULL)
+            AND ((OLD.automaticWalkId IS NULL) <> (NEW.automaticWalkId IS NULL)
+              OR ${automaticBucket("OLD")} IS NOT ${automaticBucket("NEW")}
+              OR ${automaticStatus("OLD")} <> ${automaticStatus("NEW")})
+          BEGIN ${removeAutomaticCount} ${addAutomaticCount} END;
+        -- 이전 버전의 워커가 회차를 등록하는 동안에도 소속과 집계가 함께 반영되어야 한다.
+        CREATE TRIGGER g2b_notice_automatic_membership AFTER INSERT ON g2b_notice_walk_visits
+          WHEN EXISTS (SELECT 1 FROM g2b_notice_walks WHERE id = NEW.walk_id AND source = 'automatic')
+          BEGIN
+            UPDATE g2b_notice_jobs SET automaticWalkId = NEW.walk_id
+              WHERE id = NEW.job_id AND (automaticWalkId IS NULL OR automaticWalkId < NEW.walk_id);
+          END;
+        CREATE INDEX g2b_notice_auto_latest_walk ON g2b_notice_runs (walkId DESC)
+          WHERE source = 'automatic' AND walkId IS NOT NULL;
+        CREATE INDEX g2b_notice_auto_active ON g2b_notice_jobs (id DESC)
+          WHERE automaticWalkId IS NOT NULL AND status IN ('pending', 'retry_wait', 'running');
+        CREATE INDEX g2b_notice_auto_terminal ON g2b_notice_jobs (automaticWalkId, id DESC)
+          WHERE status IN ('succeeded', 'failed');
+        CREATE INDEX g2b_notice_auto_failed ON g2b_notice_jobs (automaticWalkId, id DESC)
+          WHERE status = 'failed';
+        CREATE INDEX g2b_notice_auto_queue_state ON g2b_notice_jobs (status) WHERE source = 'automatic';
+        CREATE INDEX g2b_notice_auto_unfinished_runs ON g2b_notice_runs (scheduleGeneration)
+          WHERE phase IN ('pending', 'discovering', 'collecting') AND coveredThrough IS NULL;
+        INSERT INTO g2b_schema_migrations (version) VALUES (6);
+      `);
+    }
+    const periodUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 7");
+    if (periodUpgrade.rows.length === 0) {
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_notice_walk_visits ADD COLUMN periodStatus TEXT;
+        CREATE INDEX g2b_notice_manual_runs ON g2b_notice_runs (id DESC) WHERE source = 'manual';
+        CREATE UNIQUE INDEX g2b_notice_manual_run_walk ON g2b_notice_runs (walkId)
+          WHERE source = 'manual' AND walkId IS NOT NULL;
+        CREATE INDEX g2b_notice_period_visits ON g2b_notice_walk_visits (walk_id);
+        CREATE TABLE g2b_notice_period_counts (
+          walk_id INTEGER PRIMARY KEY,
+          total INTEGER NOT NULL,
+          completed INTEGER NOT NULL,
+          failed INTEGER NOT NULL
+        );
+        UPDATE g2b_notice_walk_visits AS v
+          SET periodStatus = CASE WHEN j.status IN ('succeeded', 'failed') THEN j.status ELSE 'active' END
+          FROM g2b_notice_runs r JOIN g2b_notice_jobs j
+          WHERE r.source = 'manual' AND r.walkId = v.walk_id AND j.id = v.job_id;
+        INSERT INTO g2b_notice_period_counts
+          SELECT walk_id, COUNT(*), SUM(periodStatus = 'succeeded'), SUM(periodStatus = 'failed')
+          FROM g2b_notice_walk_visits WHERE periodStatus IS NOT NULL GROUP BY walk_id;
+        CREATE INDEX g2b_notice_period_failed ON g2b_notice_walk_visits (walk_id) WHERE periodStatus = 'failed';
+        CREATE INDEX g2b_notice_period_job ON g2b_notice_walk_visits (job_id) WHERE periodStatus IS NOT NULL;
+        -- 초기 방문은 회차에 walkId를 기록할 때 등록하고 연관 공고는 방문을 추가할 때 등록한다.
+        CREATE TRIGGER g2b_notice_period_run AFTER UPDATE OF walkId ON g2b_notice_runs
+          WHEN NEW.source = 'manual' AND OLD.walkId IS NULL AND NEW.walkId IS NOT NULL
+          BEGIN
+            UPDATE g2b_notice_walk_visits SET periodStatus = (
+              SELECT CASE WHEN status IN ('succeeded', 'failed') THEN status ELSE 'active' END
+              FROM g2b_notice_jobs WHERE id = job_id
+            ) WHERE walk_id = NEW.walkId;
+          END;
+        CREATE TRIGGER g2b_notice_period_visit AFTER INSERT ON g2b_notice_walk_visits
+          WHEN EXISTS (SELECT 1 FROM g2b_notice_runs WHERE source = 'manual' AND walkId = NEW.walk_id)
+          BEGIN
+            UPDATE g2b_notice_walk_visits SET periodStatus = (
+              SELECT CASE WHEN status IN ('succeeded', 'failed') THEN status ELSE 'active' END
+              FROM g2b_notice_jobs WHERE id = NEW.job_id
+            ) WHERE rowid = NEW.rowid;
+          END;
+        CREATE TRIGGER g2b_notice_period_job_status AFTER UPDATE OF status ON g2b_notice_jobs
+          WHEN OLD.status <> NEW.status
+            AND (OLD.status IN ('succeeded', 'failed') OR NEW.status IN ('succeeded', 'failed'))
+          BEGIN
+            UPDATE g2b_notice_walk_visits SET periodStatus =
+              CASE WHEN NEW.status IN ('succeeded', 'failed') THEN NEW.status ELSE 'active' END
+              WHERE job_id = NEW.id AND periodStatus IS NOT NULL;
+          END;
+        CREATE TRIGGER g2b_notice_period_count AFTER UPDATE OF periodStatus ON g2b_notice_walk_visits
+          WHEN OLD.periodStatus IS NOT NEW.periodStatus AND NEW.periodStatus IS NOT NULL
+          BEGIN
+            INSERT INTO g2b_notice_period_counts (walk_id, total, completed, failed)
+              VALUES (NEW.walk_id, 1, NEW.periodStatus = 'succeeded', NEW.periodStatus = 'failed')
+              ON CONFLICT(walk_id) DO UPDATE SET
+                total = total + (OLD.periodStatus IS NULL),
+                completed = completed + excluded.completed - (OLD.periodStatus IS 'succeeded'),
+                failed = failed + excluded.failed - (OLD.periodStatus IS 'failed');
+          END;
+        INSERT INTO g2b_schema_migrations (version) VALUES (7);
+      `);
+    }
+    const queueCountsUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 8");
+    if (queueCountsUpgrade.rows.length === 0) {
+      // 큐 전체의 건수는 한 행에 저장하고, 표시상 같은 대기 상태 사이의 전환은 건수를 바꾸지 않는다.
+      const predicates = {
+        pending: "status IN ('pending', 'retry_wait')",
+        running: "status = 'running'",
+        completed: "status = 'succeeded'",
+        failed: "status = 'failed'",
+      };
+      const columns = Object.entries(predicates);
+      const matches = (row: string, predicate: string) => `(${row}.${predicate})`;
+      const assignments = (delta: (predicate: string) => string) =>
+        columns.map(([column, predicate]) => `${column} = ${column} ${delta(predicate)}`).join(", ");
+      await transaction.executeMultiple(`
+        CREATE TABLE g2b_notice_queue_counts (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          pending INTEGER NOT NULL CHECK (pending >= 0),
+          running INTEGER NOT NULL CHECK (running BETWEEN 0 AND 1),
+          completed INTEGER NOT NULL CHECK (completed >= 0),
+          failed INTEGER NOT NULL CHECK (failed >= 0)
+        );
+        INSERT INTO g2b_notice_queue_counts (id, ${Object.keys(predicates).join(", ")})
+          SELECT 1, ${columns.map(([, predicate]) => `COALESCE(SUM(${predicate}), 0)`).join(", ")}
+          FROM g2b_notice_jobs;
+        CREATE TRIGGER g2b_notice_queue_count_insert AFTER INSERT ON g2b_notice_jobs
+          BEGIN
+            UPDATE g2b_notice_queue_counts SET ${assignments((p) => `+ ${matches("NEW", p)}`)} WHERE id = 1;
+          END;
+        CREATE TRIGGER g2b_notice_queue_count_delete AFTER DELETE ON g2b_notice_jobs
+          BEGIN
+            UPDATE g2b_notice_queue_counts SET ${assignments((p) => `- ${matches("OLD", p)}`)} WHERE id = 1;
+          END;
+        CREATE TRIGGER g2b_notice_queue_count_update AFTER UPDATE OF status ON g2b_notice_jobs
+          WHEN OLD.status <> NEW.status
+            AND NOT (OLD.status IN ('pending', 'retry_wait') AND NEW.status IN ('pending', 'retry_wait'))
+          BEGIN
+            UPDATE g2b_notice_queue_counts
+              SET ${assignments((p) => `+ ${matches("NEW", p)} - ${matches("OLD", p)}`)} WHERE id = 1;
+          END;
+        INSERT INTO g2b_schema_migrations (version) VALUES (8);
+      `);
+    }
+    const queueFailuresUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 9");
+    if (queueFailuresUpgrade.rows.length === 0) {
+      // 자동 회차와 무관하게 최종 실패한 큐 작업을 ID 순으로 탐색한다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_queue_failed ON g2b_notice_jobs (id) WHERE status = 'failed';
+        INSERT INTO g2b_schema_migrations (version) VALUES (9);
       `);
     }
     await transaction.commit();

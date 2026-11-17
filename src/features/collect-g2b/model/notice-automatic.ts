@@ -1,3 +1,5 @@
+import type { NoticeCollectionCounts, NoticeRun } from "@/server/g2b/repository/notice-queue-types";
+
 /** 관리자 화면에서 선택할 수 있는 자동 수집 주기(분). */
 export const noticeAutomaticIntervals = [30, 60, 120] as const;
 
@@ -14,6 +16,20 @@ export type NoticeAutomaticSettings = {
   startMinute: string | null;
   nextAt: number | null;
   status: "stopped" | "stopping" | "scheduled" | "pending" | "running" | "maintenance" | "queue_paused";
+  counts: NoticeCollectionCounts;
+  round: NoticeAutomaticRound | null;
+  currentNotice: Pick<NoticeRun["notices"][number], "number" | "revision" | "title"> | null;
+};
+
+export type NoticeAutomaticRound = { walkId: number; startMinute: string; endMinute: string };
+export type NoticeAutomaticListKind = "all" | "failed";
+export type NoticeAutomaticCursor = { walkId: number; direction: "before" | "after"; jobId: number };
+export type NoticeAutomaticPage = {
+  round: NoticeAutomaticRound | null;
+  items: (NoticeRun["notices"][number] & { id: number })[];
+  previous: NoticeAutomaticCursor | null;
+  next: NoticeAutomaticCursor | null;
+  resetCursor: boolean;
 };
 
 /** 기간 수집과 같은 한국 현지 분 단위 형식으로 실행 시각을 고정한다. */

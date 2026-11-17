@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { noticeRetryDelayMs } from "./notice-queue-types";
 import type { G2bDatabase } from "./database";
 import { openNoticeAutomatic } from "./notice-automatic";
-import type { NoticeJob, NoticeQueue, NoticeQueueInput, NoticeRun, NoticeRunPeriod, NoticeSource } from "./notice-queue-types";
+import { noticePageWindow } from "./notice-page-window";
+import type { NoticeJob, NoticeQueue, NoticeQueueInput, NoticeRun, NoticeRunNoticePage, NoticeRunPeriod, NoticeSource } from "./notice-queue-types";
 
 type JobRow = Omit<NoticeJob, "input" | "result" | "force"> & { input: string; result: string | null; force: number };
 
@@ -242,6 +243,88 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
           initialCount: run.initialCount, totalCount: notices.length, succeededCount, failedCount, error: run.error, notices };
       }, false);
     },
+    getRunSummary(id) {
+      return transaction(async () => {
+        const row = await db.prepare(`
+          SELECT r.id, r.startMinute, r.endMinute, r.phase, r.initialCount, r.error,
+            COALESCE(c.total, 0) AS totalCount, COALESCE(c.completed, 0) AS succeededCount,
+            COALESCE(c.failed, 0) AS failedCount, q.manual, q.maintenance
+          FROM g2b_notice_runs r CROSS JOIN g2b_notice_queue q
+          LEFT JOIN g2b_notice_period_counts c ON c.walk_id = r.walkId
+          WHERE q.id = 1 AND r.source = 'manual' AND r.id = COALESCE(?, (
+            SELECT id FROM g2b_notice_runs INDEXED BY g2b_notice_manual_runs
+            WHERE source = 'manual' ORDER BY id DESC LIMIT 1
+          ))`).get(id ?? null) as (NoticeRunPeriod & {
+            id: number; phase: NoticeRun["status"]; initialCount: number | null; error: string | null;
+            totalCount: number; succeededCount: number; failedCount: number; manual: number; maintenance: number;
+          }) | undefined;
+        if (!row) return;
+        const { phase, manual, maintenance, ...summary } = row;
+        const status = phase === "collecting" && summary.succeededCount + summary.failedCount === summary.totalCount
+          ? "completed" : phase;
+        const pauseReason = status === "completed" || status === "failed" ? null
+          : maintenance ? "maintenance" : manual ? "manual" : null;
+        return { ...summary, status, pauseReason };
+      }, false);
+    },
+    listRunNotices(id, kind, cursor) {
+      return transaction(async () => {
+        const run = await db.prepare("SELECT walkId FROM g2b_notice_runs WHERE id = ? AND source = 'manual'").get(id);
+        if (!run) return;
+        const walkId = run.walkId;
+        async function readPage(boundary?: typeof cursor) {
+          const reverse = boundary?.direction === "before";
+          const order = reverse ? "DESC" : "ASC";
+          const range = boundary ? (reverse ? "AND v.rowid < ?" : "AND v.rowid > ?") : "";
+          const index = kind === "failed" ? "g2b_notice_period_failed" : "g2b_notice_period_visits";
+          const filter = kind === "failed" ? "AND v.periodStatus = 'failed'" : "";
+          // 방문 인덱스에서 21건으로 제한하고, 해당 작업만 기본 키로 읽는다.
+          const rows = await db.prepare(`
+            SELECT v.rowid AS visitId, j.* FROM g2b_notice_walk_visits v INDEXED BY ${index}
+            CROSS JOIN g2b_notice_jobs j ON j.id = v.job_id
+            WHERE v.walk_id = ? ${filter} ${range} ORDER BY v.rowid ${order} LIMIT 21
+          `).all(walkId, ...(boundary ? [boundary.visitId] : [])) as (JobRow & { visitId: number })[];
+          const items = rows.slice(0, 20).map((row) => ({ ...runNotice(row), id: row.visitId }));
+          if (reverse) items.reverse();
+          return { items, more: rows.length > 20 };
+        }
+        let { items, more } = await readPage(cursor);
+        const boundary = items.length ? cursor : undefined;
+        if (!items.length && cursor) ({ items, more } = await readPage(undefined));
+        const first = items[0];
+        const last = items.at(-1);
+        const previous: NoticeRunNoticePage["previous"] = first && (boundary?.direction === "before" ? more : boundary)
+          ? { direction: "before", visitId: first.id } : null;
+        const next: NoticeRunNoticePage["next"] = last && (boundary?.direction === "before" || more)
+          ? { direction: "after", visitId: last.id } : null;
+        return { items, previous, next, resetCursor: Boolean(cursor && !previous) };
+      }, false);
+    },
+    numberRunNotices(id, kind, requested) {
+      return transaction(async () => {
+        const run = await db.prepare(`
+          SELECT r.walkId, c.total, c.failed FROM g2b_notice_runs r
+          LEFT JOIN g2b_notice_period_counts c ON c.walk_id = r.walkId
+          WHERE r.id = ? AND r.source = 'manual'
+        `).get(id);
+        if (!run) return;
+        const { page, totalPages, limit, offset, reverse } = noticePageWindow(requested, Number(run[kind === "failed" ? "failed" : "total"] ?? 0));
+        if (!limit) return { page, totalPages, items: [] };
+        const index = kind === "failed" ? "g2b_notice_period_failed" : "g2b_notice_period_visits";
+        const filter = kind === "failed" ? "AND periodStatus = 'failed'" : "";
+        // 경계까지는 좁은 방문 인덱스로 이동하고 선택된 방문만 공고 본문과 연결한다.
+        const rows = await db.prepare(`
+          WITH selected AS MATERIALIZED (
+            SELECT rowid FROM g2b_notice_walk_visits INDEXED BY ${index}
+            WHERE walk_id = ? ${filter} ORDER BY rowid ${reverse ? "DESC" : "ASC"} LIMIT ? OFFSET ?
+          )
+          SELECT v.rowid AS visitId, j.* FROM selected
+          CROSS JOIN g2b_notice_walk_visits v ON v.rowid = selected.rowid
+          CROSS JOIN g2b_notice_jobs j ON j.id = v.job_id ORDER BY v.rowid
+        `).all(run.walkId, limit, offset) as (JobRow & { visitId: number })[];
+        return { page, totalPages, items: rows.map((row) => ({ ...runNotice(row), id: row.visitId })) };
+      }, false);
+    },
     async findRunNotice(number, revision) {
       const row = await db.prepare(`SELECT j.* FROM g2b_notice_jobs j
         JOIN g2b_notice_walk_visits v ON v.job_id = j.id
@@ -386,6 +469,42 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
       const { manual, maintenance } = await state();
       const jobs = await db.prepare("SELECT * FROM g2b_notice_jobs ORDER BY status = 'running' DESC, id DESC LIMIT 50").all() as JobRow[];
       return { manual: Boolean(manual), maintenance, active: jobs.find(({ status }) => status === "running")?.id ?? null, jobs: jobs.map(job) };
+    },
+    getQueueSummary() {
+      return transaction(async () => {
+        const row = await db.prepare(`
+          SELECT q.manual, q.maintenance, c.pending, c.running, c.completed, c.failed
+          FROM g2b_notice_queue q JOIN g2b_notice_queue_counts c ON c.id = q.id WHERE q.id = 1
+        `).get() as { manual: number; maintenance: number; pending: number; running: number; completed: number; failed: number };
+        const { manual, maintenance, pending, running, completed, failed } = row;
+        const current = running ? await db.prepare(`
+          SELECT * FROM g2b_notice_jobs INDEXED BY g2b_notice_jobs_running WHERE status = 'running' LIMIT 1
+        `).get() as JobRow | undefined : undefined;
+        return { manual: Boolean(manual), maintenance, currentJob: current ? job(current) : null,
+          totalPages: noticePageWindow(1, pending + completed + failed).totalPages,
+          failedTotalPages: noticePageWindow(1, failed).totalPages,
+          counts: { pending, running, completed, failed, total: pending + running + completed + failed } };
+      }, false);
+    },
+    getQueuePage(requested, kind = "all") {
+      return transaction(async () => {
+        const failedOnly = kind === "failed";
+        const count = await db.prepare(`SELECT ${failedOnly ? "failed" : "pending + completed + failed"} AS count
+          FROM g2b_notice_queue_counts WHERE id = 1`).get();
+        const { page, totalPages, limit, offset, reverse } = noticePageWindow(requested, Number(count?.count ?? 0));
+        if (!limit) return { page, totalPages, jobs: [] };
+        // 인덱스로 페이지 경계까지 이동한 뒤 해당 작업만 읽어 깊은 페이지의 본문 조회를 제한한다.
+        const range = failedOnly
+          ? "INDEXED BY g2b_notice_queue_failed WHERE status = 'failed'"
+          : "INDEXED BY g2b_notice_jobs_overview WHERE (status = 'running') = 0";
+        const rows = await db.prepare(`
+          WITH selected AS MATERIALIZED (
+            SELECT id FROM g2b_notice_jobs ${range} ORDER BY id ${reverse ? "ASC" : "DESC"} LIMIT ? OFFSET ?
+          )
+          SELECT j.* FROM selected CROSS JOIN g2b_notice_jobs j ON j.id = selected.id ORDER BY j.id DESC
+        `).all(limit, offset) as JobRow[];
+        return { page, totalPages, jobs: rows.map(job) };
+      }, false);
     },
     async maintenanceVersion() {
       return (await state()).maintenance;

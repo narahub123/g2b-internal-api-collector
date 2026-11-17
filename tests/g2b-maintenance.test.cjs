@@ -1947,8 +1947,25 @@ test('큐 관리 API가 실행 중 수동 중단 요청을 저장하고 등록 �
   assert.equal(pause.status, 204);
   assert.equal((await (await GET()).json()).active, jobId);
   assert.equal((await (await GET()).json()).manual, true);
+  const read = (query) => GET(new Request('http://localhost/?' + query));
+  const summary = await (await read('view=summary')).json();
+  assert.equal(summary.currentJob.id, jobId);
+  assert.equal(summary.counts.running, 1);
+  assert.deepEqual((await (await read('page=1')).json()).jobs, []);
+  assert.deepEqual((await (await read('kind=failed&page=1')).json()).jobs, []);
+  assert.equal((await read('kind=unknown&page=1')).status, 400);
+  assert.equal((await read('page=0')).status, 400);
   await queue.finish(jobId, { kind: 'success', related: [], result: {} }, Date.now());
   assert.equal((await (await GET()).json()).active, null);
+  assert.equal((await (await read('view=summary')).json()).currentJob, null);
+  assert.equal((await (await read('page=2')).json()).jobs[0].id, jobId);
+  const failure = await postNotice(noticeRequest());
+  assert.equal(failure.status, 202);
+  await queue.setManual(false);
+  const failedJob = await queue.claim(Date.now());
+  await queue.finish(failedJob.id, { kind: 'internal_error', error: '테스트 실패' }, Date.now());
+  const failedPage = await (await read('kind=failed&page=1')).json();
+  assert.deepEqual(failedPage.jobs.map(({ id, status }) => [id, status]), [[failedJob.id, 'failed']]);
 
   const log = t.mock.method(console, 'error', () => {});
   t.mock.method(queue, 'enqueue', () => { throw new Error('DB 쓰기 실패'); });

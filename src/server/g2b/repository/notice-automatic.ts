@@ -1,8 +1,11 @@
 import {
   noticeAutomaticIntervals, noticeKoreanMinute,
+  type NoticeAutomaticCursor, type NoticeAutomaticListKind, type NoticeAutomaticPage, type NoticeAutomaticRound,
   type NoticeAutomaticCommand, type NoticeAutomaticInterval, type NoticeAutomaticSettings,
 } from "@/features/collect-g2b/model/notice-automatic";
 import type { G2bDatabase } from "./database";
+import type { NumberedNoticePage } from "./notice-queue-types";
+import { noticePageWindow } from "./notice-page-window";
 
 type Schedule = {
   enabled: number;
@@ -28,12 +31,24 @@ function nextTime(anchor: number, interval: NoticeAutomaticInterval, now: number
 // 이전 세대의 보류 공고는 재개 후 처리하되 현재 일정의 완료 기준에서 제외한다.
 const unfinished = "phase IN ('pending', 'discovering', 'collecting') AND coveredThrough IS NULL";
 
+const pageSize = 20;
+// 상태 분포가 한쪽으로 몰려도 LIMIT 전에 일치하지 않는 작업을 훑지 않도록 각 범위의 인덱스를 지정한다.
+const activeJobs = "INDEXED BY g2b_notice_auto_active WHERE automaticWalkId IS NOT NULL AND status IN ('pending', 'retry_wait', 'running')";
+const terminalJobs = "INDEXED BY g2b_notice_auto_terminal WHERE automaticWalkId = ? AND status IN ('succeeded', 'failed')";
+const failedJobs = "INDEXED BY g2b_notice_auto_failed WHERE automaticWalkId = ? AND status = 'failed'";
+
 /** 자동 수집 설정과 회차 등록을 같은 Turso 연결에서 처리한다. */
 export function openNoticeAutomatic(db: G2bDatabase) {
   async function read() {
     return await db.prepare(`
       SELECT a.*, q.maintenance, q.manual FROM g2b_notice_automatic a JOIN g2b_notice_queue q ON q.id = a.id WHERE a.id = 1
     `).get() as Schedule;
+  }
+
+  async function latestRound() {
+    const row = await db.prepare(`SELECT walkId, startMinute, endMinute FROM g2b_notice_runs
+      WHERE source = 'automatic' AND walkId IS NOT NULL ORDER BY walkId DESC LIMIT 1`).get();
+    return (row as NoticeAutomaticRound | undefined) ?? null;
   }
 
   return {
@@ -45,9 +60,29 @@ export function openNoticeAutomatic(db: G2bDatabase) {
           SELECT
             (EXISTS (SELECT 1 FROM g2b_notice_runs WHERE scheduleGeneration = ? AND phase = 'discovering')
              OR EXISTS (SELECT 1 FROM g2b_notice_jobs WHERE source = 'automatic' AND status = 'running')) AS running,
-            (EXISTS (SELECT 1 FROM g2b_notice_runs WHERE scheduleGeneration = ? AND ${unfinished})
+            (EXISTS (SELECT 1 FROM g2b_notice_runs INDEXED BY g2b_notice_auto_unfinished_runs WHERE scheduleGeneration = ? AND ${unfinished})
              OR EXISTS (SELECT 1 FROM g2b_notice_jobs WHERE source = 'automatic' AND status IN ('pending', 'retry_wait'))) AS pending
         `).get(generation, generation);
+        const round = await latestRound();
+        const countRows = await db.prepare(`SELECT status, count FROM g2b_notice_automatic_counts
+          WHERE bucket IN (0, ?)`).all(round?.walkId ?? 0);
+        const counts = { pending: 0, running: 0, completed: 0, failed: 0, total: 0 };
+        for (const row of countRows) {
+          const count = Number(row.count);
+          switch (row.status) {
+            case "pending": counts.pending = count; break;
+            case "running": counts.running = count; break;
+            case "succeeded": counts.completed = count; break;
+            case "failed": counts.failed = count; break;
+          }
+          counts.total += count;
+        }
+        const currentNotice = counts.running ? await db.prepare(`
+          SELECT number, revision,
+            COALESCE(NULLIF(json_extract(input, '$.title'), ''), json_extract(result, '$.title'), '') AS title
+          FROM g2b_notice_jobs INDEXED BY g2b_notice_jobs_running
+          WHERE status = 'running' AND automaticWalkId IS NOT NULL LIMIT 1
+        `).get() as NoticeAutomaticSettings["currentNotice"] | undefined : null;
         let status: NoticeAutomaticSettings["status"];
         if (!enabled) status = work?.running ? "stopping" : "stopped";
         else if (work?.running) status = "running";
@@ -55,8 +90,89 @@ export function openNoticeAutomatic(db: G2bDatabase) {
         else if (manual) status = "queue_paused";
         else status = immediate || work?.pending ? "pending" : "scheduled";
         return {
-          enabled: Boolean(enabled), interval, startMinute, nextAt, status,
+          enabled: Boolean(enabled), interval, startMinute, nextAt, status, counts, round,
+          currentNotice: currentNotice ?? null,
         };
+      }, false);
+    },
+
+    /** 자동 회차의 저장 건수로 페이지를 보정하고, 선택된 작업의 공고 정보만 읽는다. */
+    numberNotices(kind: NoticeAutomaticListKind, requested: number, walkId?: number): Promise<NumberedNoticePage & { round: NoticeAutomaticRound | null }> {
+      return db.transaction(async () => {
+        const round = await latestRound();
+        const count = await db.prepare(kind === "failed"
+          ? "SELECT count FROM g2b_notice_automatic_counts WHERE bucket = ? AND status = 'failed'"
+          : "SELECT SUM(count) AS count FROM g2b_notice_automatic_counts WHERE bucket IN (0, ?)").get(round?.walkId ?? 0);
+        const { page, totalPages, limit, offset, reverse } = noticePageWindow(
+          walkId !== undefined && walkId !== round?.walkId ? 1 : requested, Number(count?.count ?? 0),
+        );
+        if (!limit) return { round, page, totalPages, items: [] };
+        const terminal = `SELECT id FROM g2b_notice_jobs ${kind === "failed" ? failedJobs : terminalJobs}`;
+        const active = `SELECT id FROM g2b_notice_jobs ${activeJobs}`;
+        // 두 인덱스를 ID 순으로 합치고 페이지에 포함된 작업만 조회한다.
+        const range = kind === "failed" ? terminal : round ? `${active} UNION ALL ${terminal}` : active;
+        const rows = await db.prepare(`
+          WITH selected AS MATERIALIZED (
+            ${range} ORDER BY id ${reverse ? "ASC" : "DESC"} LIMIT ? OFFSET ?
+          )
+          SELECT j.id, j.number, j.revision, j.status, j.error,
+            COALESCE(NULLIF(json_extract(j.input, '$.title'), ''), json_extract(j.result, '$.title'), '') AS title,
+            COALESCE(json_extract(j.input, '$.methodCode'), '') AS methodCode
+          FROM selected CROSS JOIN g2b_notice_jobs j ON j.id = selected.id ORDER BY j.id DESC
+        `).all(...(round ? [round.walkId] : []), limit, offset);
+        const items = rows.map((row): NumberedNoticePage["items"][number] => ({
+          id: Number(row.id), number: String(row.number), revision: String(row.revision),
+          title: String(row.title), methodCode: String(row.methodCode),
+          status: row.status as NumberedNoticePage["items"][number]["status"],
+          error: row.error == null ? null : String(row.error),
+        }));
+        return { round, page, totalPages, items };
+      }, false);
+    },
+
+    /**
+     * 자동 회차 공고를 작업 ID로 탐색한다. 다른 회차의 커서는 첫 페이지로 되돌린다.
+     * @param kind 실패 목록은 기준 회차의 최종 실패만 포함한다.
+     * @param cursor 이전·다음 이동의 경계가 되는 작업 ID와 기준 회차.
+     */
+    list(kind: NoticeAutomaticListKind, cursor?: NoticeAutomaticCursor): Promise<NoticeAutomaticPage> {
+      return db.transaction(async () => {
+        const round = await latestRound();
+        const current = cursor?.walkId === round?.walkId ? cursor : undefined;
+
+        async function readPage(boundary?: NoticeAutomaticCursor) {
+          const ascending = boundary?.direction === "before";
+          const condition = boundary ? (ascending ? "AND id > ?" : "AND id < ?") : "";
+          const order = ascending ? "ASC" : "DESC";
+          // 서로 겹치지 않는 인덱스 범위를 먼저 제한해 전체 회차 정렬을 피한다.
+          const readJobs = (range: string, args: number[]) => db.prepare(`
+            SELECT id, number, revision, status, error,
+              COALESCE(NULLIF(json_extract(input, '$.title'), ''), json_extract(result, '$.title'), '') AS title,
+              COALESCE(json_extract(input, '$.methodCode'), '') AS methodCode
+            FROM g2b_notice_jobs ${range} ${condition} ORDER BY id ${order} LIMIT ${pageSize + 1}
+          `).all(...args, ...(boundary ? [boundary.jobId] : []));
+          const rows = kind === "all" ? await readJobs(activeJobs, []) : [];
+          if (round) rows.push(...await readJobs(kind === "failed" ? failedJobs : terminalJobs, [round.walkId]));
+          rows.sort((a, b) => ascending ? Number(a.id) - Number(b.id) : Number(b.id) - Number(a.id));
+          const items = rows.slice(0, pageSize).map((row): NoticeAutomaticPage["items"][number] => ({
+            id: Number(row.id), number: String(row.number), revision: String(row.revision),
+            title: String(row.title), methodCode: String(row.methodCode),
+            status: row.status as NoticeAutomaticPage["items"][number]["status"],
+            error: row.error == null ? null : String(row.error),
+          }));
+          if (ascending) items.reverse();
+          return { items, more: rows.length > pageSize };
+        }
+
+        let { items, more } = await readPage(current);
+        // 이전 회차의 대기 작업이 모두 끝나 페이지가 비면 현재 결과의 처음으로 돌아간다.
+        const boundary = items.length ? current : undefined;
+        if (!items.length && current) ({ items, more } = await readPage());
+        const previous = round && items.length && (boundary?.direction === "before" ? more : boundary)
+          ? { walkId: round.walkId, direction: "before" as const, jobId: items[0].id } : null;
+        const next = round && items.length && (boundary?.direction === "before" || more)
+          ? { walkId: round.walkId, direction: "after" as const, jobId: items[items.length - 1].id } : null;
+        return { round, items, previous, next, resetCursor: Boolean(cursor && !previous) };
       }, false);
     },
 
