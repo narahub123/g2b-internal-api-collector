@@ -77,22 +77,26 @@ export function NoticeAutomaticSettings() {
       {current && (
         <>
           <dl
-            className="flex flex-wrap gap-x-6 gap-y-2 text-sm"
+            className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-[220px_minmax(0,1fr)]"
             aria-live="polite"
           >
-            <div>
-              <dt>현재 상태</dt>
+            <div className="flex min-w-0 items-center gap-3">
+              <dt className="shrink-0 text-muted-foreground">현재 상태</dt>
               <dd className="font-medium">{statuses[current.status]}</dd>
             </div>
-            <div>
-              <dt>다음 정기 실행 (한국 시각)</dt>
-              <dd className="font-medium">
+
+            <div className="flex min-w-0 items-center gap-3">
+              <dt className="shrink-0 text-muted-foreground">
+                다음 정기 실행 (한국 시각)
+              </dt>
+              <dd className="font-medium tabular-nums">
                 {current.nextAt === null
                   ? "—"
                   : noticeKoreanMinute(current.nextAt).replace("T", " ")}
               </dd>
             </div>
           </dl>
+
           <form
             className="flex flex-wrap items-end gap-3"
             onSubmit={(event) => {
@@ -108,8 +112,8 @@ export function NoticeAutomaticSettings() {
               }
             }}
           >
-            <label className="grid gap-1 text-sm">
-              수집 주기
+            <label className="flex items-center gap-3 text-sm">
+              <span className="shrink-0">수집 주기</span>
               <select
                 className="h-9 rounded-md border bg-background px-3"
                 value={current.interval}
@@ -130,9 +134,10 @@ export function NoticeAutomaticSettings() {
                 ))}
               </select>
             </label>
+
             {!current.enabled && (
-              <label className="grid gap-1 text-sm">
-                시작 시각 (한국 시각)
+              <label className="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:gap-3">
+                <span className="shrink-0">시작 시각 (한국 시각)</span>
                 <Input
                   type="datetime-local"
                   step={60}
@@ -140,12 +145,19 @@ export function NoticeAutomaticSettings() {
                   value={startMinute}
                   disabled={update.isPending}
                   onChange={(event) => setStartMinute(event.target.value)}
+                  className="w-full sm:w-auto"
                 />
               </label>
             )}
+
             <Button
               type="submit"
               variant={current.enabled ? "outline" : "default"}
+              className={
+                current.enabled
+                  ? "w-full border-transparent text-destructive hover:border-destructive hover:bg-destructive hover:text-white sm:ml-auto sm:w-auto"
+                  : "w-full sm:ml-auto sm:w-auto"
+              }
               disabled={update.isPending}
             >
               {current.enabled
