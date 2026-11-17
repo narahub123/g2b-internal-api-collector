@@ -470,6 +470,37 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
       const jobs = await db.prepare("SELECT * FROM g2b_notice_jobs ORDER BY status = 'running' DESC, id DESC LIMIT 50").all() as JobRow[];
       return { manual: Boolean(manual), maintenance, active: jobs.find(({ status }) => status === "running")?.id ?? null, jobs: jobs.map(job) };
     },
+    getQueueSummary() {
+      return transaction(async () => {
+        const row = await db.prepare(`
+          SELECT q.manual, q.maintenance, c.pending, c.running, c.completed, c.failed
+          FROM g2b_notice_queue q JOIN g2b_notice_queue_counts c ON c.id = q.id WHERE q.id = 1
+        `).get() as { manual: number; maintenance: number; pending: number; running: number; completed: number; failed: number };
+        const { manual, maintenance, pending, running, completed, failed } = row;
+        const current = running ? await db.prepare(`
+          SELECT * FROM g2b_notice_jobs INDEXED BY g2b_notice_jobs_running WHERE status = 'running' LIMIT 1
+        `).get() as JobRow | undefined : undefined;
+        return { manual: Boolean(manual), maintenance, currentJob: current ? job(current) : null,
+          totalPages: noticePageWindow(1, pending + completed + failed).totalPages,
+          counts: { pending, running, completed, failed, total: pending + running + completed + failed } };
+      }, false);
+    },
+    getQueuePage(requested) {
+      return transaction(async () => {
+        const count = await db.prepare("SELECT pending + completed + failed AS count FROM g2b_notice_queue_counts WHERE id = 1").get();
+        const { page, totalPages, limit, offset, reverse } = noticePageWindow(requested, Number(count?.count ?? 0));
+        if (!limit) return { page, totalPages, jobs: [] };
+        // 인덱스로 페이지 경계까지 이동한 뒤 해당 작업만 읽어 깊은 페이지의 본문 조회를 제한한다.
+        const rows = await db.prepare(`
+          WITH selected AS MATERIALIZED (
+            SELECT id FROM g2b_notice_jobs INDEXED BY g2b_notice_jobs_overview
+            WHERE (status = 'running') = 0 ORDER BY id ${reverse ? "ASC" : "DESC"} LIMIT ? OFFSET ?
+          )
+          SELECT j.* FROM selected CROSS JOIN g2b_notice_jobs j ON j.id = selected.id ORDER BY j.id DESC
+        `).all(limit, offset) as JobRow[];
+        return { page, totalPages, jobs: rows.map(job) };
+      }, false);
+    },
     async maintenanceVersion() {
       return (await state()).maintenance;
     },

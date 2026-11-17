@@ -57,6 +57,15 @@ export type NumberedNoticePage = Pick<NoticeRunNoticePage, "items"> & {
   page: number;
   totalPages: number;
 };
+export type NoticeCollectionCounts = { total: number; pending: number; running: number; completed: number; failed: number };
+export type NoticeQueueSummary = {
+  manual: boolean;
+  maintenance: number;
+  counts: NoticeCollectionCounts;
+  currentJob: NoticeJob | null;
+  totalPages: number;
+};
+export type NoticeQueuePageData = { page: number; totalPages: number; jobs: NoticeJob[] };
 
 export type NoticeJob = {
   id: number;
@@ -122,6 +131,10 @@ export interface NoticeQueue {
   get(id: number): Promise<NoticeJob | undefined>;
   /** 운영 화면에 표시할 활성 작업과 최근 작업을 조회한다. */
   overview(): Promise<{ manual: boolean; maintenance: number; active: number | null; jobs: NoticeJob[] }>;
+  /** 저장된 큐 집계와 현재 상세 수집 작업을 같은 시점에서 반환한다. */
+  getQueueSummary(): Promise<NoticeQueueSummary>;
+  /** 수집 중인 작업을 제외한 모든 작업을 최신 ID 순으로 최대 20건 반환한다. */
+  getQueuePage(page: number): Promise<NoticeQueuePageData>;
   /** 현재 점검 세대를 읽어 확인 도중 들어온 새 점검과 구분한다. */
   maintenanceVersion(): Promise<number>;
   /** 수동 중단 요청 상태를 저장한다. */

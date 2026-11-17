@@ -1,4 +1,4 @@
-import type { NoticeRun } from "@/server/g2b/repository/notice-queue-types";
+import type { NoticeCollectionCounts, NoticeRun } from "@/server/g2b/repository/notice-queue-types";
 
 /** 관리자 화면에서 선택할 수 있는 자동 수집 주기(분). */
 export const noticeAutomaticIntervals = [30, 60, 120] as const;
@@ -16,7 +16,7 @@ export type NoticeAutomaticSettings = {
   startMinute: string | null;
   nextAt: number | null;
   status: "stopped" | "stopping" | "scheduled" | "pending" | "running" | "maintenance" | "queue_paused";
-  counts: { total: number; pending: number; running: number; completed: number; failed: number };
+  counts: NoticeCollectionCounts;
   round: NoticeAutomaticRound | null;
   currentNotice: Pick<NoticeRun["notices"][number], "number" | "revision" | "title"> | null;
 };

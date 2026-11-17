@@ -2,10 +2,19 @@ import { getG2bRepository } from "@/server/g2b/repository";
 import { wakeNoticeWorker } from "@/features/collect-g2b/api/notice-actions";
 import { logNoticeQueueError } from "@/features/collect-g2b/api/notice-queue-service";
 
-/** 영속 중단 사유와 실행 중인 작업 및 최근 작업을 반환한다. */
-export async function GET() {
+/** 큐 요약 또는 작업 한 페이지를 반환한다. 옵션이 없으면 기존 최근 작업을 반환한다. */
+export async function GET(request?: Request) {
+  const query = request && new URL(request.url).searchParams;
+  const rawPage = query?.get("page");
+  const page = Number(rawPage);
+  if (rawPage != null && (!/^[1-9]\d*$/.test(rawPage) || !Number.isSafeInteger(page))) {
+    return Response.json({ error: "페이지 번호를 확인해 주세요." }, { status: 400 });
+  }
   try {
-    return Response.json(await getG2bRepository().noticeQueue.overview());
+    const queue = getG2bRepository().noticeQueue;
+    const result = rawPage != null ? await queue.getQueuePage(page)
+      : query?.get("view") === "summary" ? await queue.getQueueSummary() : await queue.overview();
+    return Response.json(result);
   } catch (error) {
     logNoticeQueueError("overview", error);
     return Response.json({ error: "공고 큐 상태를 조회하지 못했습니다." }, { status: 503 });

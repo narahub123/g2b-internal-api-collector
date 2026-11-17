@@ -917,7 +917,8 @@ test('자동 목록은 대량 이력에서도 인덱스 범위로 읽고 집계�
     assert.equal((await totalChanges()) - originalChanges, 1);
     const beforeRunning = await totalChanges();
     await db.client.execute("UPDATE g2b_notice_jobs SET status = 'running' WHERE id = 5050");
-    assert.equal((await totalChanges()) - beforeRunning, 3);
+    // 작업 1행, 자동 집계 2행, 전체 큐 집계 1행만 바뀐다.
+    assert.equal((await totalChanges()) - beforeRunning, 4);
     await db.client.execute("UPDATE g2b_notice_jobs SET status = 'pending' WHERE id = 5050");
 
     const queries = [];
@@ -1049,5 +1050,71 @@ test('기간 요약과 실패 페이지는 원본 공고 상태를 반영하고 
     assert.deepEqual([summary.status, summary.totalCount, summary.succeededCount, summary.failedCount],
       ['completed', 45, 45, 0]);
     assert.deepEqual((await queue.listRunNotices(id, 'failed', first.next)).items, []);
+  } finally { db.client.close(); }
+});
+test('큐 요약은 전체 작업 집계를 유지하고 수집 중인 행은 페이지에서 제외한다', async () => {
+  const db = await testDatabase();
+  const queue = openNoticeQueue(db);
+  try {
+    assert.equal((await queue.getQueueSummary()).counts.total, 0);
+    await db.client.execute(`
+      WITH RECURSIVE n(id) AS (VALUES (1) UNION ALL SELECT id + 1 FROM n WHERE id < 42)
+      INSERT INTO g2b_notice_jobs (id, number, revision, input, force, status, source)
+      SELECT id, 'QUEUE' || id, '000', json_object('number','QUEUE' || id,'revision','000'), 0,
+        CASE id WHEN 1 THEN 'running' WHEN 2 THEN 'retry_wait' WHEN 3 THEN 'failed' WHEN 4 THEN 'succeeded' ELSE 'pending' END,
+        CASE WHEN id % 2 = 0 THEN 'manual' ELSE 'automatic' END FROM n
+    `);
+    await db.client.executeMultiple(`
+      DROP TRIGGER g2b_notice_queue_count_insert;
+      DROP TRIGGER g2b_notice_queue_count_delete;
+      DROP TRIGGER g2b_notice_queue_count_update;
+      DROP TABLE g2b_notice_queue_counts;
+      DELETE FROM g2b_schema_migrations WHERE version = 8;
+    `);
+    await migrateG2bDatabase(db.client);
+    await migrateG2bDatabase(db.client);
+    const reads = [];
+    const prepare = db.prepare.bind(db);
+    db.prepare = (sql) => {
+      const statement = prepare(sql);
+      return {
+        ...statement,
+        get: (...args) => { reads.push({ sql, args }); return statement.get(...args); },
+        all: (...args) => { reads.push({ sql, args }); return statement.all(...args); },
+      };
+    };
+    const summary = await queue.getQueueSummary();
+    assert.deepEqual(summary.counts, { total: 42, pending: 39, running: 1, completed: 1, failed: 1 });
+    assert.equal(summary.currentJob.id, 1);
+    const first = await queue.getQueuePage(1);
+    const middle = await queue.getQueuePage(2);
+    const last = await queue.getQueuePage(99);
+    assert.deepEqual([first.page, first.totalPages, first.jobs.length, first.jobs[0].id], [1, 3, 20, 42]);
+    assert.deepEqual([last.page, last.totalPages, last.jobs.map(({ id }) => id)], [3, 3, [2]]);
+    assert.deepEqual([middle.jobs[0].id, middle.jobs.at(-1).id], [22, 3]);
+    db.prepare = prepare;
+    for (const { sql, args } of reads) {
+      const { rows } = await db.client.execute({ sql: 'EXPLAIN QUERY PLAN ' + sql, args });
+      const plan = rows.map(({ detail }) => detail).join('\n');
+      if (sql.includes('WITH selected')) {
+        assert.match(plan, /SEARCH g2b_notice_jobs USING INDEX g2b_notice_jobs_overview/);
+        assert.match(plan, /SEARCH j USING INTEGER PRIMARY KEY/);
+        assert.ok((plan.match(/USE TEMP B-TREE/g) ?? []).length <= 1, plan);
+      } else {
+        assert.doesNotMatch(plan, /SCAN |USE TEMP B-TREE/);
+      }
+    }
+    await assert.rejects(db.transaction(async () => {
+      await queue.finish(1, { kind: 'success', related: [], result: {} }, 0);
+      throw Error('rollback');
+    }), /rollback/);
+    assert.equal((await queue.getQueueSummary()).counts.running, 1);
+    const success = { kind: 'success', related: [], result: {} };
+    await queue.finish(1, success, 0);
+    await queue.finish(1, success, 0);
+    await db.client.execute('DELETE FROM g2b_notice_jobs WHERE id = 3');
+    assert.deepEqual((await queue.getQueueSummary()).counts,
+      { total: 41, pending: 39, running: 0, completed: 2, failed: 0 });
+    assert.deepEqual((await queue.getQueuePage(3)).jobs.map(({ id }) => id), [1]);
   } finally { db.client.close(); }
 });

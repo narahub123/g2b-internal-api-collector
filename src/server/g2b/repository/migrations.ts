@@ -305,6 +305,48 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (7);
       `);
     }
+    const queueCountsUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 8");
+    if (queueCountsUpgrade.rows.length === 0) {
+      // 큐 전체의 건수는 한 행에 저장하고, 표시상 같은 대기 상태 사이의 전환은 건수를 바꾸지 않는다.
+      const predicates = {
+        pending: "status IN ('pending', 'retry_wait')",
+        running: "status = 'running'",
+        completed: "status = 'succeeded'",
+        failed: "status = 'failed'",
+      };
+      const columns = Object.entries(predicates);
+      const matches = (row: string, predicate: string) => `(${row}.${predicate})`;
+      const assignments = (delta: (predicate: string) => string) =>
+        columns.map(([column, predicate]) => `${column} = ${column} ${delta(predicate)}`).join(", ");
+      await transaction.executeMultiple(`
+        CREATE TABLE g2b_notice_queue_counts (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          pending INTEGER NOT NULL CHECK (pending >= 0),
+          running INTEGER NOT NULL CHECK (running BETWEEN 0 AND 1),
+          completed INTEGER NOT NULL CHECK (completed >= 0),
+          failed INTEGER NOT NULL CHECK (failed >= 0)
+        );
+        INSERT INTO g2b_notice_queue_counts (id, ${Object.keys(predicates).join(", ")})
+          SELECT 1, ${columns.map(([, predicate]) => `COALESCE(SUM(${predicate}), 0)`).join(", ")}
+          FROM g2b_notice_jobs;
+        CREATE TRIGGER g2b_notice_queue_count_insert AFTER INSERT ON g2b_notice_jobs
+          BEGIN
+            UPDATE g2b_notice_queue_counts SET ${assignments((p) => `+ ${matches("NEW", p)}`)} WHERE id = 1;
+          END;
+        CREATE TRIGGER g2b_notice_queue_count_delete AFTER DELETE ON g2b_notice_jobs
+          BEGIN
+            UPDATE g2b_notice_queue_counts SET ${assignments((p) => `- ${matches("OLD", p)}`)} WHERE id = 1;
+          END;
+        CREATE TRIGGER g2b_notice_queue_count_update AFTER UPDATE OF status ON g2b_notice_jobs
+          WHEN OLD.status <> NEW.status
+            AND NOT (OLD.status IN ('pending', 'retry_wait') AND NEW.status IN ('pending', 'retry_wait'))
+          BEGIN
+            UPDATE g2b_notice_queue_counts
+              SET ${assignments((p) => `+ ${matches("NEW", p)} - ${matches("OLD", p)}`)} WHERE id = 1;
+          END;
+        INSERT INTO g2b_schema_migrations (version) VALUES (8);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

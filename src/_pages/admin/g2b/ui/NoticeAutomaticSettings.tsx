@@ -14,7 +14,7 @@ import {
 } from "@/features/collect-g2b/model/notice-automatic";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
-import { collectionCountFormat } from "./collection-count-labels";
+import { NoticeCollectionCounts } from "./NoticeCollectionCounts";
 import { NoticeCollectionList } from "./NoticeCollectionList";
 import { NoticeCollectionPanel } from "./NoticeCollectionPanel";
 
@@ -30,9 +30,6 @@ const statuses = {
   queue_paused: "전체 큐 일시 중단",
 };
 const intervals = { 30: "30분", 60: "1시간", 120: "2시간" };
-const counts = [
-  ["total", "전체"], ["pending", "대기"], ["running", "수집 중"], ["completed", "완료"], ["failed", "실패"],
-] as const;
 
 function refreshInterval(settings?: Settings) {
   if (settings && (settings.counts.running > 0 || ["pending", "running", "stopping"].includes(settings.status))) {
@@ -193,18 +190,7 @@ export function NoticeAutomaticSettings() {
                 <span className="font-medium tabular-nums">{current.round.startMinute.replace("T", " ")} ~{" "}{current.round.endMinute.replace("T", " ")}</span>
               </p>
             )}
-            <dl className="grid grid-cols-2 gap-3 rounded-md border p-3 sm:grid-cols-5">
-              {counts.map(([key, label]) => (
-                <div key={key}>
-                  <dt className="text-sm text-muted-foreground">{label}</dt>
-                  <dd
-                    className={`font-semibold tabular-nums${key === "failed" ? " text-destructive" : ""}`}
-                  >
-                    {collectionCountFormat.format(current.counts[key])}건
-                  </dd>
-                </div>
-              ))}
-            </dl>
+            <NoticeCollectionCounts counts={current.counts} />
             <div className="flex h-8 min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-sm">
               <span className="shrink-0 text-muted-foreground">
                 현재 수집 중
