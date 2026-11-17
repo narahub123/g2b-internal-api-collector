@@ -229,6 +229,10 @@ test('사전규격 상세 조회 불가는 공고를 정상 저장하고 재수�
   const { POST: retry } = require('../app/api/g2b/collection-attempts/[id]/retry/route');
   const collectDirectly = () => POST(new Request('http://localhost'), { params: Promise.resolve({ number }) });
   const history = repository.collectionAttempts;
+  const countsBefore = await history.counts('prior-specs');
+  const listByNumber = (status, q = number) => history.priorSpecList.page(parsePriorSpecListQuery({
+    field: 'number', q, status, page: '2',
+  }, []));
   const { G2bDetailPage } = require('../src/_pages/g2b/ui/G2bDetailPage');
   const { NoticeDetailPage } = require('../src/_pages/admin/g2b/notices/ui/NoticeDetailPage');
   const { createElement } = require('react');
@@ -251,6 +255,13 @@ test('사전규격 상세 조회 불가는 공고를 정상 저장하고 재수�
   assert.deepEqual(saved.payload.dmItemMap, detail);
   assert.equal(await repository.findPriorSpec(number), null);
   assert.ok(!(await history.overview('prior-specs')).failures.some((row) => row.number === number));
+  assert.deepEqual(await history.counts('prior-specs'), countsBefore);
+  assert.deepEqual((await history.overview('prior-specs')).counts, countsBefore);
+  for (const status of ['total', 'uncollected']) {
+    const result = await listByNumber(status);
+    assert.deepEqual(result.counts, { total: 0, collected: 0, uncollected: 0 });
+    assert.deepEqual(result.rows, []);
+  }
   for (const html of await renderDetails()) {
     assert.match(html, new RegExp(number));
     assert.ok(html.includes('나라장터에서 해당 사전규격 정보를 조회할 수 없습니다.'));
@@ -271,18 +282,25 @@ test('사전규격 상세 조회 불가는 공고를 정상 저장하고 재수�
     priorSpecResponse = () => Response.json({ ErrorCode: code, ErrorMsg: description }, { status });
     assert.equal((await collectDirectly()).status, 502);
   }
+  const failedNumber = 'R26BD00000002';
+  const failedId = await history.start({ section: 'prior-specs', number: failedNumber });
+  await history.finish(failedId, 'failed', '일반 조회 실패');
+  assert.equal((await listByNumber('uncollected', failedNumber)).rows[0].id, failedId);
   priorSpecResponse = () => { throw new DOMException('응답 제한 시간 초과', 'TimeoutError'); };
   assert.equal((await collectDirectly()).status, 502);
   priorSpecResponse = () => success({ dlBfSpecM: { bfSpecRegNo: number } });
   await recollectNotice();
   assert.equal((await repository.find(noticeKey)).priorSpecStatus, undefined);
   for (const html of await renderDetails()) assert.match(html, href);
+  assert.equal((await listByNumber('collected')).rows[0].number, number);
 
   const storedSpec = { ...await repository.findPriorSpec(number), attachments: { dlFileL: [] } };
   await repository.savePriorSpec(storedSpec);
   priorSpecResponse = () => Response.json({ ErrorCode: -1, ErrorMsg: message }, { status: 500 });
   assert.deepEqual(await (await collectDirectly()).json(), unavailable);
   assert.deepEqual(await repository.findPriorSpec(number), storedSpec);
+  await repository.save({ ...saved, revision: '001' });
+  assert.equal((await listByNumber('collected')).rows[0].number, number);
 
   priorSpecResponse = maintenancePage;
   assert.equal((await collectDirectly()).status, 503);

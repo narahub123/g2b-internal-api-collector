@@ -1,6 +1,7 @@
 import type { G2bDatabase } from "./database";
 import type { OpeningResultQuery } from "@/entities/opening-result/model/opening-result";
 import { orderPlanUnprocessableStatus } from "@/shared/config/g2b-order-plan";
+import { priorSpecUnavailableStatus } from "@/shared/config/g2b-prior-spec";
 import type { G2bCollectionCounts } from "./types";
 import { openNoticeList } from "./notice-list";
 import { openOrderPlanList } from "./order-plan-list";
@@ -192,16 +193,40 @@ export function openCollectionAttempts(db: G2bDatabase) {
   const summaries = new Map(Object.entries(savedQueries).map(([section, savedQuery]) => {
     // 두 화면에서 저장 자료와 시도 이력의 합집합을 동일한 기준으로 집계한다.
     const orderPlans = section === "order-plans";
-    // 미존재가 확인된 호출 번호는 이력에서만 추가되는 목록 대상에서 제외한다.
-    const unavailablePlans = `unavailable_order_plans AS (
+    const priorSpecs = section === "prior-specs";
+    // 조회 불가로 확인된 번호는 이력에서만 추가되는 목록 대상에서 제외한다.
+    const unavailablePlans = `unavailable_targets AS (
       SELECT DISTINCT json_extract(query_data, '$.orderPlanLookup') AS number
       FROM notices
       WHERE CASE WHEN json_valid(data)
         THEN json_extract(data, '$.orderPlanStatus') = '${orderPlanUnprocessableStatus}'
       END
     )`;
+    // 기존 공고에도 적용하도록 원본을 읽고 getNoticePriorSpecNumber와 같은 순서로 유효한 번호를 고른다.
+    // SQLite의 기본 trim은 공백 문자만 제거하므로 JavaScript trim이 처리하는 문자도 명시한다.
+    const trimChars = "char(9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279)";
+    const unavailablePriorSpecs = `unavailable_prior_spec_candidates AS (
+      SELECT
+        CASE WHEN json_type(data, '$.payload.dmItemMap.bfSpecRegNo') = 'text'
+          THEN trim(json_extract(data, '$.payload.dmItemMap.bfSpecRegNo'), ${trimChars}) END AS detail_number,
+        CASE WHEN json_type(data, '$.payload.dlBfSpecM.bfSpecRegNo') = 'text'
+          THEN trim(json_extract(data, '$.payload.dlBfSpecM.bfSpecRegNo'), ${trimChars}) END AS spec_number
+      FROM notices
+      WHERE CASE WHEN json_valid(data)
+        THEN json_extract(data, '$.priorSpecStatus') = '${priorSpecUnavailableStatus}'
+      END
+    ), unavailable_targets AS (
+      SELECT DISTINCT COALESCE(
+        CASE WHEN length(detail_number) BETWEEN 1 AND 30 AND detail_number NOT GLOB '*[^A-Z0-9-]*'
+          AND instr(detail_number, char(0)) = 0 THEN detail_number END,
+        CASE WHEN length(spec_number) BETWEEN 1 AND 30 AND spec_number NOT GLOB '*[^A-Z0-9-]*'
+          AND instr(spec_number, char(0)) = 0 THEN spec_number END
+      ) AS number
+      FROM unavailable_prior_spec_candidates
+    )`;
     const targets = `
-      WITH ${orderPlans ? `${orderPlanAttemptKeys}, ${unavailablePlans},` : ""} saved AS (${savedQuery}),
+      WITH ${orderPlans ? `${orderPlanAttemptKeys}, ${unavailablePlans},` : ""}
+      ${priorSpecs ? `${unavailablePriorSpecs},` : ""} saved AS (${savedQuery}),
       latest AS (
         SELECT MAX(id) AS id, number, revision, opening_revision
         FROM ${orderPlans ? "order_plan_attempt_keys" : "g2b_collection_attempts"}
@@ -211,7 +236,7 @@ export function openCollectionAttempts(db: G2bDatabase) {
       targets AS (
         SELECT number, revision, opening_revision FROM saved
         UNION SELECT number, revision, opening_revision FROM latest
-        ${orderPlans ? "WHERE NOT EXISTS (SELECT 1 FROM unavailable_order_plans WHERE number = latest.number)" : ""}
+        ${orderPlans || priorSpecs ? "WHERE NOT EXISTS (SELECT 1 FROM unavailable_targets WHERE number = latest.number)" : ""}
       )`;
     const counts = db.prepare(`${targets}
       SELECT COUNT(*) AS total, (SELECT COUNT(*) FROM saved) AS collected,
