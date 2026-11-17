@@ -83,7 +83,11 @@ export function NoticeAutomaticSettings() {
   const title = notice ? decodeHTMLStrict(notice.title) || "공고명 미확인" : "";
 
   return (
-    <NoticeCollectionPanel title="자동 수집 설정" open={open} onOpenChange={setOpen}>
+    <NoticeCollectionPanel
+      title="자동 수집 설정"
+      open={open}
+      onOpenChange={setOpen}
+    >
       <div className="space-y-3">
         {settings.isError && <p role="alert">{settings.error.message}</p>}
         {update.isError && <p role="alert">{update.error.message}</p>}
@@ -183,35 +187,59 @@ export function NoticeAutomaticSettings() {
                     : "자동 수집 시작"}
               </Button>
             </form>
+            {current.round && (
+              <p className="text-sm text-muted-foreground">
+                기준 회차{" "}
+                <span className="font-medium tabular-nums">{current.round.startMinute.replace("T", " ")} ~{" "}{current.round.endMinute.replace("T", " ")}</span>
+              </p>
+            )}
             <dl className="grid grid-cols-2 gap-3 rounded-md border p-3 sm:grid-cols-5">
               {counts.map(([key, label]) => (
                 <div key={key}>
                   <dt className="text-sm text-muted-foreground">{label}</dt>
-                  <dd className={`font-semibold tabular-nums${key === "failed" ? " text-destructive" : ""}`}>
+                  <dd
+                    className={`font-semibold tabular-nums${key === "failed" ? " text-destructive" : ""}`}
+                  >
                     {collectionCountFormat.format(current.counts[key])}건
                   </dd>
                 </div>
               ))}
             </dl>
             <div className="flex h-8 min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-sm">
-              <span className="shrink-0 text-muted-foreground">현재 수집 중</span>
+              <span className="shrink-0 text-muted-foreground">
+                현재 수집 중
+              </span>
               {notice ? (
-                <Link href={noticePath(notice)} prefetch={false}
-                  className="flex min-w-0 items-center gap-2 hover:underline">
-                  <span className="min-w-0 truncate" title={title}>{title}</span>
-                  <span className="shrink-0 tabular-nums">{notice.number} · {notice.revision}</span>
+                <Link
+                  href={noticePath(notice)}
+                  prefetch={false}
+                  className="flex min-w-0 items-center gap-2 hover:underline"
+                >
+                  <span className="min-w-0 truncate" title={title}>
+                    {title}
+                  </span>
+                  <span className="shrink-0 tabular-nums">
+                    {notice.number} · {notice.revision}
+                  </span>
                 </Link>
-              ) : <span className="truncate">수집 중인 공고 없음</span>}
+              ) : (
+                <span className="truncate">수집 중인 공고 없음</span>
+              )}
             </div>
-            {current.round && (
-              <p className="text-sm text-muted-foreground">
-                기준 회차 {current.round.startMinute.replace("T", " ")} ~ {current.round.endMinute.replace("T", " ")}
-              </p>
-            )}
             {(["all", "failed"] as const).map((kind) => (
-              <NoticeCollectionList key={kind} scope="automatic" kind={kind} panelOpen={open}
-                roundId={current.round?.walkId} failedCount={current.counts.failed}
-                pollInterval={current.status === "stopped" ? false : refreshInterval(current)} />
+              <NoticeCollectionList
+                key={kind}
+                scope="automatic"
+                kind={kind}
+                panelOpen={open}
+                roundId={current.round?.walkId}
+                failedCount={current.counts.failed}
+                pollInterval={
+                  current.status === "stopped"
+                    ? false
+                    : refreshInterval(current)
+                }
+              />
             ))}
           </>
         )}
