@@ -13,6 +13,7 @@ import type {
   NoticeQueueSummary,
 } from "@/server/g2b/repository/notice-queue-types";
 import { NoticeCollectionCounts } from "./NoticeCollectionCounts";
+import { cn } from "@/shared/lib/utils";
 
 const endpoint = "/api/g2b/notice-queue";
 const summaryKey = [endpoint, "summary"] as const;
@@ -200,7 +201,15 @@ export function NoticeQueuePage() {
           {table.data &&
             (jobs.length ? (
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
+                <table className="w-full min-w-225 table-fixed text-left text-sm">
+                  <colgroup>
+                    <col className="w-[10%]" />
+                    <col className="w-[22%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[32%]" />
+                  </colgroup>
                   <caption className="sr-only">공고 수집 작업</caption>
                   <thead>
                     <tr className="border-b">
@@ -213,18 +222,42 @@ export function NoticeQueuePage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {jobs.map((job) => (
-                      <tr className="border-b" key={job.id}>
-                        <td className="p-2">{job.id}</td>
-                        <td>
-                          {job.input.number}-{job.input.revision}
-                        </td>
-                        <td>{job.source === "automatic" ? "자동" : "수동"}</td>
-                        <td>{labels[job.status]}</td>
-                        <td>{job.failures}</td>
-                        <td>{job.error}</td>
-                      </tr>
-                    ))}
+                    {jobs.map((job) => {
+                      const href = noticePath(job.input);
+
+                      return (
+                        <tr
+                          key={job.id}
+                          className={cn(
+                            "group relative border-b",
+                            "hover:bg-muted/50",
+                            job.status === "failed" &&
+                              "bg-red-50 text-red-800 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50",
+                            job.status === "retry_wait" &&
+                              "bg-yellow-50 text-yellow-800 hover:bg-yellow-100 dark:bg-yellow-950/30 dark:text-yellow-300 dark:hover:bg-yellow-950/50",
+                          )}
+                        >
+                          <td className="p-2">
+                            <Link
+                              href={href}
+                              prefetch={false}
+                              className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+                              aria-label={`${job.input.number}-${job.input.revision} 공고 상세 보기`}
+                            />
+                            {job.id}
+                          </td>
+                          <td>
+                            {job.input.number}-{job.input.revision}
+                          </td>
+                          <td>
+                            {job.source === "automatic" ? "자동" : "수동"}
+                          </td>
+                          <td>{labels[job.status]}</td>
+                          <td>{job.failures}</td>
+                          <td>{job.error}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
