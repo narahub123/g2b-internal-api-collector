@@ -205,6 +205,29 @@ test('코드 99는 요청 번호와 일치하는 사전규격 상세만 저장�
   assert.equal(await repository.findOrderPlan(number), null);
 });
 
+test('사전규격 미수집 집계는 조회 불가 공고만 인덱스로 읽는다', async () => {
+  const database = await testDatabase();
+  const queries = [];
+  const prepare = database.prepare.bind(database);
+  database.prepare = (sql) => {
+    if (sql.includes('unavailable_prior_spec_candidates') && sql.includes('COUNT(*) AS total')) queries.push(sql);
+    return prepare(sql);
+  };
+  try {
+    const attempts = openCollectionAttempts(database);
+    await attempts.counts('prior-specs');
+    assert.equal(queries.length, 1);
+    const { rows } = await database.client.execute({
+      sql: 'EXPLAIN QUERY PLAN ' + queries[0], args: ['prior-specs'],
+    });
+    const plan = rows.map(({ detail }) => detail).join('\n');
+    assert.match(plan, /SCAN notices USING INDEX g2b_notice_prior_spec_unavailable/);
+    assert.doesNotMatch(plan, /SCAN notices\s*(?:\n|$)/);
+  } finally {
+    database.client.close();
+  }
+});
+
 test('사전규격 상세 조회 불가는 공고를 정상 저장하고 재수집 성공 시 링크를 복구한다', async (t) => {
   const noticeKey = { number: 'R26BK01828765', revision: '000' };
   const number = 'R26BD00000001';

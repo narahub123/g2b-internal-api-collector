@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client";
+import { priorSpecUnavailableStatus } from "@/shared/config/g2b-prior-spec";
 
 const initialSchema = `
     CREATE TABLE IF NOT EXISTS notices (
@@ -353,6 +354,17 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       await transaction.executeMultiple(`
         CREATE INDEX g2b_notice_queue_failed ON g2b_notice_jobs (id) WHERE status = 'failed';
         INSERT INTO g2b_schema_migrations (version) VALUES (9);
+      `);
+    }
+    const priorSpecUnavailableUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 10");
+    if (priorSpecUnavailableUpgrade.rows.length === 0) {
+      // 사전규격 집계는 조회 불가 상태인 공고만 읽는다. 조건은 집계 쿼리와 일치해야 한다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_prior_spec_unavailable ON notices (number)
+          WHERE CASE WHEN json_valid(data)
+            THEN json_extract(data, '$.priorSpecStatus') = '${priorSpecUnavailableStatus}'
+          END;
+        INSERT INTO g2b_schema_migrations (version) VALUES (10);
       `);
     }
     await transaction.commit();

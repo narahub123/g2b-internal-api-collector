@@ -236,7 +236,8 @@ export function openCollectionAttempts(db: G2bDatabase) {
       targets AS (
         SELECT number, revision, opening_revision FROM saved
         UNION SELECT number, revision, opening_revision FROM latest
-        ${orderPlans || priorSpecs ? "WHERE NOT EXISTS (SELECT 1 FROM unavailable_targets WHERE number = latest.number)" : ""}
+        ${orderPlans ? "WHERE NOT EXISTS (SELECT 1 FROM unavailable_targets WHERE number = latest.number)" : ""}
+        ${priorSpecs ? "WHERE number NOT IN (SELECT number FROM unavailable_targets WHERE number IS NOT NULL)" : ""}
       )`;
     const counts = db.prepare(`${targets}
       SELECT COUNT(*) AS total, (SELECT COUNT(*) FROM saved) AS collected,
