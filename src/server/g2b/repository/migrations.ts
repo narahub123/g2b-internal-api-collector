@@ -172,6 +172,14 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (4);
       `);
     }
+    const overviewUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 5");
+    if (overviewUpgrade.rows.length === 0) {
+      // 실행 중 작업을 우선하고 최신순으로 50건을 읽는 큐 조회의 정렬식을 인덱스에 맞춘다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_jobs_overview ON g2b_notice_jobs ((status = 'running') DESC, id DESC);
+        INSERT INTO g2b_schema_migrations (version) VALUES (5);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();
