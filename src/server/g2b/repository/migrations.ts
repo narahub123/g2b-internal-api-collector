@@ -347,6 +347,14 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (8);
       `);
     }
+    const queueFailuresUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 9");
+    if (queueFailuresUpgrade.rows.length === 0) {
+      // 자동 회차와 무관하게 최종 실패한 큐 작업을 ID 순으로 탐색한다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_queue_failed ON g2b_notice_jobs (id) WHERE status = 'failed';
+        INSERT INTO g2b_schema_migrations (version) VALUES (9);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

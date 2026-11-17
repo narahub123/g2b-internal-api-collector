@@ -1069,7 +1069,8 @@ test('큐 요약은 전체 작업 집계를 유지하고 수집 중인 행은 �
       DROP TRIGGER g2b_notice_queue_count_delete;
       DROP TRIGGER g2b_notice_queue_count_update;
       DROP TABLE g2b_notice_queue_counts;
-      DELETE FROM g2b_schema_migrations WHERE version = 8;
+      DROP INDEX g2b_notice_queue_failed;
+      DELETE FROM g2b_schema_migrations WHERE version IN (8, 9);
     `);
     await migrateG2bDatabase(db.client);
     await migrateG2bDatabase(db.client);
@@ -1086,24 +1087,14 @@ test('큐 요약은 전체 작업 집계를 유지하고 수집 중인 행은 �
     const summary = await queue.getQueueSummary();
     assert.deepEqual(summary.counts, { total: 42, pending: 39, running: 1, completed: 1, failed: 1 });
     assert.equal(summary.currentJob.id, 1);
+    assert.equal(summary.failedTotalPages, 1);
+    assert.deepEqual((await queue.getQueuePage(1, 'failed')).jobs.map(({ id }) => id), [3]);
     const first = await queue.getQueuePage(1);
     const middle = await queue.getQueuePage(2);
     const last = await queue.getQueuePage(99);
     assert.deepEqual([first.page, first.totalPages, first.jobs.length, first.jobs[0].id], [1, 3, 20, 42]);
     assert.deepEqual([last.page, last.totalPages, last.jobs.map(({ id }) => id)], [3, 3, [2]]);
     assert.deepEqual([middle.jobs[0].id, middle.jobs.at(-1).id], [22, 3]);
-    db.prepare = prepare;
-    for (const { sql, args } of reads) {
-      const { rows } = await db.client.execute({ sql: 'EXPLAIN QUERY PLAN ' + sql, args });
-      const plan = rows.map(({ detail }) => detail).join('\n');
-      if (sql.includes('WITH selected')) {
-        assert.match(plan, /SEARCH g2b_notice_jobs USING INDEX g2b_notice_jobs_overview/);
-        assert.match(plan, /SEARCH j USING INTEGER PRIMARY KEY/);
-        assert.ok((plan.match(/USE TEMP B-TREE/g) ?? []).length <= 1, plan);
-      } else {
-        assert.doesNotMatch(plan, /SCAN |USE TEMP B-TREE/);
-      }
-    }
     await assert.rejects(db.transaction(async () => {
       await queue.finish(1, { kind: 'success', related: [], result: {} }, 0);
       throw Error('rollback');
@@ -1116,5 +1107,24 @@ test('큐 요약은 전체 작업 집계를 유지하고 수집 중인 행은 �
     assert.deepEqual((await queue.getQueueSummary()).counts,
       { total: 41, pending: 39, running: 0, completed: 2, failed: 0 });
     assert.deepEqual((await queue.getQueuePage(3)).jobs.map(({ id }) => id), [1]);
+    assert.deepEqual((await queue.getQueuePage(2, 'failed')).jobs, []);
+    await db.client.execute("UPDATE g2b_notice_jobs SET status = 'failed' WHERE id BETWEEN 10 AND 33");
+    assert.equal((await queue.getQueueSummary()).failedTotalPages, 2);
+    const failedFirst = await queue.getQueuePage(1, 'failed');
+    const failedLast = await queue.getQueuePage(99, 'failed');
+    assert.deepEqual(failedFirst.jobs.map(({ id }) => id), Array.from({ length: 20 }, (_, i) => 33 - i));
+    assert.deepEqual([failedLast.page, failedLast.totalPages, failedLast.jobs.map(({ id }) => id)], [2, 2, [13, 12, 11, 10]]);
+    db.prepare = prepare;
+    const pageReads = reads.filter(({ sql }) => sql.includes('WITH selected'));
+    assert.ok(pageReads.some(({ sql }) => sql.includes("status = 'failed' ORDER BY id ASC")));
+    assert.ok(pageReads.some(({ sql }) => sql.includes("status = 'failed' ORDER BY id DESC")));
+    for (const { sql, args } of pageReads) {
+      const { rows } = await db.client.execute({ sql: 'EXPLAIN QUERY PLAN ' + sql, args });
+      const plan = rows.map(({ detail }) => detail).join('\n');
+      if (sql.includes('g2b_notice_queue_failed')) assert.match(plan, /USING COVERING INDEX g2b_notice_queue_failed/);
+      else assert.match(plan, /SEARCH g2b_notice_jobs USING INDEX g2b_notice_jobs_overview/);
+      assert.match(plan, /SEARCH j USING INTEGER PRIMARY KEY/);
+      assert.ok((plan.match(/USE TEMP B-TREE/g) ?? []).length <= 1, plan);
+    }
   } finally { db.client.close(); }
 });

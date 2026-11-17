@@ -7,12 +7,16 @@ export async function GET(request?: Request) {
   const query = request && new URL(request.url).searchParams;
   const rawPage = query?.get("page");
   const page = Number(rawPage);
+  const kind = query?.get("kind");
+  if (rawPage != null && kind != null && kind !== "all" && kind !== "failed") {
+    return Response.json({ error: "공고 목록 종류를 확인해 주세요." }, { status: 400 });
+  }
   if (rawPage != null && (!/^[1-9]\d*$/.test(rawPage) || !Number.isSafeInteger(page))) {
     return Response.json({ error: "페이지 번호를 확인해 주세요." }, { status: 400 });
   }
   try {
     const queue = getG2bRepository().noticeQueue;
-    const result = rawPage != null ? await queue.getQueuePage(page)
+    const result = rawPage != null ? await queue.getQueuePage(page, kind === "failed" ? "failed" : "all")
       : query?.get("view") === "summary" ? await queue.getQueueSummary() : await queue.overview();
     return Response.json(result);
   } catch (error) {

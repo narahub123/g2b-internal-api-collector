@@ -482,19 +482,24 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
         `).get() as JobRow | undefined : undefined;
         return { manual: Boolean(manual), maintenance, currentJob: current ? job(current) : null,
           totalPages: noticePageWindow(1, pending + completed + failed).totalPages,
+          failedTotalPages: noticePageWindow(1, failed).totalPages,
           counts: { pending, running, completed, failed, total: pending + running + completed + failed } };
       }, false);
     },
-    getQueuePage(requested) {
+    getQueuePage(requested, kind = "all") {
       return transaction(async () => {
-        const count = await db.prepare("SELECT pending + completed + failed AS count FROM g2b_notice_queue_counts WHERE id = 1").get();
+        const failedOnly = kind === "failed";
+        const count = await db.prepare(`SELECT ${failedOnly ? "failed" : "pending + completed + failed"} AS count
+          FROM g2b_notice_queue_counts WHERE id = 1`).get();
         const { page, totalPages, limit, offset, reverse } = noticePageWindow(requested, Number(count?.count ?? 0));
         if (!limit) return { page, totalPages, jobs: [] };
         // 인덱스로 페이지 경계까지 이동한 뒤 해당 작업만 읽어 깊은 페이지의 본문 조회를 제한한다.
+        const range = failedOnly
+          ? "INDEXED BY g2b_notice_queue_failed WHERE status = 'failed'"
+          : "INDEXED BY g2b_notice_jobs_overview WHERE (status = 'running') = 0";
         const rows = await db.prepare(`
           WITH selected AS MATERIALIZED (
-            SELECT id FROM g2b_notice_jobs INDEXED BY g2b_notice_jobs_overview
-            WHERE (status = 'running') = 0 ORDER BY id ${reverse ? "ASC" : "DESC"} LIMIT ? OFFSET ?
+            SELECT id FROM g2b_notice_jobs ${range} ORDER BY id ${reverse ? "ASC" : "DESC"} LIMIT ? OFFSET ?
           )
           SELECT j.* FROM selected CROSS JOIN g2b_notice_jobs j ON j.id = selected.id ORDER BY j.id DESC
         `).all(limit, offset) as JobRow[];

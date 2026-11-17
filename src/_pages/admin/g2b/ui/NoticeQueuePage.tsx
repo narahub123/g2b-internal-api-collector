@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { Tabs } from "radix-ui";
 import { useEffect, useRef } from "react";
 import { noticePath } from "@/_pages/admin/config/routes";
 import { Button } from "@/shared/ui/button";
@@ -10,6 +11,7 @@ import { ListView } from "@/shared/ui/list-controls/ListView";
 import type {
   NoticeJob,
   NoticeQueuePageData,
+  NoticeQueueListKind,
   NoticeQueueSummary,
 } from "@/server/g2b/repository/notice-queue-types";
 import { NoticeCollectionCounts } from "./NoticeCollectionCounts";
@@ -17,6 +19,7 @@ import { cn } from "@/shared/lib/utils";
 
 const endpoint = "/api/g2b/notice-queue";
 const summaryKey = [endpoint, "summary"] as const;
+const tabClass = "cursor-pointer rounded-md px-3 py-2 text-sm font-medium text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring data-[state=active]:bg-muted data-[state=active]:text-foreground";
 const labels = {
   pending: "대기",
   retry_wait: "재시도 대기",
@@ -63,9 +66,10 @@ function CurrentQueueJob({ job }: { job: NoticeJob | null }) {
 export function NoticeQueuePage() {
   const path = usePathname();
   const params = useSearchParams();
+  const requestedFailed = params.get("tab") === "failed";
   const rawPage = params.get("page");
   const parsed = Number(rawPage);
-  const page =
+  const requestedPage =
     /^[1-9]\d*$/.test(rawPage ?? "") && Number.isSafeInteger(parsed)
       ? parsed
       : 1;
@@ -78,9 +82,16 @@ export function NoticeQueuePage() {
     refetchOnWindowFocus: "always",
   });
   const queue = summary.data;
+  const hasFailures = (queue?.counts.failed ?? 0) > 0;
+  const kind: NoticeQueueListKind = requestedFailed && hasFailures ? "failed" : "all";
+  const fallbackToAll = requestedFailed && queue !== undefined && !hasFailures;
+  const page = fallbackToAll ? 1 : requestedPage;
+  // 실패 탭 링크로 들어오면 요약으로 실패 여부를 확인한 뒤 선택된 목록만 요청한다.
+  const enabled = !requestedFailed || queue !== undefined;
   const table = useQuery<NoticeQueuePageData>({
-    queryKey: [endpoint, "page", page],
-    queryFn: ({ signal }) => readQueue(`page=${page}`, signal),
+    queryKey: [endpoint, "page", kind, page],
+    enabled,
+    queryFn: ({ signal }) => readQueue(`page=${page}&kind=${kind}`, signal),
     refetchInterval: page === 1 ? (queue?.currentJob ? 5_000 : 30_000) : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: page === 1 ? "always" : false,
@@ -89,7 +100,7 @@ export function NoticeQueuePage() {
   const { refetch } = table;
   const totalPages =
     queue && summary.dataUpdatedAt >= table.dataUpdatedAt
-      ? queue.totalPages
+      ? kind === "failed" ? queue.failedTotalPages : queue.totalPages
       : table.data?.totalPages;
   const currentId = queue?.currentJob?.id ?? null;
   const lastCurrentId = useRef<number | null>(null);
@@ -97,7 +108,7 @@ export function NoticeQueuePage() {
   useEffect(() => {
     // 현재 작업이 끝나면 첫 페이지에 즉시 반영하고 이후 페이지는 사용자가 조회할 때 갱신한다.
     if (
-      page === 1 &&
+      enabled && page === 1 &&
       lastCurrentId.current !== null &&
       currentId !== lastCurrentId.current &&
       !document.hidden
@@ -105,21 +116,19 @@ export function NoticeQueuePage() {
       void refetch({ cancelRefetch: false });
     }
     lastCurrentId.current = currentId;
-  }, [currentId, page, refetch]);
+  }, [currentId, enabled, page, refetch]);
 
   useEffect(() => {
-    if (!table.data) return;
-    const canonicalPage = Math.min(
-      table.data.page,
-      totalPages ?? table.data.totalPages,
-    );
+    if (!fallbackToAll && !table.data) return;
+    const canonicalPage = fallbackToAll ? 1 : Math.min(table.data.page, totalPages ?? table.data.totalPages);
     const canonical = canonicalPage > 1 ? String(canonicalPage) : null;
-    if (rawPage === canonical) return;
+    if (!fallbackToAll && rawPage === canonical) return;
     const url = new URL(window.location.href);
+    if (fallbackToAll) url.searchParams.delete("tab");
     if (canonical) url.searchParams.set("page", canonical);
     else url.searchParams.delete("page");
     window.history.replaceState(null, "", url);
-  }, [rawPage, table.data, totalPages]);
+  }, [fallbackToAll, rawPage, table.data, totalPages]);
 
   const updateManual = useMutation({
     mutationFn: async (manual: boolean) => {
@@ -139,6 +148,15 @@ export function NoticeQueuePage() {
     if (destination === 1) query.delete("page");
     else query.set("page", String(destination));
     return query.size ? `${path}?${query}` : path;
+  }
+
+  function selectTab(value: string) {
+    const query = new URLSearchParams(params);
+    if (value === "failed") query.set("tab", "failed");
+    else query.delete("tab");
+    query.delete("page");
+    const url = query.size ? `${path}?${query}` : path;
+    if (url !== window.location.pathname + window.location.search) window.history.pushState(null, "", url);
   }
 
   // 요약이 테이블보다 먼저 최신 작업을 확인한 경우에도 현재 작업이 두 곳에 동시에 표시되지 않게 한다.
@@ -170,102 +188,107 @@ export function NoticeQueuePage() {
               {queue.manual ? "수동 중단 해제" : "수동 중단"}
             </Button>
           </div>
-          <NoticeCollectionCounts counts={queue.counts} />
+          <NoticeCollectionCounts counts={queue.counts} onFailedClick={() => selectTab("failed")} />
           <CurrentQueueJob job={queue.currentJob} />
         </>
       )}
-      <ListView
-        pagination={
-          table.data && {
-            page: table.data.page,
-            totalPages: totalPages ?? table.data.totalPages,
-            hrefForPage,
-            shallow: true,
-          }
-        }
-      >
-        <div className="space-y-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={table.isFetching}
-            onClick={() => void refetch()}
-          >
+      <Tabs.Root value={kind} onValueChange={selectTab} activationMode="manual">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <Tabs.List aria-label="공고 수집 큐 목록" className="flex flex-wrap items-center gap-1">
+            <Tabs.Trigger value="all" className={tabClass}>전체 목록</Tabs.Trigger>
+            {hasFailures && <Tabs.Trigger value="failed" className={tabClass}>실패 목록</Tabs.Trigger>}
+          </Tabs.List>
+          <Button type="button" variant="outline" size="sm" className="ml-auto"
+            disabled={!enabled || table.isFetching} onClick={() => void refetch()}>
             목록 새로고침
           </Button>
-          {table.isError && <p role="alert">{table.error.message}</p>}
-          {table.isPending && (
-            <p role="status">공고 목록을 불러오는 중입니다.</p>
-          )}
-          {table.data &&
-            (jobs.length ? (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-225 table-fixed text-left text-sm">
-                  <colgroup>
-                    <col className="w-[10%]" />
-                    <col className="w-[22%]" />
-                    <col className="w-[12%]" />
-                    <col className="w-[12%]" />
-                    <col className="w-[12%]" />
-                    <col className="w-[32%]" />
-                  </colgroup>
-                  <caption className="sr-only">공고 수집 작업</caption>
-                  <thead>
-                    <tr className="border-b">
-                      <th className="p-2">작업 ID</th>
-                      <th>공고번호·차수</th>
-                      <th>수집 방식</th>
-                      <th>상태</th>
-                      <th>실패 횟수</th>
-                      <th>오류</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {jobs.map((job) => {
-                      const href = noticePath(job.input);
-
-                      return (
-                        <tr
-                          key={job.id}
-                          className={cn(
-                            "group relative border-b",
-                            "hover:bg-muted/50",
-                            job.status === "failed" &&
-                              "bg-red-50 text-red-800 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50",
-                            job.status === "retry_wait" &&
-                              "bg-yellow-50 text-yellow-800 hover:bg-yellow-100 dark:bg-yellow-950/30 dark:text-yellow-300 dark:hover:bg-yellow-950/50",
-                          )}
-                        >
-                          <td className="p-2">
-                            <Link
-                              href={href}
-                              prefetch={false}
-                              className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
-                              aria-label={`${job.input.number}-${job.input.revision} 공고 상세 보기`}
-                            />
-                            {job.id}
-                          </td>
-                          <td>
-                            {job.input.number}-{job.input.revision}
-                          </td>
-                          <td>
-                            {job.source === "automatic" ? "자동" : "수동"}
-                          </td>
-                          <td>{labels[job.status]}</td>
-                          <td>{job.failures}</td>
-                          <td>{job.error}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="py-3">표시할 작업이 없습니다.</p>
-            ))}
         </div>
-      </ListView>
+        <Tabs.Content value={kind}>
+          <ListView
+            pagination={
+              table.data && {
+                page: table.data.page,
+                totalPages: totalPages ?? table.data.totalPages,
+                hrefForPage,
+                shallow: true,
+              }
+            }
+          >
+            <div className="space-y-2">
+              {table.isError && <p role="alert">{table.error.message}</p>}
+              {table.isPending && (
+                <p role="status">공고 목록을 불러오는 중입니다.</p>
+              )}
+              {table.data &&
+                (jobs.length ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-225 table-fixed text-left text-sm">
+                      <colgroup>
+                        <col className="w-[10%]" />
+                        <col className="w-[22%]" />
+                        <col className="w-[12%]" />
+                        <col className="w-[12%]" />
+                        <col className="w-[12%]" />
+                        <col className="w-[32%]" />
+                      </colgroup>
+                      <caption className="sr-only">공고 수집 작업</caption>
+                      <thead>
+                        <tr className="border-b">
+                          <th className="p-2">작업 ID</th>
+                          <th>공고번호·차수</th>
+                          <th>수집 방식</th>
+                          <th>상태</th>
+                          <th>실패 횟수</th>
+                          <th>오류</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {jobs.map((job) => {
+                          const href = noticePath(job.input);
+
+                          return (
+                            <tr
+                              key={job.id}
+                              className={cn(
+                                "group relative border-b",
+                                "hover:bg-muted/50",
+                                job.status === "failed" &&
+                                  "bg-red-50 text-red-800 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50",
+                                job.status === "retry_wait" &&
+                                  "bg-yellow-50 text-yellow-800 hover:bg-yellow-100 dark:bg-yellow-950/30 dark:text-yellow-300 dark:hover:bg-yellow-950/50",
+                              )}
+                            >
+                              <td className="p-2">
+                                <Link
+                                  href={href}
+                                  prefetch={false}
+                                  className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                                  aria-label={`${job.input.number}-${job.input.revision} 공고 상세 보기`}
+                                />
+                                {job.id}
+                              </td>
+                              <td>
+                                {job.input.number}-{job.input.revision}
+                              </td>
+                              <td>
+                                {job.source === "automatic" ? "자동" : "수동"}
+                              </td>
+                              <td>{labels[job.status]}</td>
+                              <td>{job.failures}</td>
+                              <td>{job.error}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="py-3">{kind === "failed" ? "최종 실패한 공고가 없습니다." : "표시할 작업이 없습니다."}</p>
+                ))}
+            </div>
+          </ListView>
+        </Tabs.Content>
+      </Tabs.Root>
     </section>
   );
 }

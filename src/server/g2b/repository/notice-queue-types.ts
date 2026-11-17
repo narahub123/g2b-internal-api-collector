@@ -64,7 +64,9 @@ export type NoticeQueueSummary = {
   counts: NoticeCollectionCounts;
   currentJob: NoticeJob | null;
   totalPages: number;
+  failedTotalPages: number;
 };
+export type NoticeQueueListKind = "all" | "failed";
 export type NoticeQueuePageData = { page: number; totalPages: number; jobs: NoticeJob[] };
 
 export type NoticeJob = {
@@ -133,8 +135,8 @@ export interface NoticeQueue {
   overview(): Promise<{ manual: boolean; maintenance: number; active: number | null; jobs: NoticeJob[] }>;
   /** 저장된 큐 집계와 현재 상세 수집 작업을 같은 시점에서 반환한다. */
   getQueueSummary(): Promise<NoticeQueueSummary>;
-  /** 수집 중인 작업을 제외한 모든 작업을 최신 ID 순으로 최대 20건 반환한다. */
-  getQueuePage(page: number): Promise<NoticeQueuePageData>;
+  /** 최신 ID 순으로 최대 20건을 반환한다. 기본 목록은 진행 중인 작업을 제외하고 실패 목록은 최종 실패만 포함한다. */
+  getQueuePage(page: number, kind?: NoticeQueueListKind): Promise<NoticeQueuePageData>;
   /** 현재 점검 세대를 읽어 확인 도중 들어온 새 점검과 구분한다. */
   maintenanceVersion(): Promise<number>;
   /** 수동 중단 요청 상태를 저장한다. */
