@@ -18,7 +18,7 @@ export function NoticeCollectionPanel({ title, open, onOpenChange, children }: {
         <AccordionTrigger heading="h2" className="cursor-pointer text-lg font-semibold hover:no-underline">
           {title}
         </AccordionTrigger>
-        <AccordionContent forceMount className="data-[state=closed]:hidden">
+        <AccordionContent forceMount hidden={!open}>
           {children}
         </AccordionContent>
       </AccordionItem>
