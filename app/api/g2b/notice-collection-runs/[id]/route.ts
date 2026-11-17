@@ -22,9 +22,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (kind !== null && kind !== "all" && kind !== "failed") {
     return Response.json({ error: "공고 목록 종류를 확인해 주세요." }, { status: 400 });
   }
+  const rawPage = query.get("page");
+  const page = Number(rawPage);
+  if (rawPage !== null && (!Number.isSafeInteger(page) || page < 1)) {
+    return Response.json({ error: "페이지 번호를 확인해 주세요." }, { status: 400 });
+  }
   try {
     const queue = getG2bRepository().noticeQueue;
-    const run = kind === "all" || kind === "failed" ? await queue.listRunNotices(id, kind, cursor)
+    const run = kind === "all" || kind === "failed" ? await (rawPage === null
+      ? queue.listRunNotices(id, kind, cursor) : queue.numberRunNotices(id, kind, page))
       : query.get("view") === "summary" ? await queue.getRunSummary(id) : await queue.getRun(id);
     return run ? Response.json(run) : new Response(null, { status: 404 });
   } catch (error) {

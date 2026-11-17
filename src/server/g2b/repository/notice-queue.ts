@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { noticeRetryDelayMs } from "./notice-queue-types";
 import type { G2bDatabase } from "./database";
 import { openNoticeAutomatic } from "./notice-automatic";
+import { noticePageWindow } from "./notice-page-window";
 import type { NoticeJob, NoticeQueue, NoticeQueueInput, NoticeRun, NoticeRunNoticePage, NoticeRunPeriod, NoticeSource } from "./notice-queue-types";
 
 type JobRow = Omit<NoticeJob, "input" | "result" | "force"> & { input: string; result: string | null; force: number };
@@ -297,6 +298,31 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
         const next: NoticeRunNoticePage["next"] = last && (boundary?.direction === "before" || more)
           ? { direction: "after", visitId: last.id } : null;
         return { items, previous, next, resetCursor: Boolean(cursor && !previous) };
+      }, false);
+    },
+    numberRunNotices(id, kind, requested) {
+      return transaction(async () => {
+        const run = await db.prepare(`
+          SELECT r.walkId, c.total, c.failed FROM g2b_notice_runs r
+          LEFT JOIN g2b_notice_period_counts c ON c.walk_id = r.walkId
+          WHERE r.id = ? AND r.source = 'manual'
+        `).get(id);
+        if (!run) return;
+        const { page, totalPages, limit, offset, reverse } = noticePageWindow(requested, Number(run[kind === "failed" ? "failed" : "total"] ?? 0));
+        if (!limit) return { page, totalPages, items: [] };
+        const index = kind === "failed" ? "g2b_notice_period_failed" : "g2b_notice_period_visits";
+        const filter = kind === "failed" ? "AND periodStatus = 'failed'" : "";
+        // 경계까지는 좁은 방문 인덱스로 이동하고 선택된 방문만 공고 본문과 연결한다.
+        const rows = await db.prepare(`
+          WITH selected AS MATERIALIZED (
+            SELECT rowid FROM g2b_notice_walk_visits INDEXED BY ${index}
+            WHERE walk_id = ? ${filter} ORDER BY rowid ${reverse ? "DESC" : "ASC"} LIMIT ? OFFSET ?
+          )
+          SELECT v.rowid AS visitId, j.* FROM selected
+          CROSS JOIN g2b_notice_walk_visits v ON v.rowid = selected.rowid
+          CROSS JOIN g2b_notice_jobs j ON j.id = v.job_id ORDER BY v.rowid
+        `).all(run.walkId, limit, offset) as (JobRow & { visitId: number })[];
+        return { page, totalPages, items: rows.map((row) => ({ ...runNotice(row), id: row.visitId })) };
       }, false);
     },
     async findRunNotice(number, revision) {

@@ -4,6 +4,8 @@ import {
   type NoticeAutomaticCommand, type NoticeAutomaticInterval, type NoticeAutomaticSettings,
 } from "@/features/collect-g2b/model/notice-automatic";
 import type { G2bDatabase } from "./database";
+import type { NumberedNoticePage } from "./notice-queue-types";
+import { noticePageWindow } from "./notice-page-window";
 
 type Schedule = {
   enabled: number;
@@ -91,6 +93,40 @@ export function openNoticeAutomatic(db: G2bDatabase) {
           enabled: Boolean(enabled), interval, startMinute, nextAt, status, counts, round,
           currentNotice: currentNotice ?? null,
         };
+      }, false);
+    },
+
+    /** 자동 회차의 저장 건수로 페이지를 보정하고, 선택된 작업의 공고 정보만 읽는다. */
+    numberNotices(kind: NoticeAutomaticListKind, requested: number, walkId?: number): Promise<NumberedNoticePage & { round: NoticeAutomaticRound | null }> {
+      return db.transaction(async () => {
+        const round = await latestRound();
+        const count = await db.prepare(kind === "failed"
+          ? "SELECT count FROM g2b_notice_automatic_counts WHERE bucket = ? AND status = 'failed'"
+          : "SELECT SUM(count) AS count FROM g2b_notice_automatic_counts WHERE bucket IN (0, ?)").get(round?.walkId ?? 0);
+        const { page, totalPages, limit, offset, reverse } = noticePageWindow(
+          walkId !== undefined && walkId !== round?.walkId ? 1 : requested, Number(count?.count ?? 0),
+        );
+        if (!limit) return { round, page, totalPages, items: [] };
+        const terminal = `SELECT id FROM g2b_notice_jobs ${kind === "failed" ? failedJobs : terminalJobs}`;
+        const active = `SELECT id FROM g2b_notice_jobs ${activeJobs}`;
+        // 두 인덱스를 ID 순으로 합치고 페이지에 포함된 작업만 조회한다.
+        const range = kind === "failed" ? terminal : round ? `${active} UNION ALL ${terminal}` : active;
+        const rows = await db.prepare(`
+          WITH selected AS MATERIALIZED (
+            ${range} ORDER BY id ${reverse ? "ASC" : "DESC"} LIMIT ? OFFSET ?
+          )
+          SELECT j.id, j.number, j.revision, j.status, j.error,
+            COALESCE(NULLIF(json_extract(j.input, '$.title'), ''), json_extract(j.result, '$.title'), '') AS title,
+            COALESCE(json_extract(j.input, '$.methodCode'), '') AS methodCode
+          FROM selected CROSS JOIN g2b_notice_jobs j ON j.id = selected.id ORDER BY j.id DESC
+        `).all(...(round ? [round.walkId] : []), limit, offset);
+        const items = rows.map((row): NumberedNoticePage["items"][number] => ({
+          id: Number(row.id), number: String(row.number), revision: String(row.revision),
+          title: String(row.title), methodCode: String(row.methodCode),
+          status: row.status as NumberedNoticePage["items"][number]["status"],
+          error: row.error == null ? null : String(row.error),
+        }));
+        return { round, page, totalPages, items };
       }, false);
     },
 

@@ -20,8 +20,17 @@ export async function GET(request: Request) {
   if (kind !== "all" && kind !== "failed") {
     return Response.json({ error: "공고 목록 종류를 확인해 주세요." }, { status: 400 });
   }
+  const rawPage = params.get("page");
+  const page = Number(rawPage);
+  const rawWalk = params.get("walkId");
+  const walkId = rawWalk === null ? undefined : Number(rawWalk);
+  if (rawPage !== null && (!Number.isSafeInteger(page) || page < 1 ||
+    (walkId !== undefined && (!Number.isSafeInteger(walkId) || walkId < 1)))) {
+    return Response.json({ error: "페이지 번호와 기준 회차를 확인해 주세요." }, { status: 400 });
+  }
   try {
-    return Response.json(await getG2bRepository().noticeQueue.automatic.list(kind, cursor));
+    const automatic = getG2bRepository().noticeQueue.automatic;
+    return Response.json(await (rawPage === null ? automatic.list(kind, cursor) : automatic.numberNotices(kind, page, walkId)));
   } catch (error) {
     logNoticeQueueError("automatic-notices", error);
     return Response.json({ error: "자동 수집 공고 목록을 조회하지 못했습니다." }, { status: 503 });

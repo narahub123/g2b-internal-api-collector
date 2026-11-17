@@ -192,6 +192,8 @@ test('기간 수집 API 접수 후 워커가 초기 공고와 연관 공고를 �
       assert.deepEqual(await (await readRun('?view=summary')).json(), expectedSummary);
       assert.deepEqual(await (await GET(new Request('http://localhost/?view=summary'))).json(), expectedSummary);
       assert.equal((await (await readRun('?kind=failed')).json()).items[0].error, '상세 실패');
+      const numbered = await (await readRun('?kind=failed&page=2')).json();
+      assert.deepEqual([numbered.page, numbered.totalPages, numbered.items.length], [1, 1, 1]);
       assert.equal((await readRun('?kind=failed&cursor=invalid')).status, 400);
     })().catch((error) => { console.error(error); process.exitCode = 1; });
   `;
@@ -718,6 +720,8 @@ test('자동 수집 설정 API에서 시작과 중단을 접수하고 워커가 
       const page = await (await getList('kind=all')).json();
       assert.equal(page.round.walkId, state.round.walkId);
       assert.equal(page.items[0].number, 'R26BK1');
+      const numbered = await (await getList('kind=all&page=1')).json();
+      assert.deepEqual([numbered.page, numbered.totalPages, numbered.items], [1, 1, page.items]);
       assert.equal(await getG2bRepository().noticeQueue.getRun(), undefined);
       assert.equal((await patch({ action: 'stop' })).status, 200);
       assert.equal((await (await GET()).json()).nextAt, null);
@@ -944,6 +948,12 @@ test('자동 목록은 대량 이력에서도 인덱스 범위로 읽고 집계�
     assert.equal(finalFailures.items.length, 4);
     assert.equal(finalFailures.next, null);
     assert.deepEqual((await queue.automatic.list('all', { ...first.next, walkId: 99 })).items, first.items);
+    const numbered = await queue.automatic.numberNotices('all', 2);
+    assert.deepEqual([numbered.page, numbered.totalPages, numbered.items], [2, 3, second.items]);
+    const last = await queue.automatic.numberNotices('all', 99);
+    assert.deepEqual([last.page, last.totalPages, last.items.length], [3, 3, 10]);
+    assert.equal((await queue.automatic.numberNotices('all', 2, 99)).page, 1);
+    assert.equal((await queue.automatic.numberNotices('failed', 2)).items.length, 4);
 
     // 통계상 대기 공고가 대다수지만 가장 최근에는 종료 공고만 몰린 분포도 검증한다.
     await db.client.execute("UPDATE g2b_notice_jobs SET automaticWalkId = 1, status = 'pending' WHERE id <= 5000");
@@ -952,7 +962,13 @@ test('자동 목록은 대량 이력에서도 인덱스 범위로 읽고 집계�
     for (const { sql, args } of queries) {
       const { rows } = await db.client.execute({ sql: 'EXPLAIN QUERY PLAN ' + sql, args });
       const plan = rows.map(({ detail }) => detail).join('\n');
-      assert.doesNotMatch(plan, /USE TEMP B-TREE|SCAN g2b_notice_automatic_counts/);
+      // 번호 조회의 마지막 정렬은 선택된 최대 20건에만 적용한다.
+      assert.doesNotMatch(plan, /SCAN g2b_notice_automatic_counts/);
+      if (!sql.includes('WITH selected AS MATERIALIZED')) assert.doesNotMatch(plan, /USE TEMP B-TREE/);
+      else {
+        if (sql.includes('UNION ALL')) assert.match(plan, /MERGE \(UNION ALL\)/);
+        assert.ok((plan.match(/USE TEMP B-TREE/g) ?? []).length <= 1, plan);
+      }
       if (sql.includes(' AS pending')) assert.match(plan, /SEARCH g2b_notice_runs USING INDEX g2b_notice_auto_unfinished_runs/);
       if (sql.includes('LIMIT 21')) listPlans.push(plan);
     }
@@ -1008,12 +1024,19 @@ test('기간 요약과 실패 페이지는 원본 공고 상태를 반영하고 
     assert.equal(second.items.length, 2);
     assert.deepEqual((await queue.listRunNotices(id, 'failed', second.previous)).items, first.items);
     assert.equal((await queue.listRunNotices(id, 'all')).items.length, 20);
+    const numbered = await queue.numberRunNotices(id, 'failed', 2);
+    assert.deepEqual(numbered.items, second.items);
+    assert.equal(numbered.totalPages, 2);
+    const last = await queue.numberRunNotices(id, 'all', 99);
+    assert.deepEqual([last.page, last.totalPages, last.items.length, last.items[0].number], [3, 3, 5, 'PERIOD40']);
     assert.equal((await queue.getRunSummary(id)).failedCount, 22);
     for (const { sql, args } of statements.splice(0)) {
       const { rows } = await db.client.execute({ sql: 'EXPLAIN QUERY PLAN ' + sql, args });
       const plan = rows.map(({ detail }) => detail).join('\n');
-      assert.doesNotMatch(plan, /USE TEMP B-TREE|SCAN [vc]\b/);
+      assert.doesNotMatch(plan, /SCAN [vc]\b/);
+      if (!sql.includes('WITH selected AS MATERIALIZED')) assert.doesNotMatch(plan, /USE TEMP B-TREE/);
       if (sql.includes('LIMIT 21')) assert.match(plan, /USING INDEX g2b_notice_period_(visits|failed)/);
+      else if (sql.includes('WITH selected AS MATERIALIZED')) assert.match(plan, /USING (?:COVERING )?INDEX g2b_notice_period_(visits|failed)/);
       else assert.match(plan, /SEARCH c USING INTEGER PRIMARY KEY/);
     }
     await assert.rejects(db.transaction(async () => {
