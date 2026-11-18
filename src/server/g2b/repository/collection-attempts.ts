@@ -192,15 +192,42 @@ export function openCollectionAttempts(db: G2bDatabase) {
     SELECT ${orderPlanLookupSql} FROM notices WHERE ${orderPlanUnavailablePredicate}
   )`;
   const orderPlanCounts = db.prepare(`
-    WITH ${orderPlanAttemptKeys},
+    WITH attempt_keys AS (
+      SELECT DISTINCT number, revision, opening_revision
+      FROM g2b_collection_attempts
+      WHERE section = 'order-plans'
+    ),
+    -- 시도 번호의 인덱스 범위에서 양 끝만 읽고, 뒤에서 두 값을 비교할 때 탐색을 반복하지 않는다.
+    -- 단항 +는 번호 값은 유지하면서 TEXT 친화도를 제거해 JSON 표현식 인덱스의 동등 탐색을 허용한다.
+    link_bounds AS MATERIALIZED (
+      SELECT attempt.*, original.number AS original_number,
+        (SELECT ${orderPlanNumberSql} FROM notices
+          WHERE ${orderPlanLinkPredicate} AND ${orderPlanLookupSql} = +attempt.number
+          ORDER BY ${orderPlanNumberSql} ASC LIMIT 1) AS first_plan,
+        (SELECT ${orderPlanNumberSql} FROM notices
+          WHERE ${orderPlanLinkPredicate} AND ${orderPlanLookupSql} = +attempt.number
+          ORDER BY ${orderPlanNumberSql} DESC LIMIT 1) AS last_plan
+      FROM attempt_keys AS attempt
+      LEFT JOIN order_plans AS original ON original.number = attempt.number
+      WHERE original.number IS NULL OR attempt.revision <> '' OR attempt.opening_revision <> ''
+    ),
+    normalized_keys AS (
+      SELECT DISTINCT
+        CASE WHEN bounds.original_number IS NULL AND bounds.first_plan = bounds.last_plan
+          THEN COALESCE(linked.number, bounds.number) ELSE bounds.number END AS number,
+        bounds.revision, bounds.opening_revision
+      FROM link_bounds AS bounds
+      LEFT JOIN order_plans AS linked ON linked.number = bounds.first_plan
+    ),
     collected AS (SELECT COUNT(*) AS count FROM order_plans),
     uncollected AS (
-      SELECT COUNT(*) AS count FROM (
-        SELECT DISTINCT attempt.number, attempt.revision, attempt.opening_revision
-        FROM order_plan_attempt_keys AS attempt
-        LEFT JOIN order_plans AS saved
-          ON saved.number = attempt.number AND attempt.revision = '' AND attempt.opening_revision = ''
-        WHERE saved.number IS NULL AND attempt.number NOT IN ${unavailableOrderPlans}
+      SELECT COUNT(*) AS count
+      FROM normalized_keys AS target
+      LEFT JOIN order_plans AS saved
+        ON saved.number = target.number AND target.revision = '' AND target.opening_revision = ''
+      WHERE saved.number IS NULL AND NOT EXISTS (
+        SELECT 1 FROM notices
+        WHERE ${orderPlanUnavailablePredicate} AND ${orderPlanLookupSql} = target.number
       )
     )
     SELECT collected.count + uncollected.count AS total,
@@ -335,6 +362,7 @@ export function openCollectionAttempts(db: G2bDatabase) {
 
     /**
      * 목록 본문을 읽지 않고 랜딩 카드의 전체·수집·미수집 건수를 조회한다.
+     * 발주계획은 중복 제거한 시도 키를 기준으로 공고 연결과 조회 불가 상태를 확인한다.
      * @throws Turso가 수집 건수를 집계하지 못한 경우.
      */
     async counts(section: CollectionSection): Promise<CollectionOverview["counts"]> {

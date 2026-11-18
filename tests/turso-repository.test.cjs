@@ -3,7 +3,7 @@ const { test } = require("node:test");
 const { createClient } = require("@libsql/client");
 require("../scripts/register-project-typescript.cjs");
 
-test("발주계획 카드와 목록의 집계가 일치하고 공고 부분 인덱스로 조회한다", async () => {
+test("발주계획 카드가 목록과 같은 건수를 반환하고 시도 번호별로 공고를 탐색한다", async () => {
   const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
   const { G2bDatabase } = require("../src/server/g2b/repository/database");
   const { openG2bRepository } = require("../src/server/g2b/repository/turso");
@@ -39,12 +39,15 @@ test("발주계획 카드와 목록의 집계가 일치하고 공고 부분 인�
       ["SAVED", { orderPlanStatus: orderPlanUnprocessableStatus }],
       ["BLOCKED", { orderPlanStatus: orderPlanUnprocessableStatus }],
       [null, { orderPlanStatus: orderPlanUnprocessableStatus }],
+      ["ALIAS2", { orderPlanNumber: "SAVED" }],
+      ["OTHER", { orderPlanNumber: "OWN" }],
+      ["OTHER", { orderPlanStatus: orderPlanUnprocessableStatus }],
     ];
     await client.batch(notices.map(([lookup, data], index) => ({
       sql: "INSERT INTO notices VALUES (?, '000', '2026-01-01', ?, ?)",
       args: [String(index), JSON.stringify(data), JSON.stringify({ orderPlanLookup: lookup })],
     })), "write");
-    for (const number of ["ALIAS", "ALIAS", "AMBIGUOUS", "UNSAVED", "OWN", "SAVED", "BLOCKED"]) {
+    for (const number of ["ALIAS", "ALIAS", "ALIAS2", "AMBIGUOUS", "UNSAVED", "OWN", "SAVED", "BLOCKED"]) {
       await history.start({ section: "order-plans", number });
     }
     const expected = { total: 4, collected: 2, uncollected: 2 };
@@ -60,9 +63,10 @@ test("발주계획 카드와 목록의 집계가 일치하고 공고 부분 인�
     assert.deepEqual((await history.overview("order-plans")).counts, expected);
     const after = await explain();
     const plans = `마이그레이션 적용 전\n${before}\n마이그레이션 적용 후\n${after}`;
-    assert.match(after, /USING (?:COVERING )?INDEX g2b_notice_order_plan_link\b/, plans);
-    assert.match(after, /USING (?:COVERING )?INDEX g2b_notice_order_plan_unavailable\b/, plans);
-    assert.doesNotMatch(after, /SCAN notices(?:\n|$)|UNION USING TEMP B-TREE|count\(DISTINCT\)|CORRELATED/, plans);
+    const linkSearch = /SEARCH notices USING (?:COVERING )?INDEX g2b_notice_order_plan_link \(<expr>=\?\)/g;
+    assert.equal([...after.matchAll(linkSearch)].length, 2, plans);
+    assert.match(after, /SEARCH notices USING (?:COVERING )?INDEX g2b_notice_order_plan_unavailable \(<expr>=\?\)/, plans);
+    assert.doesNotMatch(after, /SCAN notices\b|SCAN alias\b|UNION USING TEMP B-TREE|ORDER BY/, plans);
 
     await client.execute("UPDATE notices SET data = '{}' WHERE number = '7'");
     const unblocked = { total: 5, collected: 2, uncollected: 3 };
@@ -71,6 +75,16 @@ test("발주계획 카드와 목록의 집계가 일치하고 공고 부분 인�
     await client.execute("DELETE FROM notices WHERE number = '3'");
     assert.deepEqual(await history.counts("order-plans"), expected);
     assert.deepEqual((await history.overview("order-plans")).counts, expected);
+    // 기존 이력에 차수가 있으면 저장 행과 다른 키이며, 정규화 후 같은 키는 한 건으로 센다.
+    await client.execute(`
+      INSERT INTO g2b_collection_attempts (section, number, revision, opening_revision, input, started_at)
+      VALUES ('order-plans', 'ALIAS', '001', '', '{}', '2026-01-01'),
+        ('order-plans', 'ALIAS2', '001', '', '{}', '2026-01-01'),
+        ('order-plans', 'OTHER', '001', '', '{}', '2026-01-01')
+    `);
+    await client.execute("UPDATE notices SET data = '{}' WHERE number = '6'");
+    assert.deepEqual(await history.counts("order-plans"), { total: 6, collected: 2, uncollected: 4 });
+    assert.deepEqual(await history.counts("order-plans"), (await history.overview("order-plans")).counts);
     assert.deepEqual(await history.counts("prior-specs"), { total: 0, collected: 0, uncollected: 0 });
   } finally {
     client.close();
