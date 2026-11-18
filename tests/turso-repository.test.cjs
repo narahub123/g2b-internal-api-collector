@@ -3,6 +3,53 @@ const { test } = require("node:test");
 const { createClient } = require("@libsql/client");
 require("../scripts/register-project-typescript.cjs");
 
+test("개찰결과 카드는 공고를 읽지 않고 복합 키로 미수집 건수를 집계한다", async () => {
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database");
+  const { openG2bRepository } = require("../src/server/g2b/repository/turso");
+  const client = createClient({ url: "file::memory:" });
+  try {
+    await migrateG2bDatabase(client);
+    const db = new G2bDatabase(client);
+    const prepare = db.prepare.bind(db);
+    let cardQuery;
+    db.prepare = (sql) => {
+      const statement = prepare(sql);
+      return { ...statement, get: (...args) => {
+        cardQuery = { sql, args };
+        return statement.get(...args);
+      } };
+    };
+    const { collectionAttempts: history } = openG2bRepository(db);
+    assert.deepEqual(await history.counts("opening-results"), { total: 0, collected: 0, uncollected: 0 });
+    await client.executeMultiple(`
+      INSERT INTO notices VALUES ('BID', '000', '2026-01-01', '{}', '{}');
+      INSERT INTO opening_results VALUES
+        ('BID', '000', '001', '2026-01-01', '{}', '{}'),
+        ('SAVED', '000', '001', '2026-01-01', '{}', '{}');
+      INSERT INTO g2b_collection_attempts (section, number, revision, opening_revision, input, started_at)
+      VALUES ('opening-results', 'BID', '000', '001', '{}', '2026-01-01'),
+        ('opening-results', 'BID', '000', '002', '{}', '2026-01-01'),
+        ('opening-results', 'BID', '000', '002', '{}', '2026-01-02'),
+        ('opening-results', 'BID', '001', '001', '{}', '2026-01-01'),
+        ('notices', 'OTHER', '000', '', '{}', '2026-01-01');
+    `);
+    const counts = await history.counts("opening-results");
+    assert.deepEqual(counts, { total: 4, collected: 2, uncollected: 2 });
+    assert.deepEqual(counts, (await history.overview("opening-results")).counts);
+
+    const plan = (await client.execute({
+      ...cardQuery, sql: `EXPLAIN QUERY PLAN ${cardQuery.sql}`,
+    })).rows.map((row) => row.detail).join("\n");
+    assert.doesNotMatch(plan, /\bnotice\b|\bnotices\b|UNION USING TEMP B-TREE/);
+    assert.equal([...plan.matchAll(/SCAN opening_results\b/g)].length, 1, plan);
+    assert.match(plan, /g2b_collection_attempts_target \(section=\?\)/);
+    assert.match(plan, /sqlite_autoindex_opening_results_1 FOR IN-OPERATOR/);
+  } finally {
+    client.close();
+  }
+});
+
 test("발주계획 카드가 목록과 같은 건수를 반환하고 시도 번호별로 공고를 탐색한다", async () => {
   const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
   const { G2bDatabase } = require("../src/server/g2b/repository/database");
