@@ -234,6 +234,28 @@ export function openCollectionAttempts(db: G2bDatabase) {
       collected.count AS collected, uncollected.count AS uncollected
     FROM collected CROSS JOIN uncollected
   `);
+  // 입찰공고 카드 집계만 별도 계산한다. 목록 overview의 공통 targets는 유지한다.
+  const noticeCounts = db.prepare(`
+    WITH attempt_keys AS (
+      SELECT DISTINCT number, revision, opening_revision
+      FROM g2b_collection_attempts
+      WHERE section = 'notices'
+    ),
+    collected AS (
+      SELECT COUNT(*) AS n FROM notices WHERE json_valid(data)
+    ),
+    uncollected AS (
+      SELECT COUNT(*) AS n FROM attempt_keys AS a
+      WHERE NOT EXISTS (
+        SELECT 1 FROM notices AS s
+        WHERE s.number = a.number AND s.revision = a.revision
+          AND a.opening_revision = '' AND json_valid(s.data)
+      )
+    )
+    SELECT collected.n + uncollected.n AS total,
+      collected.n AS collected, uncollected.n AS uncollected
+    FROM collected CROSS JOIN uncollected
+  `);
   // 양쪽의 복합 키는 NOT NULL이다. 저장 여부만 확인하므로 공고 원본을 읽지 않는다.
   const openingResultCounts = db.prepare(`
     WITH attempt_keys AS (
@@ -293,7 +315,7 @@ export function openCollectionAttempts(db: G2bDatabase) {
         ${orderPlans ? `WHERE number NOT IN ${unavailableOrderPlans}` : ""}
         ${priorSpecs ? "WHERE number NOT IN (SELECT number FROM unavailable_targets WHERE number IS NOT NULL)" : ""}
       )`;
-    const counts = orderPlans || section === "opening-results" ? undefined : db.prepare(`${targets}
+    const counts = orderPlans || section === "opening-results" || section === "notices" ? undefined : db.prepare(`${targets}
       SELECT COUNT(*) AS total, (SELECT COUNT(*) FROM saved) AS collected,
         COUNT(*) - (SELECT COUNT(*) FROM saved) AS uncollected
       FROM targets
@@ -384,7 +406,9 @@ export function openCollectionAttempts(db: G2bDatabase) {
      * @throws Turso가 수집 건수를 집계하지 못한 경우.
      */
     async counts(section: CollectionSection): Promise<CollectionOverview["counts"]> {
-      const row = section === "order-plans"
+      const row = section === "notices"
+        ? await noticeCounts.get()
+        : section === "order-plans"
         ? await orderPlanCounts.get()
         : section === "opening-results"
         ? await openingResultCounts.get(section)
