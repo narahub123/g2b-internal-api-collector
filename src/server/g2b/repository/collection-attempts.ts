@@ -234,6 +234,23 @@ export function openCollectionAttempts(db: G2bDatabase) {
       collected.count AS collected, uncollected.count AS uncollected
     FROM collected CROSS JOIN uncollected
   `);
+  // 양쪽의 복합 키는 NOT NULL이다. 저장 여부만 확인하므로 공고 원본을 읽지 않는다.
+  const openingResultCounts = db.prepare(`
+    WITH attempt_keys AS (
+      SELECT number, revision, opening_revision
+      FROM g2b_collection_attempts
+      WHERE section = ?
+      GROUP BY number, revision, opening_revision
+    ),
+    counts AS MATERIALIZED (
+      SELECT (SELECT COUNT(*) FROM opening_results) AS collected,
+        (SELECT COUNT(*) FROM attempt_keys
+          WHERE (number, revision, opening_revision) NOT IN (
+            SELECT number, revision, opening_revision FROM opening_results
+          )) AS uncollected
+    )
+    SELECT collected + uncollected AS total, collected, uncollected FROM counts
+  `);
   const summaries = new Map(Object.entries(savedQueries).map(([section, savedQuery]) => {
     // 두 화면에서 저장 자료와 시도 이력의 합집합을 동일한 기준으로 집계한다.
     const orderPlans = section === "order-plans";
@@ -276,7 +293,7 @@ export function openCollectionAttempts(db: G2bDatabase) {
         ${orderPlans ? `WHERE number NOT IN ${unavailableOrderPlans}` : ""}
         ${priorSpecs ? "WHERE number NOT IN (SELECT number FROM unavailable_targets WHERE number IS NOT NULL)" : ""}
       )`;
-    const counts = orderPlans ? undefined : db.prepare(`${targets}
+    const counts = orderPlans || section === "opening-results" ? undefined : db.prepare(`${targets}
       SELECT COUNT(*) AS total, (SELECT COUNT(*) FROM saved) AS collected,
         COUNT(*) - (SELECT COUNT(*) FROM saved) AS uncollected
       FROM targets
@@ -363,11 +380,14 @@ export function openCollectionAttempts(db: G2bDatabase) {
     /**
      * 목록 본문을 읽지 않고 랜딩 카드의 전체·수집·미수집 건수를 조회한다.
      * 발주계획은 중복 제거한 시도 키를 기준으로 공고 연결과 조회 불가 상태를 확인한다.
+     * 개찰결과는 공고 원본에 접근하지 않고 저장 결과와 시도 이력의 복합 키만 비교한다.
      * @throws Turso가 수집 건수를 집계하지 못한 경우.
      */
     async counts(section: CollectionSection): Promise<CollectionOverview["counts"]> {
       const row = section === "order-plans"
         ? await orderPlanCounts.get()
+        : section === "opening-results"
+        ? await openingResultCounts.get(section)
         : await summaries.get(section)!.counts!.get(section);
       const { total, collected, uncollected } = row as CollectionOverview["counts"];
       return { total, collected, uncollected };
