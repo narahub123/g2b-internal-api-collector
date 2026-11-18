@@ -273,6 +273,40 @@ export function openCollectionAttempts(db: G2bDatabase) {
     )
     SELECT collected + uncollected AS total, collected, uncollected FROM counts
   `);
+  // 계약요청·계약 카드 집계 전용 SQL. 목록 overview의 UNION 경로는 유지한다.
+  // GROUP BY로 중복 시도를 제거하고 NOT IN으로 미저장 키만 센다.
+  const contractRequestCounts = db.prepare(`
+    WITH attempt_keys AS (
+      SELECT number, revision, opening_revision
+      FROM g2b_collection_attempts
+      WHERE section = 'contract-requests'
+      GROUP BY number, revision, opening_revision
+    ),
+    counts AS MATERIALIZED (
+      SELECT (SELECT COUNT(*) FROM contract_requests) AS collected,
+        (SELECT COUNT(*) FROM attempt_keys
+          WHERE (number, revision, opening_revision) NOT IN (
+            SELECT number, revision, '' FROM contract_requests
+          )) AS uncollected
+    )
+    SELECT collected + uncollected AS total, collected, uncollected FROM counts
+  `);
+  const contractCounts = db.prepare(`
+    WITH attempt_keys AS (
+      SELECT number, revision, opening_revision
+      FROM g2b_collection_attempts
+      WHERE section = 'contracts'
+      GROUP BY number, revision, opening_revision
+    ),
+    counts AS MATERIALIZED (
+      SELECT (SELECT COUNT(*) FROM contracts) AS collected,
+        (SELECT COUNT(*) FROM attempt_keys
+          WHERE (number, revision, opening_revision) NOT IN (
+            SELECT number, revision, '' FROM contracts
+          )) AS uncollected
+    )
+    SELECT collected + uncollected AS total, collected, uncollected FROM counts
+  `);
   const summaries = new Map(Object.entries(savedQueries).map(([section, savedQuery]) => {
     // 두 화면에서 저장 자료와 시도 이력의 합집합을 동일한 기준으로 집계한다.
     const orderPlans = section === "order-plans";
@@ -315,7 +349,7 @@ export function openCollectionAttempts(db: G2bDatabase) {
         ${orderPlans ? `WHERE number NOT IN ${unavailableOrderPlans}` : ""}
         ${priorSpecs ? "WHERE number NOT IN (SELECT number FROM unavailable_targets WHERE number IS NOT NULL)" : ""}
       )`;
-    const counts = orderPlans || section === "opening-results" || section === "notices" ? undefined : db.prepare(`${targets}
+    const counts = orderPlans || section === "opening-results" || section === "notices" || section === "contract-requests" || section === "contracts" ? undefined : db.prepare(`${targets}
       SELECT COUNT(*) AS total, (SELECT COUNT(*) FROM saved) AS collected,
         COUNT(*) - (SELECT COUNT(*) FROM saved) AS uncollected
       FROM targets
@@ -412,6 +446,10 @@ export function openCollectionAttempts(db: G2bDatabase) {
         ? await orderPlanCounts.get()
         : section === "opening-results"
         ? await openingResultCounts.get(section)
+        : section === "contract-requests"
+        ? await contractRequestCounts.get()
+        : section === "contracts"
+        ? await contractCounts.get()
         : await summaries.get(section)!.counts!.get(section);
       const { total, collected, uncollected } = row as CollectionOverview["counts"];
       return { total, collected, uncollected };
