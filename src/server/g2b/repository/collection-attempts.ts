@@ -1,6 +1,8 @@
 import type { G2bDatabase } from "./database";
 import type { OpeningResultQuery } from "@/entities/opening-result/model/opening-result";
-import { orderPlanUnprocessableStatus } from "@/shared/config/g2b-order-plan";
+import {
+  orderPlanLinkPredicate, orderPlanLookupSql, orderPlanNumberSql, orderPlanUnavailablePredicate,
+} from "./order-plan-notice-sql";
 import { priorSpecUnavailableStatus } from "@/shared/config/g2b-prior-spec";
 import type { G2bCollectionCounts } from "./types";
 import { openNoticeList } from "./notice-list";
@@ -65,25 +67,20 @@ type RetryRow = { input: string; status: AttemptStatus; latestId: number; starte
 
 // 저장된 계획으로 연결되는 호출 번호만 합친다. 서로 다른 계획에 연결되면 원래 이력 번호를 유지한다.
 export const orderPlanAttemptKeys = `
-  order_plan_links AS (
-    SELECT json_extract(query_data, '$.orderPlanLookup') AS lookup_number,
-      json_extract(data, '$.orderPlanNumber') AS plan_number
-    FROM notices
-    WHERE CASE WHEN json_valid(data) THEN json_type(data, '$.orderPlanNumber') = 'text' END
-  ),
   unique_order_plan_links AS (
-    SELECT lookup_number, MIN(plan_number) AS plan_number
-    FROM order_plan_links
-    WHERE lookup_number IS NOT NULL
-    GROUP BY lookup_number
-    HAVING COUNT(DISTINCT plan_number) = 1
-      AND MIN(plan_number) <> lookup_number
+    SELECT ${orderPlanLookupSql} AS lookup_number, MIN(${orderPlanNumberSql}) AS plan_number
+    FROM notices
+    WHERE ${orderPlanLinkPredicate}
+    GROUP BY ${orderPlanLookupSql}
+    HAVING MIN(${orderPlanNumberSql}) = MAX(${orderPlanNumberSql})
+      AND plan_number <> lookup_number
   ),
   order_plan_aliases AS (
     SELECT lookup_number, plan_number
     FROM unique_order_plan_links
-    JOIN order_plans ON order_plans.number = plan_number
-    WHERE NOT EXISTS (SELECT 1 FROM order_plans WHERE number = lookup_number)
+    JOIN order_plans AS saved ON saved.number = plan_number
+    LEFT JOIN order_plans AS original ON original.number = lookup_number
+    WHERE original.number IS NULL
   ),
   order_plan_attempt_keys AS (
     SELECT attempt.id, COALESCE(alias.plan_number, attempt.number) AS number,
@@ -190,18 +187,31 @@ export function openCollectionAttempts(db: G2bDatabase) {
     WHERE target.id = ?
     GROUP BY target.number
   `);
+  // 조회 불가 판정은 연결을 적용한 시도 키에만 적용한다. 저장된 계획은 항상 포함한다.
+  const unavailableOrderPlans = `(
+    SELECT ${orderPlanLookupSql} FROM notices WHERE ${orderPlanUnavailablePredicate}
+  )`;
+  const orderPlanCounts = db.prepare(`
+    WITH ${orderPlanAttemptKeys},
+    collected AS (SELECT COUNT(*) AS count FROM order_plans),
+    uncollected AS (
+      SELECT COUNT(*) AS count FROM (
+        SELECT DISTINCT attempt.number, attempt.revision, attempt.opening_revision
+        FROM order_plan_attempt_keys AS attempt
+        LEFT JOIN order_plans AS saved
+          ON saved.number = attempt.number AND attempt.revision = '' AND attempt.opening_revision = ''
+        WHERE saved.number IS NULL AND attempt.number NOT IN ${unavailableOrderPlans}
+      )
+    )
+    SELECT collected.count + uncollected.count AS total,
+      collected.count AS collected, uncollected.count AS uncollected
+    FROM collected CROSS JOIN uncollected
+  `);
   const summaries = new Map(Object.entries(savedQueries).map(([section, savedQuery]) => {
     // 두 화면에서 저장 자료와 시도 이력의 합집합을 동일한 기준으로 집계한다.
     const orderPlans = section === "order-plans";
     const priorSpecs = section === "prior-specs";
     // 조회 불가로 확인된 번호는 이력에서만 추가되는 목록 대상에서 제외한다.
-    const unavailablePlans = `unavailable_targets AS (
-      SELECT DISTINCT json_extract(query_data, '$.orderPlanLookup') AS number
-      FROM notices
-      WHERE CASE WHEN json_valid(data)
-        THEN json_extract(data, '$.orderPlanStatus') = '${orderPlanUnprocessableStatus}'
-      END
-    )`;
     // 기존 공고에도 적용하도록 원본을 읽고 getNoticePriorSpecNumber와 같은 순서로 유효한 번호를 고른다.
     // SQLite의 기본 trim은 공백 문자만 제거하므로 JavaScript trim이 처리하는 문자도 명시한다.
     const trimChars = "char(9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279)";
@@ -225,7 +235,7 @@ export function openCollectionAttempts(db: G2bDatabase) {
       FROM unavailable_prior_spec_candidates
     )`;
     const targets = `
-      WITH ${orderPlans ? `${orderPlanAttemptKeys}, ${unavailablePlans},` : ""}
+      WITH ${orderPlans ? `${orderPlanAttemptKeys},` : ""}
       ${priorSpecs ? `${unavailablePriorSpecs},` : ""} saved AS (${savedQuery}),
       latest AS (
         SELECT MAX(id) AS id, number, revision, opening_revision
@@ -236,10 +246,10 @@ export function openCollectionAttempts(db: G2bDatabase) {
       targets AS (
         SELECT number, revision, opening_revision FROM saved
         UNION SELECT number, revision, opening_revision FROM latest
-        ${orderPlans ? "WHERE NOT EXISTS (SELECT 1 FROM unavailable_targets WHERE number = latest.number)" : ""}
+        ${orderPlans ? `WHERE number NOT IN ${unavailableOrderPlans}` : ""}
         ${priorSpecs ? "WHERE number NOT IN (SELECT number FROM unavailable_targets WHERE number IS NOT NULL)" : ""}
       )`;
-    const counts = db.prepare(`${targets}
+    const counts = orderPlans ? undefined : db.prepare(`${targets}
       SELECT COUNT(*) AS total, (SELECT COUNT(*) FROM saved) AS collected,
         COUNT(*) - (SELECT COUNT(*) FROM saved) AS uncollected
       FROM targets
@@ -328,7 +338,10 @@ export function openCollectionAttempts(db: G2bDatabase) {
      * @throws Turso가 수집 건수를 집계하지 못한 경우.
      */
     async counts(section: CollectionSection): Promise<CollectionOverview["counts"]> {
-      const { total, collected, uncollected } = await summaries.get(section)!.counts.get(section) as CollectionOverview["counts"];
+      const row = section === "order-plans"
+        ? await orderPlanCounts.get()
+        : await summaries.get(section)!.counts!.get(section);
+      const { total, collected, uncollected } = row as CollectionOverview["counts"];
       return { total, collected, uncollected };
     },
 

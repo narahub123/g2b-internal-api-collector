@@ -1,5 +1,8 @@
 import type { Client } from "@libsql/client";
 import { priorSpecUnavailableStatus } from "@/shared/config/g2b-prior-spec";
+import {
+  orderPlanLinkPredicate, orderPlanLookupSql, orderPlanNumberSql, orderPlanUnavailablePredicate,
+} from "./order-plan-notice-sql";
 
 const initialSchema = `
     CREATE TABLE IF NOT EXISTS notices (
@@ -365,6 +368,17 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
             THEN json_extract(data, '$.priorSpecStatus') = '${priorSpecUnavailableStatus}'
           END;
         INSERT INTO g2b_schema_migrations (version) VALUES (10);
+      `);
+    }
+    const orderPlanLookupUpgrade = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 11");
+    if (orderPlanLookupUpgrade.rows.length === 0) {
+      // 기존 공고의 파생 번호로 인덱스를 구성하고, 이후 공고 변경은 SQLite가 인덱스에 반영한다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_order_plan_link ON notices (${orderPlanLookupSql}, ${orderPlanNumberSql})
+          WHERE ${orderPlanLinkPredicate};
+        CREATE INDEX g2b_notice_order_plan_unavailable ON notices (${orderPlanLookupSql})
+          WHERE ${orderPlanUnavailablePredicate};
+        INSERT INTO g2b_schema_migrations (version) VALUES (11);
       `);
     }
     await transaction.commit();
