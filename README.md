@@ -38,6 +38,18 @@ Node.js 24 이상과 npm으로 실행합니다. Turso Cloud의 SQLite(libSQL) DB
 
 첨부 워커를 중지한 동안에는 수집 완료 이벤트가 DB에 남고 재시작 뒤 이어서 처리됩니다. 1차 첨부 작업은 다운로드와 해시 확인으로 완료되며, 파일 원본과 추출 내용은 저장하지 않습니다. 운영 반영 후 Turso Analytics에서 첨부 이벤트 조회와 선점 쿼리의 평균 Rows Read 및 실행 횟수를 확인합니다.
 
+첨부 자동 등록에 실패하면 30초, 60초, 120초 후 재시도합니다. 모두 실패하면 이벤트와 마지막 오류가 DB에 남습니다. 원인을 해결한 뒤 Turso SQL 콘솔에서 실패 이벤트 ID를 확인하고, 아래 예시의 `123`을 복구할 ID로 바꿔 실행합니다. 워커는 대상 이벤트를 다시 읽습니다.
+
+```sql
+SELECT id, section, number, revision, failures, error
+FROM g2b_attachment_events WHERE failed_at IS NOT NULL ORDER BY id;
+
+UPDATE g2b_attachment_events
+SET failures = 0, available_at = 0, failed_at = NULL, error = NULL,
+    generation = generation + 1
+WHERE id = 123 AND failed_at IS NOT NULL;
+```
+
 ```powershell
 npm ci
 npm run db:migrate

@@ -48,14 +48,14 @@ test('수집 성공 이벤트를 남기고 재시작 뒤에도 첨부를 한 번
     assert.equal(plan.section, 'order-plans');
     assert.equal(plan.number, 'real-p');
     const file = { id: 'file', filename: 'a.pdf' };
-    await assert.rejects(queue.consume(plan.id, [file, null]));
+    await assert.rejects(queue.consume(plan, [file, null]));
     assert.equal((await queue.event()).id, plan.id);
     assert.equal(await queue.status(file.id), undefined);
-    await queue.consume(plan.id, [file]);
-    await queue.consume(plan.id, [file]);
+    await queue.consume(plan, [file]);
+    await queue.consume(plan, [file]);
     const spec = await queue.event();
     assert.equal(spec.section, 'prior-specs');
-    await queue.consume(spec.id, []);
+    await queue.consume(spec, []);
     assert.equal(await queue.event(), undefined);
     await client.execute("UPDATE g2b_notice_jobs SET status = 'succeeded'");
     assert.equal((await queue.event()).revision, '001');
@@ -63,12 +63,75 @@ test('수집 성공 이벤트를 남기고 재시작 뒤에도 첨부를 한 번
       "SELECT position FROM g2b_attachment_jobs WHERE status='pending' ORDER BY priority DESC, position LIMIT 1",
       "SELECT position FROM g2b_attachment_jobs WHERE status='retry_wait' AND available_at<=unixepoch()",
       "SELECT position FROM g2b_attachment_jobs WHERE status='running' AND expires_at<=unixepoch()",
-      "SELECT id FROM g2b_attachment_events ORDER BY id LIMIT 1",
+      "SELECT id FROM g2b_attachment_events WHERE failed_at IS NULL AND available_at <= unixepoch() ORDER BY available_at, id LIMIT 1",
     ].map((sql) => client.execute('EXPLAIN QUERY PLAN ' + sql)));
     assert.match(String(plans[0].rows[0].detail), /g2b_attachment_ready/);
     assert.match(String(plans[1].rows[0].detail), /g2b_attachment_retry/);
     assert.match(String(plans[2].rows[0].detail), /g2b_attachment_leases/);
     assert.doesNotMatch(String(plans[3].rows[0].detail), /TEMP B-TREE/);
+    assert.match(String(plans[3].rows[0].detail), /SEARCH .*g2b_attachment_events_ready/);
+  } finally {
+    client.close();
+  }
+});
+
+test('마이그레이션 13은 기존 수집 완료 이벤트를 즉시 처리 가능하게 보존한다', async () => {
+  const client = createClient({ url: ':memory:' });
+  try {
+    await migrateG2bDatabase(client);
+    await client.executeMultiple(`
+      DROP INDEX g2b_attachment_events_ready;
+      ALTER TABLE g2b_attachment_events DROP COLUMN available_at;
+      ALTER TABLE g2b_attachment_events DROP COLUMN failures;
+      ALTER TABLE g2b_attachment_events DROP COLUMN error;
+      ALTER TABLE g2b_attachment_events DROP COLUMN failed_at;
+      ALTER TABLE g2b_attachment_events DROP COLUMN generation;
+      DELETE FROM g2b_schema_migrations WHERE version = 13;
+      INSERT INTO g2b_attachment_events(section,number,revision,completion_id) VALUES ('notices','A','000',1);
+    `);
+    await migrateG2bDatabase(client);
+    const queue = openAttachmentQueue(new G2bDatabase(client));
+    assert.deepEqual({ ...await queue.event() }, {
+      id: 1, section: 'notices', number: 'A', revision: '000', failures: 0, generation: 0,
+    });
+  } finally {
+    client.close();
+  }
+});
+
+test('실패한 자동 등록을 건너뛰고 재시도를 소진한 이벤트는 복구할 때까지 보존한다', async () => {
+  const client = createClient({ url: ':memory:' });
+  try {
+    await migrateG2bDatabase(client);
+    const queue = openAttachmentQueue(new G2bDatabase(client));
+    await client.execute("INSERT INTO g2b_attachment_events(section,number,revision,completion_id) VALUES ('notices','A','000',1), ('notices','B','000',2)");
+    const first = await queue.event();
+    assert.equal(first.number, 'A');
+    assert.equal((await queue.failEvent(first, '오류')).failures, 1);
+    assert.equal(await queue.failEvent(first, '늦은 실패'), undefined);
+    assert.equal(await queue.consume(first, [{ id: 'stale' }]), false);
+    const next = await queue.event();
+    assert.equal(next.number, 'B');
+    assert.equal(await queue.consume(next, [{ id: 'current' }]), true);
+    assert.equal(await queue.consume(next, [{ id: 'current' }]), false);
+    assert.ok(await queue.status('current'));
+    assert.equal(await queue.status('stale'), undefined);
+    for (const [index, seconds] of [30, 60, 120].entries()) {
+      assert.equal(await queue.event(), undefined);
+      const { rows: [row] } = await client.execute('SELECT available_at - unixepoch() AS seconds, failures FROM g2b_attachment_events');
+      assert.equal(row.failures, index + 1);
+      assert.ok([seconds, seconds - 1].includes(row.seconds));
+      await client.execute('UPDATE g2b_attachment_events SET available_at = 0');
+      await queue.failEvent(await queue.event(), '오류');
+    }
+    assert.equal(await queue.event(), undefined);
+    const { rows: [failed] } = await client.execute('SELECT failures, error, failed_at FROM g2b_attachment_events');
+    assert.equal(failed.failures, 4);
+    assert.equal(failed.error, '오류');
+    assert.ok(failed.failed_at);
+    await client.execute('UPDATE g2b_attachment_events SET failures = 0, available_at = 0, failed_at = NULL, error = NULL, generation = generation + 1');
+    assert.equal(await queue.consume(first, []), false);
+    assert.equal(await queue.consume(await queue.event(), []), true);
   } finally {
     client.close();
   }

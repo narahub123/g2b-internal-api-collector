@@ -418,6 +418,20 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (12);
       `);
     }
+    const attachmentRetry = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 13");
+    if (!attachmentRetry.rows.length) {
+      // 기존 이벤트는 즉시 처리하고, 최종 실패한 이벤트는 반복 조회 인덱스에서 제외한다.
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_attachment_events ADD COLUMN available_at INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE g2b_attachment_events ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE g2b_attachment_events ADD COLUMN error TEXT;
+        ALTER TABLE g2b_attachment_events ADD COLUMN failed_at INTEGER;
+        ALTER TABLE g2b_attachment_events ADD COLUMN generation INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX g2b_attachment_events_ready ON g2b_attachment_events(available_at, id)
+          WHERE failed_at IS NULL;
+        INSERT INTO g2b_schema_migrations (version) VALUES (13);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

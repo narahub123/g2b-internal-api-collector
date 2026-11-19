@@ -12,6 +12,11 @@ export type AttachmentJobFile = {
 
 type Claim = { file: AttachmentJobFile; token: string; attempts: number };
 type Outcome = { hash: string } | { error: string; retry: boolean };
+type AttachmentEvent = AttachmentOwner & { id: number; failures: number; generation: number };
+
+// 운영자가 실패 횟수를 초기화한 뒤에도 이전 처리 결과를 거부할 수 있도록 세대를 함께 확인한다.
+const currentEvent = "id = ? AND failures = ? AND generation = ? AND failed_at IS NULL";
+const eventRetrySeconds = [30, 60, 120] as const;
 
 /** 첨부 전용 상태와 실행권을 관리한다. 외부 다운로드 중에는 트랜잭션을 열어 두지 않는다. */
 export function openAttachmentQueue(db: G2bDatabase) {
@@ -33,17 +38,29 @@ export function openAttachmentQueue(db: G2bDatabase) {
     },
     /** 현재 파일의 상태와 해시를 관리자 화면에 반환한다. */
     status(id: string) { return read.get(id); },
-    /** 가장 오래된 미처리 수집 이벤트를 조회한다. */
+    /** DB 시각에 실행 가능한 가장 이른 수집 이벤트를 반환한다. */
     async event() {
-      return await db.prepare("SELECT id, section, number, revision FROM g2b_attachment_events ORDER BY id LIMIT 1")
-        .get() as (AttachmentOwner & { id: number }) | undefined;
+      return await db.prepare(`SELECT id, section, number, revision, failures, generation FROM g2b_attachment_events
+        WHERE failed_at IS NULL AND available_at <= unixepoch() ORDER BY available_at, id LIMIT 1`)
+        .get() as AttachmentEvent | undefined;
     },
-    /** 이벤트 삭제와 자동 작업 등록을 같은 트랜잭션으로 확정한다. */
-    consume(id: number, files: AttachmentJobFile[]) {
+    /** 현재 이벤트의 삭제와 등록을 함께 확정한다. 이미 처리된 시도는 false를 반환한다. */
+    consume(event: AttachmentEvent, files: AttachmentJobFile[]) {
       return db.transaction(async () => {
-        if (!(await db.prepare("DELETE FROM g2b_attachment_events WHERE id = ?").run(id)).rowsAffected) return;
+        const deleted = await db.prepare(`DELETE FROM g2b_attachment_events WHERE ${currentEvent}`)
+          .run(event.id, event.failures, event.generation);
+        if (!deleted.rowsAffected) return false;
         for (const file of files) await insert.run(file.id, JSON.stringify(file), 0);
+        return true;
       });
+    },
+    /** 최신 시도만 지연하거나 최종 실패로 기록한다. 다른 워커에서 처리했다면 결과가 없다. */
+    async failEvent(event: AttachmentEvent, error: string) {
+      const retry = eventRetrySeconds[event.failures];
+      return db.prepare(`UPDATE g2b_attachment_events SET failures = failures + 1, error = ?,
+        available_at = unixepoch() + ?, failed_at = CASE WHEN ? THEN unixepoch() END
+        WHERE ${currentEvent} RETURNING failures, available_at AS retryAt, failed_at AS failedAt`)
+        .get(error.slice(0, 300), retry ?? 0, Number(retry === undefined), event.id, event.failures, event.generation);
     },
     /** 만료·재시도 대기를 회수하고 수동 우선, 등록 순으로 한 파일을 원자적으로 선점한다. */
     async claim(): Promise<Claim | undefined> {

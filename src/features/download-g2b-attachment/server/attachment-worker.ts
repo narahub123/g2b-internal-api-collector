@@ -97,15 +97,26 @@ export async function runAttachmentWorker(stopping: AbortSignal) {
   while (!stopping.aborted) {
     try {
       const event = await queue.event();
-      let consumed = false;
+      let eventAdvanced = Boolean(event);
       if (event) {
         try {
           const files = await listAttachmentJobs({ section: event.section, number: event.number, revision: event.revision });
-          await queue.consume(event.id, files.filter((file) => !preferredPdfFiles(file, files).length));
-          consumed = true;
+          await queue.consume(event, files.filter((file) => !preferredPdfFiles(file, files).length));
         } catch (error) {
           // 자동 인계 오류가 이미 등록된 수동 작업을 막지 않게 한다.
-          console.error("[첨부 자동 등록]", event.id, error);
+          const message = error instanceof Error ? error.message : String(error);
+          try {
+            const result = await queue.failEvent(event, message);
+            if (result) console.error("[첨부 자동 등록]", {
+              id: event.id, section: event.section, number: event.number, revision: event.revision,
+              failures: result.failures, ...(!result.failedAt ? { retryAt: result.retryAt } : { failedAt: result.failedAt }),
+              error: message.slice(0, 300),
+            });
+          } catch (writeError) {
+            console.error("[첨부 자동 등록 실패 기록]", event.id, writeError);
+            // DB가 실패 상태를 기록할 수 없으면 같은 이벤트의 즉시 재조회를 피한다.
+            eventAdvanced = false;
+          }
         }
       }
       if (stopping.aborted) return;
@@ -114,7 +125,7 @@ export async function runAttachmentWorker(stopping: AbortSignal) {
         await processClaim(queue, claim, stopping);
         continue;
       }
-      if (consumed) continue;
+      if (eventAdvanced) continue;
     } catch (error) {
       console.error("[첨부 워커]", error);
     }
