@@ -1,4 +1,4 @@
-name: 공고 수집 실행 기록 정리
+name: 공고·첨부 실행 기록 정리
 
 on:
   schedule:

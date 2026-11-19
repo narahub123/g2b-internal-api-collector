@@ -130,13 +130,13 @@ test('정기 호출은 인증하고 실행 가능한 작업만 호출하며 실�
 });
 
 test('정리 작업은 완료 후 24시간이 지난 성공만 삭제하고 실패한 재실행 이력도 보존한다', async () => {
-  const { cleanupNoticeRuns } = require('../scripts/cleanup-notice-actions.cjs');
+  const { cleanupQueueRuns } = require('../scripts/cleanup-notice-actions.cjs');
   const now = Date.parse('2026-11-16T10:00:00Z');
   const old = '2026-11-15T10:00:00Z';
   const run = (id, extra = {}) => ({ id, status: 'completed', conclusion: 'success', run_attempt: 1, updated_at: old, ...extra });
   const pages = [
     [run(1), run(2, { updated_at: '2026-11-15T10:00:01Z' }), run(3, { conclusion: 'failure' })],
-    [run(4, { run_attempt: 2 }), run(5), run(6, { status: 'in_progress' })],
+    [run(4, { run_attempt: 2 }), run(5), run(6, { status: 'in_progress' }), run(7, { conclusion: 'cancelled' })],
   ];
   const deleted = [];
   const request = async (path, method = 'GET') => {
@@ -148,8 +148,15 @@ test('정리 작업은 완료 후 24시간이 지난 성공만 삭제하고 실�
     if (path.endsWith('/5')) return run(5, { status: 'in_progress' });
     return run(1);
   };
-  assert.deepEqual(await cleanupNoticeRuns(request, now, true), [1]);
+  const reports = [];
+  await cleanupQueueRuns(request, now, true, (line) => reports.push(line));
+  assert.equal(reports.length, 2);
+  assert.match(reports[0], /notice-collection\.yml.*삭제 대상 1건/);
+  assert.match(reports[1], /attachment-processing\.yml.*삭제 대상 1건/);
   assert.deepEqual(deleted, []);
-  assert.deepEqual(await cleanupNoticeRuns(request, now), [1]);
+  await assert.rejects(cleanupQueueRuns((path, method) => {
+    if (path.includes('/notice-collection.yml/')) throw new Error('HTTP 403');
+    return request(path, method);
+  }, now, false, () => {}), /notice-collection.*403/);
   assert.deepEqual(deleted, [1]);
 });

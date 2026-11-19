@@ -44,7 +44,7 @@ function* pageBatches(pages: PdfExtraction["pages"]) {
 }
 
 /** 첨부 전용 상태와 실행권을 관리한다. 외부 다운로드 중에는 트랜잭션을 열어 두지 않는다. */
-export function openAttachmentQueue(db: G2bDatabase) {
+export function openAttachmentQueue(db: G2bDatabase, workerToken?: string) {
   const insert = db.prepare(`INSERT INTO g2b_attachment_jobs(id,file,priority,mode) VALUES (?,?,?,?)
     ON CONFLICT(id) DO NOTHING`);
   const read = db.prepare(`SELECT j.status, j.priority, j.attempts, j.hash, j.error, j.mode,
@@ -52,6 +52,21 @@ export function openAttachmentQueue(db: G2bDatabase) {
     FROM g2b_attachment_jobs j LEFT JOIN g2b_attachment_pdf_results r ON r.id = j.pdf_result_id WHERE j.id = ?`);
   const findPdf = db.prepare("SELECT id FROM g2b_attachment_pdf_results WHERE hash = ? AND version = ?");
   const ownsJob = "id = ? AND token = ? AND status = 'running' AND expires_at > unixepoch()";
+  async function verifyWorker() {
+    if (!await db.prepare(`SELECT 1 FROM g2b_attachment_dispatch WHERE id = 1 AND worker_token = ?
+      AND worker_expires_at > unixepoch()`).get(workerToken!)) {
+      throw new Error("첨부 워커 실행권이 만료되었거나 교체되었습니다.");
+    }
+  }
+  // 실행권 판정과 큐 변경을 같은 쓰기 트랜잭션에 묶어 이전 워커의 결과를 차단한다.
+  function workerTransaction<T>(work: () => Promise<T>) {
+    return db.transaction(async () => {
+      if (workerToken) await verifyWorker();
+      const result = await work();
+      if (workerToken) await verifyWorker();
+      return result;
+    });
+  }
   return {
     /**
      * 수동 PDF 요청은 이전 해시 확인 작업도 추출로 승격하며 저장된 결과를 재사용한다.
@@ -100,7 +115,7 @@ export function openAttachmentQueue(db: G2bDatabase) {
     },
     /** 현재 이벤트의 삭제와 등록을 함께 확정한다. 이미 처리된 시도는 false를 반환한다. */
     consume(event: AttachmentEvent, files: AttachmentJobFile[]) {
-      return db.transaction(async () => {
+      return workerTransaction(async () => {
         const deleted = await db.prepare(`DELETE FROM g2b_attachment_events WHERE ${currentEvent}`)
           .run(event.id, event.failures, event.generation);
         if (!deleted.rowsAffected) return false;
@@ -113,10 +128,10 @@ export function openAttachmentQueue(db: G2bDatabase) {
     /** 최신 시도만 지연하거나 최종 실패로 기록한다. 다른 워커에서 처리했다면 결과가 없다. */
     async failEvent(event: AttachmentEvent, error: string) {
       const retry = ATTACHMENT_EVENT_RETRY_SECONDS[event.failures];
-      return db.prepare(`UPDATE g2b_attachment_events SET failures = failures + 1, error = ?,
+      return workerTransaction(() => db.prepare(`UPDATE g2b_attachment_events SET failures = failures + 1, error = ?,
         available_at = unixepoch() + ?, failed_at = CASE WHEN ? THEN unixepoch() END
         WHERE ${currentEvent} RETURNING failures, available_at AS retryAt, failed_at AS failedAt`)
-        .get(error.slice(0, 300), retry ?? 0, Number(retry === undefined), event.id, event.failures, event.generation);
+        .get(error.slice(0, 300), retry ?? 0, Number(retry === undefined), event.id, event.failures, event.generation));
     },
     /** 만료·재시도 대기를 회수하고 수동 우선, 등록 순으로 한 파일을 원자적으로 선점한다. */
     async claim(): Promise<Claim | undefined> {
@@ -127,7 +142,7 @@ export function openAttachmentQueue(db: G2bDatabase) {
         EXISTS (SELECT 1 FROM g2b_attachment_jobs WHERE status = 'running' AND expires_at <= unixepoch())`).get();
       if (!ready) return;
       const token = randomUUID();
-      return db.transaction(async () => {
+      return workerTransaction(async () => {
         await db.prepare(`UPDATE g2b_attachment_jobs SET status = 'pending'
           WHERE status = 'retry_wait' AND available_at <= unixepoch()`).run();
         await db.prepare(`UPDATE g2b_attachment_jobs
@@ -143,13 +158,13 @@ export function openAttachmentQueue(db: G2bDatabase) {
     },
     /** DB 시각 기준으로 유효한 동일 토큰만 선점을 연장한다. */
     async renew(claim: Claim) {
-      return Boolean((await db.prepare(`UPDATE g2b_attachment_jobs SET expires_at = unixepoch() + ${ATTACHMENT_LEASE_SECONDS}
+      return workerTransaction(async () => Boolean((await db.prepare(`UPDATE g2b_attachment_jobs SET expires_at = unixepoch() + ${ATTACHMENT_LEASE_SECONDS}
         WHERE id = ? AND token = ? AND status = 'running' AND expires_at > unixepoch()`)
-        .run(claim.file.id, claim.token)).rowsAffected);
+        .run(claim.file.id, claim.token)).rowsAffected));
     },
     /** 현재 실행권의 결과만 저장하고 PDF 결과와 첨부 완료를 같은 트랜잭션에서 확정한다. */
     async finish(claim: Claim, outcome: Outcome) {
-      return db.transaction(async () => {
+      return workerTransaction(async () => {
         const key = [claim.file.id, claim.token] as const;
         const job = await db.prepare(`SELECT mode FROM g2b_attachment_jobs WHERE ${ownsJob}`).get(...key);
         if (!job) return false;

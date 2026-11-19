@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const { getG2bDatabase } = require('../src/server/g2b/repository');
 const { migrateG2bDatabase } = require('../src/server/g2b/repository/migrations');
 const { openAttachmentDispatch } = require('../src/server/g2b/repository/attachment-dispatch');
+const { openAttachmentQueue } = require('../src/server/g2b/repository/attachment-queue');
+const { dispatchPendingAttachments } = require('../src/features/download-g2b-attachment/server/attachment-actions');
 const { POST } = require('../app/api/g2b/attachment-queue/tick/route');
 
 test('복구 호출은 실행 가능 이벤트만 예약하고 중복 호출과 GitHub 실패를 처리한다', async (t) => {
@@ -37,7 +39,8 @@ test('복구 호출은 실행 가능 이벤트만 예약하고 중복 호출과 
     await db.client.execute('UPDATE g2b_attachment_events SET available_at = 0');
     assert.equal((await POST(request())).status, 503);
     fail = false;
-    const outcomes = await Promise.all([POST(request()), POST(request()), POST(request())]);
+    const trigger = async () => ({ status: await dispatchPendingAttachments() ? 202 : 204 });
+    const outcomes = await Promise.all([trigger(), trigger(), POST(request())]);
     assert.deepEqual(outcomes.map(({ status }) => status).sort(), [202, 204, 204]);
     assert.equal(fetcher.mock.callCount(), 2);
     assert.equal((await POST(request())).status, 204);
@@ -52,8 +55,30 @@ test('복구 호출은 실행 가능 이벤트만 예약하고 중복 호출과 
     const old = await reservation.reserve();
     await db.client.execute('UPDATE g2b_attachment_dispatch SET expires_at = 0');
     const current = await reservation.reserve();
-    await reservation.finish(old, false);
+    await reservation.releaseReservation(old);
     assert.equal((await db.client.execute('SELECT token FROM g2b_attachment_dispatch')).rows[0].token, current);
+    assert.equal(await reservation.acquireWorker(old), undefined);
+    assert.equal(await reservation.acquireWorker(), undefined);
+    const lease = await reservation.acquireWorker(current);
+    assert.ok(lease);
+    await db.client.execute('UPDATE g2b_attachment_dispatch SET worker_expires_at = unixepoch() + 29');
+    assert.equal(await reservation.reserve(), undefined);
+    assert.equal(await lease.renew(), true);
+    const queue = openAttachmentQueue(db, lease.token);
+    await queue.enqueue({ id: 'test', filename: 'test.xlsx' }, true);
+    const claim = await queue.claim();
+    assert.ok(claim);
+    await db.client.execute('UPDATE g2b_attachment_dispatch SET worker_expires_at = 0');
+    const recovery = await reservation.reserve();
+    assert.ok(recovery);
+    const replacement = await reservation.acquireWorker(recovery);
+    assert.ok(replacement);
+    await assert.rejects(queue.finish(claim, { hash: 'stale' }), /실행권/);
+    await assert.rejects(queue.renew(claim), /실행권/);
+    await lease.release();
+    assert.equal(await reservation.reserve(), undefined);
+    await replacement.release();
+    assert.ok(await reservation.reserve());
   } finally {
     db.client.close();
   }

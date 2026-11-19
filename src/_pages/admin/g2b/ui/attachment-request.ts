@@ -2,7 +2,7 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getG2bDatabase } from "@/server/g2b/repository";
-import { dispatchG2bWorkflow } from "@/server/g2b/github-workflow";
+import { dispatchPendingAttachments } from "@/features/download-g2b-attachment/server/attachment-actions";
 import { openAttachmentQueue, type AttachmentOwner } from "@/server/g2b/repository/attachment-queue";
 import { listAttachmentJobs, preferredPdfFiles } from "@/features/download-g2b-attachment/server/attachment-catalog";
 import { decodeHTMLStrict } from "entities";
@@ -34,7 +34,7 @@ export async function requestAttachment(owner: AttachmentOwner, id: string, _pre
     if (job?.status === "running") return job.mode === "pdf_extract" ? "추출 요청 반영 · 처리 중" : "다운로드 처리 중";
     if (result?.shouldDispatch && process.env.ATTACHMENT_WORKER_MODE === "github-actions") {
       try {
-        await dispatchG2bWorkflow("attachment-processing.yml");
+        await dispatchPendingAttachments();
       } catch (error) {
         // 접수는 이미 확정됐다. 호출에 실패한 작업은 다음 예약 실행에서 처리한다.
         console.error("[첨부 워커 실행 요청]", error);

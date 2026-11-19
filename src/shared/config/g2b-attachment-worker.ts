@@ -3,7 +3,7 @@ export const ATTACHMENT_ADMISSION_TIMEOUT_MS = 120_000;
 // 상시 워커의 유휴 조회 간격으로, 큐가 비었을 때 DB 조회 빈도를 제한한다.
 export const ATTACHMENT_IDLE_POLL_MS = 5_000;
 // 수집 진행 호출과 외부 복구 호출이 같은 워크플로 실행을 반복 요청하지 않게 한다.
-export const ATTACHMENT_DISPATCH_WINDOW_SECONDS = 60;
+export const ATTACHMENT_DISPATCH_WINDOW_SECONDS = 600;
 
 // 메타데이터 조회는 개별 요청에 적용하고, 다운로드 제한은 주소 확인과 본문 수신을 포함한다.
 export const ATTACHMENT_METADATA_TIMEOUT_MS = 15_000;

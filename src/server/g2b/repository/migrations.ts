@@ -460,6 +460,16 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (15);
       `);
     }
+    const attachmentWorkerLease = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 16");
+    if (!attachmentWorkerLease.rows.length) {
+      // 작업별 선점과 별도로 러너 시작 대기 및 워커 전체의 소유권을 관리한다.
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_attachment_dispatch ADD COLUMN worker_token TEXT;
+        ALTER TABLE g2b_attachment_dispatch ADD COLUMN worker_expires_at INTEGER NOT NULL DEFAULT 0;
+        UPDATE g2b_attachment_dispatch SET token = NULL, expires_at = 0 WHERE id = 1;
+        INSERT INTO g2b_schema_migrations (version) VALUES (16);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

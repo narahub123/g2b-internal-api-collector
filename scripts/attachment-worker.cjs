@@ -11,7 +11,10 @@ process.once('SIGTERM', () => stop.abort());
 async function main() {
   const { client } = getG2bDatabase();
   try {
-    await runAttachmentWorker(stop.signal, { once: process.argv.includes('--once') });
+    await runAttachmentWorker(stop.signal, {
+      once: process.argv.includes('--once'),
+      reservation: process.env.ATTACHMENT_RESERVATION_TOKEN || undefined,
+    });
   } finally {
     client.close();
   }

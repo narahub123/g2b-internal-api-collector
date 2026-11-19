@@ -2,6 +2,11 @@ name: 첨부 처리
 
 on:
   workflow_dispatch:
+    inputs:
+      reservation_token:
+        description: 자동 호출 예약 토큰 (직접 실행 시 비워 둠)
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -33,9 +38,10 @@ jobs:
       - name: 첨부 큐 처리
         run: >-
           docker run --rm --init --memory "$ATTACHMENT_DOCKER_MEMORY" --cpus "$ATTACHMENT_DOCKER_CPUS"
-          -e TURSO_DATABASE_URL -e TURSO_AUTH_TOKEN
+          -e TURSO_DATABASE_URL -e TURSO_AUTH_TOKEN -e ATTACHMENT_RESERVATION_TOKEN
           g2b-attachment-worker:run node scripts/attachment-worker.cjs --once
         env:
+          ATTACHMENT_RESERVATION_TOKEN: ${{ inputs.reservation_token }}
           # 컨테이너 한도는 상시 워커의 compose.attachments.yaml에도 정의한다.
           ATTACHMENT_DOCKER_MEMORY: "512m"
           ATTACHMENT_DOCKER_CPUS: "0.5"

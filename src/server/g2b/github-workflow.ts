@@ -12,7 +12,7 @@ export async function dispatchG2bWorkflow(workflow: G2bWorkflow, target: Workflo
   repository: process.env.NOTICE_GITHUB_REPOSITORY,
   ref: process.env.NOTICE_GITHUB_REF,
   credential: process.env.NOTICE_GITHUB_TOKEN,
-}) {
+}, inputs?: Record<string, string | boolean>) {
   const repository = target.repository?.trim();
   const ref = target.ref?.trim();
   const credential = target.credential?.trim();
@@ -28,7 +28,7 @@ export async function dispatchG2bWorkflow(workflow: G2bWorkflow, target: Workflo
       "Content-Type": "application/json",
       "X-GitHub-Api-Version": "2026-03-10",
     },
-    body: JSON.stringify({ ref }),
+    body: JSON.stringify({ ref, inputs }),
     signal: AbortSignal.timeout(WORKFLOW_DISPATCH_TIMEOUT_MS),
     redirect: "error",
   });

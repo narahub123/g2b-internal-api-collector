@@ -42,7 +42,7 @@ PDF 원본은 임시 파일로만 사용합니다. 동일한 SHA-256과 추출�
 
 #### GitHub Actions로 원격 실행
 
-1. 운영 Turso에 `npm run db:migrate`로 마이그레이션 15를 먼저 적용합니다. 상시 첨부 워커를 중지하고 기본 브랜치에 웹과 워크플로 변경을 배포합니다. GitHub Environment `attachment-processing`의 Turso 시크릿이 웹·공고 수집과 같은 DB를 가리키고, 기본 브랜치의 실행을 승인 대기 없이 허용하는지 확인합니다.
+1. 운영 Turso에 `npm run db:migrate`로 마이그레이션 16을 먼저 적용합니다. 기존 첨부 워커와 첨부 Actions 실행이 끝난 뒤 기본 브랜치에 웹과 워크플로 변경을 배포합니다. GitHub Environment `attachment-processing`의 Turso 시크릿이 웹·공고 수집과 같은 DB를 가리키고, 기본 브랜치의 실행을 승인 대기 없이 허용하는지 확인합니다.
 2. 기본 브랜치의 공고 수집 Actions는 공고 한 건의 성공을 기록하면 내장 GitHub 토큰으로 첨부 처리 Actions를 호출합니다. Vercel의 관리자 수동 요청과 복구 호출은 `ATTACHMENT_WORKER_MODE=github-actions` 및 기존 `NOTICE_GITHUB_REPOSITORY`, `NOTICE_GITHUB_REF`, `NOTICE_GITHUB_TOKEN`을 사용합니다.
 3. cron-job.org에 기존 공고 수집 작업과 별도로 **매분** 실행하는 HTTPS `POST /api/g2b/attachment-queue/tick`을 등록합니다. 요청 헤더는 기존 공고 수집 작업과 같은 `Authorization: Bearer <NOTICE_CRON_TOKEN>`입니다. 응답은 실행 접수 202, 빈 큐 또는 예약 중 204, 인증 실패 401, 설정이나 호출 오류 503입니다. GitHub 자체 예약 실행은 사용하지 않습니다.
 4. 여러 공고를 수집하면서 첫 성공 뒤 별도 첨부 Actions가 시작되는지 확인합니다. 관리자 수동 요청과 외부 복구도 각각 확인합니다. 초기 운영에서 시작 지연, 실패율, Actions 사용량과 Turso의 평균 Rows Read 및 실행 횟수를 비교합니다.
@@ -91,4 +91,4 @@ npm exec -- postman --version
 2. 테스트 웹 서버에 `NOTICE_WORKER_MODE=github-actions`, `NOTICE_GITHUB_REPOSITORY`(소유자/저장소), `NOTICE_GITHUB_REF`(실행할 브랜치 또는 태그), `NOTICE_GITHUB_TOKEN`(대상 저장소 Actions 쓰기 권한), `NOTICE_CRON_TOKEN`(정기 호출 전용 비밀값)을 설정합니다. 로컬 상시 워커를 함께 실행할 경우 기존 워커가 실행권을 계속 사용하므로 Actions 경로를 검증할 때에는 테스트용 상시 워커를 종료합니다.
 3. 배포 환경에서 관리자 화면과 쓰기 API를 인증으로 보호합니다. HTTPS의 `POST /api/g2b/notice-queue/tick` 경로만 정기 호출에 허용하고 애플리케이션의 전용 토큰 검증을 사용합니다. cron-job.org에서 매분 POST와 `Authorization: Bearer <NOTICE_CRON_TOKEN>` 헤더를 설정합니다. 응답은 호출을 요청했으면 202, 실행할 작업이 없거나 이미 예약됐으면 204, 인증 실패 시 401, 호출 오류 시 503입니다.
 4. 테스트 화면에서 수동 수집과 자동 수집 시작·재개를 요청하고 워크플로 실행 및 Turso 저장을 확인합니다. Actions 호출이 실패해도 큐 접수는 유지됩니다. 다음 정기 호출은 실행 가능한 작업을 재확인하고, 러너가 시작하지 않은 예약은 3분 후 만료됩니다.
-5. 기록 정리는 워크플로 수동 실행의 기본값인 `dry_run`으로 먼저 확인합니다. 저장소 변수 `NOTICE_ACTIONS_CLEANUP_ENABLED=true`를 설정하면 매시간 성공 실행을 정리합니다. 공고 수집 워크플로에서 완료 후 24시간 지난 성공 실행의 전체 기록을 대상으로 하며, 실패한 시도를 포함한 실행은 보존합니다.
+5. **공고·첨부 실행 기록 정리**를 `dry_run=true`로 수동 실행해 누적 삭제 후보를 확인합니다. 실제 예약 정리를 활성화하려면 GitHub **Settings → Secrets and variables → Actions → Variables**의 **Repository variables**에 `NOTICE_ACTIONS_CLEANUP_ENABLED=true`를 등록합니다. GitHub가 매시간 17분에 실행을 요청합니다. 두 워크플로의 완료 후 24시간 지난 성공 실행만 정리하며 이전 시도에 실패가 있었던 실행과 실패·취소 기록은 보존합니다.

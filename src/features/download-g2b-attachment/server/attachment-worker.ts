@@ -3,6 +3,7 @@ import { open } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { getG2bDatabase } from "@/server/g2b/repository";
 import { openAttachmentQueue } from "@/server/g2b/repository/attachment-queue";
+import { openAttachmentDispatch } from "@/server/g2b/repository/attachment-dispatch";
 import {
   ATTACHMENT_ADMISSION_TIMEOUT_MS,
   ATTACHMENT_DOWNLOAD_TIMEOUT_MS,
@@ -140,15 +141,42 @@ async function processClaim(queue: Queue, claim: Claim, stopping: AbortSignal) {
 /**
  * 수집 완료 이벤트와 첨부 큐를 독립적으로 처리한다.
  * 중단 시 신규 선점을 멈추고 진행 중인 다운로드·추출 및 임시 원본 정리를 마친다.
- * @param options 일회 실행에서는 큐가 비거나 신규 선점 시간 한도에 도달하면 종료한다.
- * @throws 시작 시 임시 파일을 점검할 수 없거나 일회 실행 중 큐 접근이 실패한 경우.
+ * @param options 예약 실행은 전달된 토큰을 소비하며 일회 실행은 큐가 비면 종료한다.
+ * @throws 실행권 갱신이나 큐 접근에 실패한 경우.
  */
-export async function runAttachmentWorker(stopping: AbortSignal, options: { once?: boolean } = {}) {
+export async function runAttachmentWorker(stopping: AbortSignal, options: { once?: boolean; reservation?: string } = {}) {
+  if (stopping.aborted) return;
+  const db = getG2bDatabase();
+  const lease = await openAttachmentDispatch(db).acquireWorker(options.reservation);
+  if (!lease) return;
+  const heartbeat = new AbortController();
+  const lost = new AbortController();
+  // 파일이 없거나 목록을 확인 중일 때도 워커 전체 실행권을 유지한다.
+  const renewal = (async () => {
+    try {
+      while (!heartbeat.signal.aborted) {
+        await delay(ATTACHMENT_LEASE_RENEWAL_MS, undefined, { signal: heartbeat.signal });
+        if (!await lease.renew()) throw new Error("첨부 워커 실행권을 잃었습니다.");
+      }
+    } catch (error) {
+      if (!heartbeat.signal.aborted) lost.abort(error);
+    }
+  })();
+  try {
+    await cleanAbandonedPdfs();
+    await drainAttachmentQueue(openAttachmentQueue(db, lease.token), AbortSignal.any([stopping, lost.signal]), Boolean(options.once));
+    lost.signal.throwIfAborted();
+  } finally {
+    heartbeat.abort();
+    await renewal;
+    await lease.release();
+  }
+}
+
+async function drainAttachmentQueue(queue: Queue, stopping: AbortSignal, once: boolean) {
   // 시간 한도는 새 작업을 받는 데만 적용한다. 다운로드·추출의 취소 신호와 분리한다.
-  const deadline = options.once ? performance.now() + ATTACHMENT_ADMISSION_TIMEOUT_MS : Infinity;
+  const deadline = once ? performance.now() + ATTACHMENT_ADMISSION_TIMEOUT_MS : Infinity;
   const canStart = () => !stopping.aborted && performance.now() < deadline;
-  await cleanAbandonedPdfs();
-  const queue = openAttachmentQueue(getG2bDatabase());
   while (canStart()) {
     try {
       const event = await queue.event();
@@ -168,7 +196,7 @@ export async function runAttachmentWorker(stopping: AbortSignal, options: { once
               error: message.slice(0, 300),
             });
           } catch (writeError) {
-            if (options.once) throw writeError;
+            if (once) throw writeError;
             console.error("[첨부 자동 등록 실패 기록]", event.id, writeError);
             // DB가 실패 상태를 기록할 수 없으면 같은 이벤트의 즉시 재조회를 피한다.
             eventAdvanced = false;
@@ -183,10 +211,10 @@ export async function runAttachmentWorker(stopping: AbortSignal, options: { once
       }
       if (eventAdvanced) continue;
     } catch (error) {
-      if (options.once) throw error;
+      if (once) throw error;
       console.error("[첨부 워커]", error);
     }
-    if (options.once) return;
+    if (once) return;
     await delay(ATTACHMENT_IDLE_POLL_MS, undefined, { signal: stopping }).catch(() => {});
   }
 }

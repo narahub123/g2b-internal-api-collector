@@ -16,11 +16,11 @@ async function main() {
     // 같은 저장소의 main에서만 Actions 실행 토큰을 사용한다.
     const onCollected = process.env.GITHUB_ACTIONS === 'true' && process.env.GITHUB_REF === 'refs/heads/main' &&
       process.env.ATTACHMENT_PROGRESS_GITHUB_TOKEN
-      ? () => dispatchPendingAttachments(() => dispatchG2bWorkflow('attachment-processing.yml', {
+      ? () => dispatchPendingAttachments((token) => dispatchG2bWorkflow('attachment-processing.yml', {
           repository: process.env.GITHUB_REPOSITORY,
           ref: 'main',
           credential: process.env.ATTACHMENT_PROGRESS_GITHUB_TOKEN,
-        }))
+        }, { reservation_token: token }))
       : undefined;
     await runNoticeWorker(stop.signal, undefined, undefined, { once: process.argv.includes('--once'), onCollected });
   } finally {

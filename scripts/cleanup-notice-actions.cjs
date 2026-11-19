@@ -1,18 +1,23 @@
+// 공고와 첨부의 성공 기록에 같은 보존 기간을 적용한다.
 const retentionMs = 24 * 60 * 60_000;
-const workflowRuns = '/actions/workflows/notice-collection.yml/runs';
+const workflowPaths = [
+  '/actions/workflows/notice-collection.yml/runs',
+  '/actions/workflows/attachment-processing.yml/runs',
+];
 
 function expiredSuccess(run, cutoff) {
   return run?.status === 'completed' && run.conclusion === 'success' && Date.parse(run.updated_at) <= cutoff;
 }
 
 /**
- * 공고 수집 워크플로만 조회하고 24시간 지난 성공 실행 전체를 삭제한다.
+ * 허용된 큐 워크플로 하나에서 24시간이 지난 성공 실행을 정리한다.
  * 이전 시도가 실패했거나 삭제 직전 실행 상태가 바뀌었으면 보존한다.
  * @param request 저장소 범위의 GitHub 요청 함수. 목록 요청은 페이지와 다음 페이지 여부를 반환한다.
+ * @param workflowRuns 공고 또는 첨부 워크플로의 실행 목록 경로.
  * @returns 삭제한 실행 ID. 미리보기에서는 삭제 대상 ID.
  * @throws GitHub 조회나 삭제가 실패하여 정리 결과를 확정하지 못한 경우.
  */
-async function cleanupNoticeRuns(request, now = Date.now(), dryRun = false) {
+async function cleanupWorkflowRuns(request, workflowRuns, now, dryRun) {
   const cutoff = now - retentionMs;
   const created = encodeURIComponent(`<=${new Date(cutoff).toISOString()}`);
   const candidates = new Set();
@@ -39,7 +44,7 @@ async function cleanupNoticeRuns(request, now = Date.now(), dryRun = false) {
       }
     }
     if (!allSucceeded) continue;
-    if (run.run_attempt > 1) {
+    if (!dryRun || run.run_attempt > 1) {
       const current = await request(path);
       if (!expiredSuccess(current, cutoff) || current.run_attempt !== run.run_attempt) continue;
     }
@@ -47,6 +52,20 @@ async function cleanupNoticeRuns(request, now = Date.now(), dryRun = false) {
     selected.push(id);
   }
   return selected;
+}
+
+/** 공고와 첨부를 각각 정리하며 한쪽이 실패해도 다른 쪽은 시도한 뒤 전체 실패를 보고한다. */
+async function cleanupQueueRuns(request, now, dryRun, report = console.log) {
+  const errors = [];
+  for (const path of workflowPaths) {
+    try {
+      const runs = await cleanupWorkflowRuns(request, path, now, dryRun);
+      report(`${path} · ${dryRun ? '삭제 대상' : '삭제 완료'} ${runs.length}건 · ${runs.join(', ')}`);
+    } catch (error) {
+      errors.push(`${path} · ${error.message}`);
+    }
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
 }
 
 async function main() {
@@ -66,19 +85,19 @@ async function main() {
       signal: AbortSignal.timeout(15_000),
       redirect: 'error',
     });
-    if (response.status === 404 && !path.startsWith(workflowRuns)) return null;
+    const isList = workflowPaths.some((workflow) => path.startsWith(`${workflow}?`));
+    if (response.status === 404 && !isList) return null;
     if (!response.ok) throw new Error(`GitHub ${method} ${path} 실패 (HTTP ${response.status})`);
     if (method === 'DELETE') return;
     const body = await response.json();
-    if (path.startsWith(workflowRuns)) {
+    if (isList) {
       return { runs: body.workflow_runs, next: /rel="next"/.test(response.headers.get('Link') ?? '') };
     }
     return body;
   }
 
-  const runs = await cleanupNoticeRuns(request, Date.now(), dryRun);
-  console.log(`${dryRun ? '삭제 대상' : '삭제 완료'} ${runs.length}건: ${runs.join(', ')}`);
+  await cleanupQueueRuns(request, Date.now(), dryRun);
 }
 
-module.exports = { cleanupNoticeRuns };
+module.exports = { cleanupQueueRuns };
 if (require.main === module) main().catch((error) => { console.error(error.message); process.exitCode = 1; });
