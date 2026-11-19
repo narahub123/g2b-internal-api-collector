@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
+import { open } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { getG2bDatabase } from "@/server/g2b/repository";
 import { openAttachmentQueue } from "@/server/g2b/repository/attachment-queue";
 import { listAttachmentJobs, preferredPdfFiles } from "./attachment-catalog";
+import { PDF_EXTRACTOR_VERSION, PDF_MAX_BYTES } from "@/shared/model/g2b/attachment-pdf";
+import { cleanAbandonedPdfs, extractPdfProcess, PermanentPdfError, removeTemporaryPdf, temporaryPdfPath } from "./pdf-process";
 
 /** 형식별 추출기는 임시 원본을 읽어 영구 저장 가능한 결과를 반환한다. */
 export type AttachmentExtractor = (input: {
@@ -17,21 +20,32 @@ type Claim = NonNullable<Awaited<ReturnType<Queue["claim"]>>>;
 
 class PermanentDownloadError extends Error {}
 
-/** 원본을 저장하지 않고 응답 전체를 읽어 해시를 반환하며, 실패나 중단은 호출자에 전달한다. */
-export async function hashAttachmentBody(body: ReadableStream<Uint8Array>, signal: AbortSignal, expectedBytes?: number) {
+/**
+ * 응답을 한 번 읽어 원본 전체의 SHA-256을 계산하고, 추출이 필요한 PDF만 임시 파일에 쓴다.
+ * @param signal 다운로드 중단 신호. 중단 시 스트림과 파일 핸들을 닫는다.
+ * @param expectedBytes 목록에 저장된 크기. 값이 있으면 잘린 응답을 거부한다.
+ * @param pdfPath 추출에 사용할 임시 경로. 호출자가 작업 종료 후 파일을 제거한다.
+ * @throws 중단, 읽기·쓰기 실패 또는 파일 크기 검증 실패를 전달한다.
+ */
+export async function hashAttachmentBody(body: ReadableStream<Uint8Array>, signal: AbortSignal,
+  expectedBytes?: number, pdfPath?: string) {
   const hash = createHash("sha256");
   const reader = body.getReader();
   const abort = () => { void reader.cancel(signal.reason).catch(() => {}); };
   signal.addEventListener("abort", abort, { once: true });
   let bytes = 0;
+  let temporaryFile: Awaited<ReturnType<typeof open>> | undefined;
   try {
     signal.throwIfAborted();
+    if (pdfPath) temporaryFile = await open(pdfPath, "wx", 0o600);
     while (true) {
       const { done, value } = await reader.read();
       signal.throwIfAborted();
       if (done) break;
-      hash.update(value);
       bytes += value.byteLength;
+      if (pdfPath && bytes > PDF_MAX_BYTES) throw new PermanentPdfError("PDF가 50 MiB 제한을 초과했습니다.");
+      hash.update(value);
+      if (temporaryFile) await temporaryFile.writeFile(value);
     }
     if (expectedBytes !== undefined && bytes !== expectedBytes) throw new Error("첨부 원본 크기가 목록과 다릅니다.");
     return hash.digest("hex");
@@ -39,13 +53,17 @@ export async function hashAttachmentBody(body: ReadableStream<Uint8Array>, signa
     signal.removeEventListener("abort", abort);
     await reader.cancel().catch(() => {});
     reader.releaseLock();
+    await temporaryFile?.close();
   }
 }
 
 async function processClaim(queue: Queue, claim: Claim, stopping: AbortSignal) {
   const heartbeat = new AbortController();
   const lost = new AbortController();
-  const signal = AbortSignal.any([stopping, lost.signal, AbortSignal.timeout(600_000)]);
+  // 다운로드 제한은 네트워크 단계에만 적용하고 자식 추출은 자체 제한을 적용한다.
+  const lifecycle = AbortSignal.any([stopping, lost.signal]);
+  const signal = AbortSignal.any([lifecycle, AbortSignal.timeout(600_000)]);
+  const pdfPath = claim.mode === "pdf_extract" ? temporaryPdfPath() : undefined;
   const renewal = (async () => {
     try {
       while (!heartbeat.signal.aborted) {
@@ -65,6 +83,9 @@ async function processClaim(queue: Queue, claim: Claim, stopping: AbortSignal) {
       const files = await listAttachmentJobs(claim.file.owner);
       const file = files.find(({ id }) => id === claim.file.id);
       if (!file || preferredPdfFiles(file, files).length) throw new PermanentDownloadError("현재 처리 가능한 첨부가 아닙니다.");
+      if (pdfPath && file.bytes !== undefined && file.bytes > PDF_MAX_BYTES) {
+        throw new PermanentPdfError("PDF가 50 MiB 제한을 초과했습니다.");
+      }
       signal.throwIfAborted();
       const url = await file.resolve(signal);
       signal.throwIfAborted();
@@ -77,22 +98,46 @@ async function processClaim(queue: Queue, claim: Claim, stopping: AbortSignal) {
         if ([401, 403, 404, 410].includes(response.status)) throw new PermanentDownloadError("첨부 다운로드가 허용되지 않습니다.");
         throw new Error(`첨부 원본 응답을 확인할 수 없습니다 (HTTP ${response.status}).`);
       }
-      outcome = { hash: await hashAttachmentBody(response.body, signal, file.bytes) };
+      const hash = await hashAttachmentBody(response.body, signal, file.bytes, pdfPath);
+      if (pdfPath) {
+        lifecycle.throwIfAborted();
+        // 다운로드한 실제 바이트의 해시가 같은 경우에만 이 버전의 추출 결과를 재사용한다.
+        const pdf = await queue.hasPdf(hash)
+          ? { version: PDF_EXTRACTOR_VERSION }
+          : await extractPdfProcess(pdfPath, lifecycle);
+        lifecycle.throwIfAborted();
+        outcome = { hash, pdf };
+      } else {
+        outcome = { hash };
+      }
     } catch (error) {
       outcome = {
-        error: error instanceof Error ? error.message.slice(0, 300) : "첨부 다운로드 실패",
-        retry: !(error instanceof PermanentDownloadError),
+        error: error instanceof Error ? error.message.slice(0, 300) : "첨부 처리 실패",
+        retry: !(error instanceof PermanentDownloadError || error instanceof PermanentPdfError),
       };
     }
-    if (!lost.signal.aborted) await queue.finish(claim, outcome);
+    if (!lost.signal.aborted) {
+      try {
+        await queue.finish(claim, outcome);
+      } catch (error) {
+        if (!lost.signal.aborted) await queue.finish(claim, { error: "첨부 결과 저장 실패", retry: true });
+        console.error("[첨부 결과 저장]", claim.file.id, error);
+      }
+    }
   } finally {
     heartbeat.abort();
     await renewal;
+    if (pdfPath) await removeTemporaryPdf(pdfPath);
   }
 }
 
-/** 첨부 큐를 직렬로 처리하며 중단 요청 시 진행 중인 다운로드를 취소한다. */
+/**
+ * 수집 완료 이벤트와 첨부 큐를 독립적으로 처리한다.
+ * 중단 시 신규 선점을 멈추고 진행 중인 다운로드·추출 및 임시 원본 정리를 마친다.
+ * @throws 시작 시 임시 파일을 점검할 수 없으면 워커 시작 실패를 전달한다.
+ */
 export async function runAttachmentWorker(stopping: AbortSignal) {
+  await cleanAbandonedPdfs();
   const queue = openAttachmentQueue(getG2bDatabase());
   while (!stopping.aborted) {
     try {

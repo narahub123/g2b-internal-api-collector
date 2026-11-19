@@ -7,13 +7,81 @@ const { migrateG2bDatabase } = require('../src/server/g2b/repository/migrations'
 const { openAttachmentQueue } = require('../src/server/g2b/repository/attachment-queue');
 const { listAttachmentJobs, preferredPdfFiles } = require('../src/features/download-g2b-attachment/server/attachment-catalog');
 const { hashAttachmentBody } = require('../src/features/download-g2b-attachment/server/attachment-worker');
+const { PDF_EXTRACTOR_VERSION } = require('../src/shared/model/g2b/attachment-pdf');
+
+test('마이그레이션 14는 배포 전 모든 PDF 상태에서 해시 처리 모드를 유지한다', async () => {
+  const client = createClient({ url: ':memory:' });
+  try {
+    await migrateG2bDatabase(client);
+    await client.executeMultiple(`
+      ALTER TABLE g2b_attachment_jobs DROP COLUMN pdf_result_id;
+      ALTER TABLE g2b_attachment_jobs DROP COLUMN mode;
+      DROP TABLE g2b_attachment_pdf_pages;
+      DROP TABLE g2b_attachment_pdf_results;
+      DELETE FROM g2b_schema_migrations WHERE version = 14;
+      INSERT INTO g2b_attachment_jobs(id,file,priority,status) VALUES
+        ('a','{"filename":"a.pdf"}',0,'pending'),
+        ('b','{"filename":"b.pdf"}',1,'running'),
+        ('c','{"filename":"c.pdf"}',0,'retry_wait'),
+        ('d','{"filename":"d.pdf"}',1,'succeeded');
+    `);
+    await migrateG2bDatabase(client);
+    const { rows } = await client.execute('SELECT status, mode, pdf_result_id FROM g2b_attachment_jobs ORDER BY id');
+    assert.deepEqual(rows.map((row) => row.status), ['pending', 'running', 'retry_wait', 'succeeded']);
+    assert.ok(rows.every((row) => row.mode === 'hash_only' && row.pdf_result_id === null));
+  } finally {
+    client.close();
+  }
+});
+
+test('기존 PDF는 자동 인계에서 처리 모드를 보존하고 실행 중 수동 요청은 완료 후 이어진다', async () => {
+  const client = createClient({ url: ':memory:' });
+  try {
+    await migrateG2bDatabase(client);
+    const queue = openAttachmentQueue(new G2bDatabase(client));
+    const old = { id: 'old', filename: 'old.pdf' };
+    const fresh = { id: 'fresh', filename: 'fresh.PDF' };
+    await client.execute({ sql: 'INSERT INTO g2b_attachment_jobs(id,file,priority) VALUES (?,?,0)', args: [old.id, JSON.stringify(old)] });
+    await client.execute("INSERT INTO g2b_attachment_events(section,number,revision,completion_id) VALUES ('notices','A','000',1)");
+    await queue.consume(await queue.event(), [old, fresh]);
+    const legacy = await queue.claim();
+    assert.equal(legacy.mode, 'hash_only');
+    await queue.enqueue(old, true);
+    assert.equal((await queue.status(old.id)).status, 'running');
+    assert.equal(await queue.finish(legacy, { hash: 'same' }), true);
+    const manual = await queue.claim();
+    assert.equal(manual.file.id, old.id);
+    assert.equal(manual.mode, 'pdf_extract');
+    const stale = { ...manual, token: legacy.token };
+    assert.equal(await queue.finish(stale, { hash: 'stale', pdf: {
+      version: PDF_EXTRACTOR_VERSION, pages: [{ pageNumber: 1, text: '미반영' }], characterCount: 3,
+    } }), false);
+    assert.equal(await queue.hasPdf('stale'), false);
+    await queue.finish(manual, { hash: 'same', pdf: { version: PDF_EXTRACTOR_VERSION, pages: [{ pageNumber: 1, text: '본문' }], characterCount: 2 } });
+    const automatic = await queue.claim();
+    assert.equal(automatic.mode, 'pdf_extract');
+    assert.equal(await queue.hasPdf('same'), true);
+    assert.equal(await queue.finish(automatic, { hash: 'same', pdf: { version: PDF_EXTRACTOR_VERSION } }), true);
+    assert.equal((await queue.status(old.id)).pdfResultId, (await queue.status(fresh.id)).pdfResultId);
+    assert.ok((await queue.status(old.id)).pdfResultId);
+    const legacyDone = { id: 'done', filename: 'done.pdf' };
+    await client.execute({ sql: "INSERT INTO g2b_attachment_jobs(id,file,priority,status,hash) VALUES (?,?,0,'succeeded','same')",
+      args: [legacyDone.id, JSON.stringify(legacyDone)] });
+    assert.equal((await queue.enqueue(legacyDone, true)).pdfResultId, (await queue.status(old.id)).pdfResultId);
+    assert.equal(await queue.claim(), undefined);
+    const lookup = await client.execute("EXPLAIN QUERY PLAN SELECT id FROM g2b_attachment_pdf_results WHERE hash = 'same' AND version = 'v1'");
+    assert.match(lookup.rows[0].detail, /SEARCH .* USING COVERING INDEX/);
+  } finally {
+    client.close();
+  }
+});
 
 test('수동 작업은 자동 작업보다 먼저 실행되고 만료된 실행권은 결과를 저장할 수 없다', async () => {
   const client = createClient({ url: ':memory:' });
   try {
     await migrateG2bDatabase(client);
     const queue = openAttachmentQueue(new G2bDatabase(client));
-    const file = { id: 'automatic', filename: 'a.pdf' };
+    const file = { id: 'automatic', filename: 'a.xlsx' };
     await queue.enqueue(file, false);
     await queue.enqueue({ ...file, id: 'manual' }, false);
     await queue.enqueue({ ...file, id: 'manual' }, true);
@@ -109,11 +177,11 @@ test('실패한 자동 등록을 건너뛰고 재시도를 소진한 이벤트�
     assert.equal(first.number, 'A');
     assert.equal((await queue.failEvent(first, '오류')).failures, 1);
     assert.equal(await queue.failEvent(first, '늦은 실패'), undefined);
-    assert.equal(await queue.consume(first, [{ id: 'stale' }]), false);
+    assert.equal(await queue.consume(first, [{ id: 'stale', filename: 'stale.pdf' }]), false);
     const next = await queue.event();
     assert.equal(next.number, 'B');
-    assert.equal(await queue.consume(next, [{ id: 'current' }]), true);
-    assert.equal(await queue.consume(next, [{ id: 'current' }]), false);
+    assert.equal(await queue.consume(next, [{ id: 'current', filename: 'current.pdf' }]), true);
+    assert.equal(await queue.consume(next, [{ id: 'current', filename: 'current.pdf' }]), false);
     assert.ok(await queue.status('current'));
     assert.equal(await queue.status('stale'), undefined);
     for (const [index, seconds] of [30, 60, 120].entries()) {

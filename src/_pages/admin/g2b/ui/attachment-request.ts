@@ -27,8 +27,9 @@ export async function requestAttachment(owner: AttachmentOwner, id: string, _pre
     const pdfs = preferredPdfFiles(file, files);
     if (pdfs.length) return `대응 PDF를 선택하세요. ${pdfs.map((pdf) => decodeHTMLStrict(pdf.filename)).join(", ")}`;
     const result = await openAttachmentQueue(getG2bDatabase()).enqueue(file, true);
+    if (result?.pdfResultId != null) return result.characterCount === 0 ? "텍스트 없음" : "PDF 추출 완료";
     if (result?.status === "succeeded") return `다운로드·해시 확인 완료 ${result.hash}`;
-    if (result?.status === "running") return "다운로드 처리 중";
+    if (result?.status === "running") return result.mode === "pdf_extract" ? "추출 요청 반영 · 처리 중" : "다운로드 처리 중";
     return "수동 처리 대기";
   } catch (error) {
     console.error("[첨부 수동 등록]", error);

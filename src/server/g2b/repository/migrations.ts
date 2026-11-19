@@ -432,6 +432,23 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (13);
       `);
     }
+    const pdfExtraction = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 14");
+    if (!pdfExtraction.rows.length) {
+      // 기존 작업의 상태와 무관하게 수동 요청 전까지 해시 처리 모드를 보존한다.
+      await transaction.executeMultiple(`
+        CREATE TABLE g2b_attachment_pdf_results (
+          id INTEGER PRIMARY KEY, hash TEXT NOT NULL, version TEXT NOT NULL,
+          page_count INTEGER NOT NULL, character_count INTEGER NOT NULL, UNIQUE(hash, version)
+        );
+        CREATE TABLE g2b_attachment_pdf_pages (
+          result_id INTEGER NOT NULL REFERENCES g2b_attachment_pdf_results(id),
+          page_number INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY(result_id, page_number)
+        );
+        ALTER TABLE g2b_attachment_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'hash_only';
+        ALTER TABLE g2b_attachment_jobs ADD COLUMN pdf_result_id INTEGER REFERENCES g2b_attachment_pdf_results(id);
+        INSERT INTO g2b_schema_migrations (version) VALUES (14);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

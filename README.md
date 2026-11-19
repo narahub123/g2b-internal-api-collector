@@ -36,7 +36,16 @@ Node.js 24 이상과 npm으로 실행합니다. Turso Cloud의 SQLite(libSQL) DB
 2. `docker compose -f compose.attachments.yaml up -d --build`로 첨부 워커를 시작합니다. 로컬 프로세스로 실행할 때는 `npm run worker:attachments`를 사용합니다.
 3. 관리자 상세 화면에서 수동 우선 처리 요청을 허용하려면 웹 서버에 `ATTACHMENT_MANUAL_TOKEN`을 설정합니다. 공고·발주계획·사전규격 상세의 첨부 처리 영역에서 파일 상태와 해시를 볼 수 있습니다.
 
-첨부 워커를 중지한 동안에는 수집 완료 이벤트가 DB에 남고 재시작 뒤 이어서 처리됩니다. 1차 첨부 작업은 다운로드와 해시 확인으로 완료되며, 파일 원본과 추출 내용은 저장하지 않습니다. 운영 반영 후 Turso Analytics에서 첨부 이벤트 조회와 선점 쿼리의 평균 Rows Read 및 실행 횟수를 확인합니다.
+첨부 워커를 중지한 동안에는 수집 완료 이벤트가 DB에 남고 재시작 뒤 이어서 처리됩니다. PDF 추출을 도입할 때는 기존 첨부 워커를 중지하고 마이그레이션 14를 적용한 뒤 새 이미지를 시작합니다. 새 워커가 처음 등록한 PDF만 자동 추출합니다. 기존 PDF 작업은 관리자 상세의 **추출 요청**으로 처리하며, 다른 형식은 다운로드와 해시 확인으로 완료합니다.
+
+PDF 원본은 임시 파일로만 사용합니다. 동일한 SHA-256과 추출기 버전으로 완료된 결과는 재사용합니다. 스캔본은 OCR 없이 **텍스트 없음**으로 표시합니다. 운영 반영 후 추출 실패율과 처리 시간, Turso Analytics에서 첨부 이벤트 조회와 선점 쿼리의 평균 Rows Read 및 실행 횟수를 확인합니다.
+
+대형 PDF 회귀 테스트는 Docker에서 별도로 실행합니다. 50 MiB에 가까운 합성 PDF의 500개 페이지에 벡터 표를 배치하고 그중 240개에 압축 이미지를 넣습니다. 모든 페이지의 텍스트 순서, 추출 시간, 컨테이너 최대 메모리와 OOM 발생 여부를 확인합니다. Docker의 Linux cgroup v2에서 실행하며 운영 DB나 나라장터에 연결하지 않습니다.
+
+```powershell
+docker compose -f compose.attachments.yaml build attachments
+docker run --rm --network none --memory 512m --cpus 0.5 --mount "type=bind,source=$((Get-Location).Path)\tests,target=/app/tests,readonly" g2b-internal-api-collector-attachments:latest node --test tests/attachment-pdf.stress.cjs
+```
 
 첨부 자동 등록에 실패하면 30초, 60초, 120초 후 재시도합니다. 모두 실패하면 이벤트와 마지막 오류가 DB에 남습니다. 원인을 해결한 뒤 Turso SQL 콘솔에서 실패 이벤트 ID를 확인하고, 아래 예시의 `123`을 복구할 ID로 바꿔 실행합니다. 워커는 대상 이벤트를 다시 읽습니다.
 
