@@ -46,7 +46,7 @@ test('기존 PDF는 자동 인계에서 처리 모드를 보존하고 실행 중
     await queue.consume(await queue.event(), [old, fresh]);
     const legacy = await queue.claim();
     assert.equal(legacy.mode, 'hash_only');
-    await queue.enqueue(old, true);
+    assert.equal((await queue.enqueue(old, true)).shouldDispatch, false);
     assert.equal((await queue.status(old.id)).status, 'running');
     assert.equal(await queue.finish(legacy, { hash: 'same' }), true);
     const manual = await queue.claim();
@@ -67,7 +67,9 @@ test('기존 PDF는 자동 인계에서 처리 모드를 보존하고 실행 중
     const legacyDone = { id: 'done', filename: 'done.pdf' };
     await client.execute({ sql: "INSERT INTO g2b_attachment_jobs(id,file,priority,status,hash) VALUES (?,?,0,'succeeded','same')",
       args: [legacyDone.id, JSON.stringify(legacyDone)] });
-    assert.equal((await queue.enqueue(legacyDone, true)).pdfResultId, (await queue.status(old.id)).pdfResultId);
+    const reused = await queue.enqueue(legacyDone, true);
+    assert.equal(reused.job.pdfResultId, (await queue.status(old.id)).pdfResultId);
+    assert.equal(reused.shouldDispatch, false);
     assert.equal(await queue.claim(), undefined);
     const lookup = await client.execute("EXPLAIN QUERY PLAN SELECT id FROM g2b_attachment_pdf_results WHERE hash = 'same' AND version = 'v1'");
     assert.match(lookup.rows[0].detail, /SEARCH .* USING COVERING INDEX/);
@@ -84,7 +86,8 @@ test('수동 작업은 자동 작업보다 먼저 실행되고 만료된 실행�
     const file = { id: 'automatic', filename: 'a.xlsx' };
     await queue.enqueue(file, false);
     await queue.enqueue({ ...file, id: 'manual' }, false);
-    await queue.enqueue({ ...file, id: 'manual' }, true);
+    assert.equal((await queue.enqueue({ ...file, id: 'manual' }, true)).shouldDispatch, true);
+    assert.equal((await queue.enqueue({ ...file, id: 'manual' }, true)).shouldDispatch, false);
     const first = await queue.claim();
     assert.equal(first.file.id, 'manual');
     assert.equal(await queue.renew(first), true);
@@ -222,7 +225,7 @@ test('재시도 시간과 수동 재요청이 시도 상한을 지킨다', async
       await client.execute('UPDATE g2b_attachment_jobs SET available_at = 0');
     }
     assert.equal((await queue.status(file.id)).status, 'failed');
-    await queue.enqueue(file, true);
+    assert.equal((await queue.enqueue(file, true)).shouldDispatch, true);
     assert.equal((await queue.claim()).attempts, 1);
   } finally {
     client.close();

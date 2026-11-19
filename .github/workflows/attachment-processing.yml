@@ -1,0 +1,38 @@
+name: 첨부 처리
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "2-59/5 * * * *"
+
+permissions:
+  contents: read
+
+# 실행 중인 PDF 처리는 계속 진행한다. 대기 실행이 합쳐져도 작업은 Turso에 남는다.
+concurrency:
+  group: attachment-processing
+  cancel-in-progress: false
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: attachment-processing
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.attachments
+          tags: g2b-attachment-worker:run
+          load: true
+          cache-from: type=gha,scope=attachment-worker
+          cache-to: type=gha,mode=max,scope=attachment-worker
+      - name: 첨부 큐 처리
+        run: docker run --rm --init --memory 512m --cpus 0.5 -e TURSO_DATABASE_URL -e TURSO_AUTH_TOKEN g2b-attachment-worker:run node scripts/attachment-worker.cjs --once
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}

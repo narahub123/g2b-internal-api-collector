@@ -3,7 +3,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { writeFile, truncate, readFile, readdir } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
-const { setTimeout: delay } = require('node:timers/promises');
 const { extractPdfProcess, PermanentPdfError, temporaryPdfPath, removeTemporaryPdf } =
   require('../src/features/download-g2b-attachment/server/pdf-process');
 const { hashAttachmentBody, runAttachmentWorker } = require('../src/features/download-g2b-attachment/server/attachment-worker');
@@ -84,7 +83,7 @@ test('빈 PDF를 완료하고 암호화·손상·페이지·용량 제한을 구
   }
 });
 
-test('워커가 신규 PDF를 자동 추출하고 다른 공고의 동일 본문은 기존 결과에 연결한다', async () => {
+test('일회 워커가 수동 호출 실패를 복구하고 선점 기한 이후 남은 PDF를 다음 실행에 넘긴다', async (t) => {
   const { getG2bDatabase } = require('../src/server/g2b/repository');
   const { migrateG2bDatabase } = require('../src/server/g2b/repository/migrations');
   process.env.TURSO_DATABASE_URL = ':memory:';
@@ -93,9 +92,15 @@ test('워커가 신규 PDF를 자동 추출하고 다른 공고의 동일 본문
   const stop = new AbortController();
   const originalFetch = global.fetch;
   const bytes = fixture({ stream: 'BT /F1 10 Tf 20 700 Td <4142> Tj ET' });
-  let worker;
   try {
     await migrateG2bDatabase(db.client);
+    const { requestAttachment } = require('../src/_pages/admin/g2b/ui/attachment-request');
+    const { listAttachmentJobs } = require('../src/features/download-g2b-attachment/server/attachment-catalog');
+    const { openAttachmentQueue } = require('../src/server/g2b/repository/attachment-queue');
+    const queue = openAttachmentQueue(db);
+    const empty = performance.now();
+    await runAttachmentWorker(stop.signal, { once: true });
+    assert.ok(performance.now() - empty < 4500, '빈 큐의 일회 실행은 유휴 대기하지 않는다');
     const group = '18ea67ca-9f82-4e49-843a-eb199eea1e92';
     for (const number of ['R26BK01830377', 'R26BK01830378']) {
       const notice = {
@@ -110,15 +115,45 @@ test('워커가 신규 PDF를 자동 추출하고 다른 공고의 동일 본문
         .run(number);
     }
     await db.prepare("UPDATE g2b_notice_jobs SET status = 'succeeded'").run();
-    global.fetch = async () => new Response(bytes, { headers: { 'Content-Type': 'application/pdf' } });
-    worker = runAttachmentWorker(stop.signal);
-    const deadline = Date.now() + 15000;
-    let jobs;
-    do {
-      jobs = await db.prepare("SELECT status, hash, pdf_result_id FROM g2b_attachment_jobs WHERE status = 'succeeded'").all();
-      if (jobs.length === 2) break;
-      await delay(50);
-    } while (Date.now() < deadline);
+    const owner = { section: 'notices', number: 'R26BK01830378', revision: '000' };
+    const [manualFile] = await listAttachmentJobs(owner);
+    process.env.ATTACHMENT_WORKER_MODE = 'github-actions';
+    process.env.ATTACHMENT_MANUAL_TOKEN = 'test-admin';
+    process.env.NOTICE_GITHUB_REPOSITORY = 'example/project';
+    process.env.NOTICE_GITHUB_REF = 'main';
+    process.env.NOTICE_GITHUB_TOKEN = 'test-actions-token';
+    const form = new FormData();
+    form.set('token', 'test-admin');
+    let dispatches = 0;
+    global.fetch = async (url, request) => {
+      assert.match(String(url), /\/attachment-processing\.yml\/dispatches$/);
+      assert.equal(request.method, 'POST');
+      assert.equal((await queue.status(manualFile.id)).priority, 1);
+      dispatches++;
+      return new Response(null, { status: 503 });
+    };
+    const responses = await Promise.all(Array.from({ length: 3 }, () => requestAttachment(owner, manualFile.id, '', form)));
+    assert.deepEqual(responses, ['수동 처리 대기', '수동 처리 대기', '수동 처리 대기']);
+    assert.equal(dispatches, 1);
+    let now = 0;
+    const clock = t.mock.method(performance, 'now', () => now);
+    global.fetch = async (url) => {
+      assert.match(String(url), /R26BK01830378/);
+      now = 120_001;
+      return new Response(bytes, { headers: { 'Content-Type': 'application/pdf' } });
+    };
+    await runAttachmentWorker(stop.signal, { once: true });
+    clock.mock.restore();
+    assert.equal((await queue.status(manualFile.id)).status, 'succeeded');
+    assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM g2b_attachment_jobs WHERE status = 'pending'").get()).count, 1);
+    global.fetch = async (url) => {
+      assert.match(String(url), /R26BK01830377/);
+      return new Response(bytes, { headers: { 'Content-Type': 'application/pdf' } });
+    };
+    await runAttachmentWorker(stop.signal, { once: true });
+    assert.equal(await requestAttachment(owner, manualFile.id, '', form), 'PDF 추출 완료');
+    assert.equal(dispatches, 1);
+    const jobs = await db.prepare("SELECT status, hash, pdf_result_id FROM g2b_attachment_jobs WHERE status = 'succeeded'").all();
     assert.equal(jobs.length, 2);
     assert.ok(jobs[0].pdf_result_id);
     assert.equal(jobs[0].pdf_result_id, jobs[1].pdf_result_id);
@@ -127,7 +162,6 @@ test('워커가 신규 PDF를 자동 추출하고 다른 공고의 동일 본문
     assert.equal((await db.prepare('SELECT text FROM g2b_attachment_pdf_pages WHERE page_number = 1').get()).text, '한글');
   } finally {
     stop.abort();
-    await worker;
     global.fetch = originalFetch;
     db.client.close();
   }

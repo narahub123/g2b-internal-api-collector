@@ -1,4 +1,5 @@
 import { getG2bRepository } from "@/server/g2b/repository";
+import { dispatchG2bWorkflow } from "@/server/g2b/github-workflow";
 import { logNoticeQueueError } from "./notice-queue-diagnostics";
 
 /** 배포 서버에서만 GitHub Actions 호출을 활성화한다. */
@@ -13,30 +14,11 @@ export function usesNoticeActions() {
  */
 export async function dispatchNoticeWorker() {
   if (!usesNoticeActions()) return "local";
-  const repository = process.env.NOTICE_GITHUB_REPOSITORY?.trim();
-  const ref = process.env.NOTICE_GITHUB_REF?.trim();
-  const credential = process.env.NOTICE_GITHUB_TOKEN?.trim();
-  if (!repository || !/^[\w.-]+\/[\w.-]+$/.test(repository) || !ref || !credential) {
-    throw new Error("공고 수집 Actions 배포 설정을 확인해 주세요.");
-  }
-
   const queue = getG2bRepository().noticeQueue;
   const reservation = await queue.reserveWorkerDispatch(Date.now());
   if (!reservation) return "idle";
   try {
-    const response = await fetch(`https://api.github.com/repos/${repository}/actions/workflows/notice-collection.yml/dispatches`, {
-      method: "POST",
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${credential}`,
-        "Content-Type": "application/json",
-        "X-GitHub-Api-Version": "2026-03-10",
-      },
-      body: JSON.stringify({ ref }),
-      signal: AbortSignal.timeout(8000),
-      redirect: "error",
-    });
-    if (!response.ok) throw new Error(`공고 수집 Actions 호출 실패 (HTTP ${response.status})`);
+    await dispatchG2bWorkflow("notice-collection.yml");
     return "dispatched";
   } catch (error) {
     try {

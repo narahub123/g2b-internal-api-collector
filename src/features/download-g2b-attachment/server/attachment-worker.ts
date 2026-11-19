@@ -134,12 +134,16 @@ async function processClaim(queue: Queue, claim: Claim, stopping: AbortSignal) {
 /**
  * 수집 완료 이벤트와 첨부 큐를 독립적으로 처리한다.
  * 중단 시 신규 선점을 멈추고 진행 중인 다운로드·추출 및 임시 원본 정리를 마친다.
- * @throws 시작 시 임시 파일을 점검할 수 없으면 워커 시작 실패를 전달한다.
+ * @param options 일회 실행에서는 큐가 비거나 신규 선점 시간 한도에 도달하면 종료한다.
+ * @throws 시작 시 임시 파일을 점검할 수 없거나 일회 실행 중 큐 접근이 실패한 경우.
  */
-export async function runAttachmentWorker(stopping: AbortSignal) {
+export async function runAttachmentWorker(stopping: AbortSignal, options: { once?: boolean } = {}) {
+  // 시간 한도는 새 작업을 받는 데만 적용한다. 다운로드·추출의 취소 신호와 분리한다.
+  const deadline = options.once ? performance.now() + 120_000 : Infinity;
+  const canStart = () => !stopping.aborted && performance.now() < deadline;
   await cleanAbandonedPdfs();
   const queue = openAttachmentQueue(getG2bDatabase());
-  while (!stopping.aborted) {
+  while (canStart()) {
     try {
       const event = await queue.event();
       let eventAdvanced = Boolean(event);
@@ -158,13 +162,14 @@ export async function runAttachmentWorker(stopping: AbortSignal) {
               error: message.slice(0, 300),
             });
           } catch (writeError) {
+            if (options.once) throw writeError;
             console.error("[첨부 자동 등록 실패 기록]", event.id, writeError);
             // DB가 실패 상태를 기록할 수 없으면 같은 이벤트의 즉시 재조회를 피한다.
             eventAdvanced = false;
           }
         }
       }
-      if (stopping.aborted) return;
+      if (!canStart()) return;
       const claim = await queue.claim();
       if (claim) {
         await processClaim(queue, claim, stopping);
@@ -172,8 +177,10 @@ export async function runAttachmentWorker(stopping: AbortSignal) {
       }
       if (eventAdvanced) continue;
     } catch (error) {
+      if (options.once) throw error;
       console.error("[첨부 워커]", error);
     }
+    if (options.once) return;
     await delay(5_000, undefined, { signal: stopping }).catch(() => {});
   }
 }

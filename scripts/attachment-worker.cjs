@@ -11,7 +11,7 @@ process.once('SIGTERM', () => stop.abort());
 async function main() {
   const { client } = getG2bDatabase();
   try {
-    await runAttachmentWorker(stop.signal);
+    await runAttachmentWorker(stop.signal, { once: process.argv.includes('--once') });
   } finally {
     client.close();
   }

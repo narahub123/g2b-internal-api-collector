@@ -2,6 +2,7 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getG2bDatabase } from "@/server/g2b/repository";
+import { dispatchG2bWorkflow } from "@/server/g2b/github-workflow";
 import { openAttachmentQueue, type AttachmentOwner } from "@/server/g2b/repository/attachment-queue";
 import { listAttachmentJobs, preferredPdfFiles } from "@/features/download-g2b-attachment/server/attachment-catalog";
 import { decodeHTMLStrict } from "entities";
@@ -10,7 +11,7 @@ function digest(value: string) {
   return createHash("sha256").update(value).digest();
 }
 
-/** 관리자 토큰과 현재 공개 목록을 확인한 뒤 지정한 파일을 수동으로 등록하거나 승격한다. */
+/** 관리자 토큰을 확인해 작업을 저장하고, 원격 모드에서는 대기 작업의 실행을 요청한다. */
 export async function requestAttachment(owner: AttachmentOwner, id: string, _previous: string, form: FormData) {
   const token = process.env.ATTACHMENT_MANUAL_TOKEN?.trim();
   const submitted = form.get("token");
@@ -27,9 +28,18 @@ export async function requestAttachment(owner: AttachmentOwner, id: string, _pre
     const pdfs = preferredPdfFiles(file, files);
     if (pdfs.length) return `대응 PDF를 선택하세요. ${pdfs.map((pdf) => decodeHTMLStrict(pdf.filename)).join(", ")}`;
     const result = await openAttachmentQueue(getG2bDatabase()).enqueue(file, true);
-    if (result?.pdfResultId != null) return result.characterCount === 0 ? "텍스트 없음" : "PDF 추출 완료";
-    if (result?.status === "succeeded") return `다운로드·해시 확인 완료 ${result.hash}`;
-    if (result?.status === "running") return result.mode === "pdf_extract" ? "추출 요청 반영 · 처리 중" : "다운로드 처리 중";
+    const job = result?.job;
+    if (job?.pdfResultId != null) return job.characterCount === 0 ? "텍스트 없음" : "PDF 추출 완료";
+    if (job?.status === "succeeded") return `다운로드·해시 확인 완료 ${job.hash}`;
+    if (job?.status === "running") return job.mode === "pdf_extract" ? "추출 요청 반영 · 처리 중" : "다운로드 처리 중";
+    if (result?.shouldDispatch && process.env.ATTACHMENT_WORKER_MODE === "github-actions") {
+      try {
+        await dispatchG2bWorkflow("attachment-processing.yml");
+      } catch (error) {
+        // 접수는 이미 확정됐다. 호출에 실패한 작업은 다음 예약 실행에서 처리한다.
+        console.error("[첨부 워커 실행 요청]", error);
+      }
+    }
     return "수동 처리 대기";
   } catch (error) {
     console.error("[첨부 수동 등록]", error);

@@ -48,27 +48,39 @@ export function openAttachmentQueue(db: G2bDatabase) {
   const findPdf = db.prepare("SELECT id FROM g2b_attachment_pdf_results WHERE hash = ? AND version = ?");
   const ownsJob = "id = ? AND token = ? AND status = 'running' AND expires_at > unixepoch()";
   return {
-    /** 수동 PDF 요청은 이전 해시 확인 작업도 추출로 승격하며 이미 저장된 결과를 재사용한다. */
+    /**
+     * 수동 PDF 요청은 이전 해시 확인 작업도 추출로 승격하며 저장된 결과를 재사용한다.
+     * @returns 작업 상태와 신규 등록·승격·재대기로 실행 요청이 필요한지를 반환한다.
+     * @throws DB 조회나 저장 실패 시 등록 트랜잭션을 롤백한다.
+     */
     enqueue(file: AttachmentJobFile, manual: boolean) {
       return db.transaction(async () => {
         const extract = manual && isPdfAttachment(file.filename);
-        await insert.run(file.id, JSON.stringify(file), Number(manual), extract ? "pdf_extract" : "hash_only");
+        const inserted = await insert.run(file.id, JSON.stringify(file), Number(manual), extract ? "pdf_extract" : "hash_only");
+        let changed = Boolean(inserted.rowsAffected);
         if (extract) {
           const current = await read.get(file.id);
-          if (!current || current.pdfResultId != null) return current;
+          if (!current) return;
+          if (current.pdfResultId != null) return { job: current, shouldDispatch: false };
           const cached = typeof current.hash === "string" && current.status !== "running"
             ? await findPdf.get(current.hash, PDF_EXTRACTOR_VERSION) : undefined;
+          // 이미 수동 추출 대기 중인 작업은 다시 제출해도 새 실행을 예약하지 않는다.
+          const alreadyPending = current.status === "pending" && current.priority === 1 && current.mode === "pdf_extract";
+          if (alreadyPending && !cached) return { job: current, shouldDispatch: changed };
           await db.prepare(`UPDATE g2b_attachment_jobs SET priority = 1, mode = 'pdf_extract',
             status = CASE WHEN status = 'running' THEN status WHEN ? IS NOT NULL THEN 'succeeded' ELSE 'pending' END,
             pdf_result_id = ?, available_at = 0,
             attempts = CASE WHEN mode = 'hash_only' OR status IN ('failed','succeeded') THEN 0 ELSE attempts END,
             error = NULL WHERE id = ?`).run(cached?.id ?? null, cached?.id ?? null, file.id);
+          changed = true;
         } else if (manual) {
-          await db.prepare(`UPDATE g2b_attachment_jobs SET priority = 1, status = 'pending', available_at = 0,
+          const updated = await db.prepare(`UPDATE g2b_attachment_jobs SET priority = 1, status = 'pending', available_at = 0,
             attempts = CASE WHEN status = 'failed' THEN 0 ELSE attempts END, error = NULL
-            WHERE id = ? AND status IN ('pending', 'retry_wait', 'failed')`).run(file.id);
+            WHERE id = ? AND (status IN ('retry_wait', 'failed') OR (status = 'pending' AND priority = 0))`).run(file.id);
+          changed ||= Boolean(updated.rowsAffected);
         }
-        return read.get(file.id);
+        const current = await read.get(file.id);
+        return current && { job: current, shouldDispatch: manual && changed && current.status === "pending" };
       });
     },
     /** 현재 파일의 상태와 해시를 관리자 화면에 반환한다. */
