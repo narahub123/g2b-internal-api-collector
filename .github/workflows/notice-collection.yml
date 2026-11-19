@@ -9,6 +9,9 @@ permissions:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     timeout-minutes: 330
     environment: notice-collection
     steps:
@@ -22,5 +25,7 @@ jobs:
       - run: npm ci
       - run: npm run worker:notices -- --once
         env:
+          # 공고 성공 커밋 후 같은 저장소의 첨부 워크플로를 실행한다.
+          ATTACHMENT_PROGRESS_GITHUB_TOKEN: ${{ github.token }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}

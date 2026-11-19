@@ -42,10 +42,10 @@ PDF 원본은 임시 파일로만 사용합니다. 동일한 SHA-256과 추출�
 
 #### GitHub Actions로 원격 실행
 
-1. 기본 브랜치에 `attachment-processing.yml`을 반영합니다. GitHub Environment `attachment-processing`에 마이그레이션 14를 적용한 테스트 DB의 `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`을 등록합니다. 예약 실행을 사용하려면 해당 Environment가 승인 대기 없이 기본 브랜치 실행을 허용해야 합니다.
-2. 테스트 DB에 공개 PDF가 포함된 수집 건을 준비하고 Actions의 **첨부 처리** 워크플로를 수동 실행합니다. 실행 로그와 관리자 상세에서 추출 완료를 확인합니다. 첨부 원본이나 추출 본문은 Actions 아티팩트로 업로드하지 않습니다.
-3. 운영 DB에 마이그레이션 14가 적용됐는지 확인하고 상시 첨부 워커를 중지합니다. GitHub Environment 시크릿을 운영 DB로 전환합니다. Vercel에 `ATTACHMENT_WORKER_MODE=github-actions`를 설정해 재배포합니다. 수동 호출은 기존 `NOTICE_GITHUB_REPOSITORY`, `NOTICE_GITHUB_REF`, `NOTICE_GITHUB_TOKEN`을 재사용합니다. 토큰에는 해당 저장소의 Actions 쓰기 권한이 필요합니다.
-4. 관리자 수동 요청과 예약 실행을 각각 확인합니다. 예약 실행은 매시 2분부터 5분 주기로 요청되며 실제 시작은 늦어질 수 있습니다. 수동 실행 요청에 실패해도 Turso 작업은 다음 실행에서 처리됩니다. 초기 운영에서 시작 지연, 실패율, Actions 사용량과 Turso Rows Read를 확인합니다.
+1. 운영 Turso에 `npm run db:migrate`로 마이그레이션 15를 먼저 적용합니다. 상시 첨부 워커를 중지하고 기본 브랜치에 웹과 워크플로 변경을 배포합니다. GitHub Environment `attachment-processing`의 Turso 시크릿이 웹·공고 수집과 같은 DB를 가리키고, 기본 브랜치의 실행을 승인 대기 없이 허용하는지 확인합니다.
+2. 기본 브랜치의 공고 수집 Actions는 공고 한 건의 성공을 기록하면 내장 GitHub 토큰으로 첨부 처리 Actions를 호출합니다. Vercel의 관리자 수동 요청과 복구 호출은 `ATTACHMENT_WORKER_MODE=github-actions` 및 기존 `NOTICE_GITHUB_REPOSITORY`, `NOTICE_GITHUB_REF`, `NOTICE_GITHUB_TOKEN`을 사용합니다.
+3. cron-job.org에 기존 공고 수집 작업과 별도로 **매분** 실행하는 HTTPS `POST /api/g2b/attachment-queue/tick`을 등록합니다. 요청 헤더는 기존 공고 수집 작업과 같은 `Authorization: Bearer <NOTICE_CRON_TOKEN>`입니다. 응답은 실행 접수 202, 빈 큐 또는 예약 중 204, 인증 실패 401, 설정이나 호출 오류 503입니다. GitHub 자체 예약 실행은 사용하지 않습니다.
+4. 여러 공고를 수집하면서 첫 성공 뒤 별도 첨부 Actions가 시작되는지 확인합니다. 관리자 수동 요청과 외부 복구도 각각 확인합니다. 초기 운영에서 시작 지연, 실패율, Actions 사용량과 Turso의 평균 Rows Read 및 실행 횟수를 비교합니다.
 
 로컬에서 같은 일회 모드를 실행하려면 `npm run worker:attachments -- --once`를 사용합니다. 큐가 비면 즉시 종료하고, 실행 시작 2분 뒤에는 신규 작업을 가져오지 않습니다. 이미 선점한 다운로드와 추출은 각 작업 제한 내에서 완료합니다.
 

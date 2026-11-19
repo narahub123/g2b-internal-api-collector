@@ -449,6 +449,17 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (14);
       `);
     }
+    const attachmentDispatch = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 15");
+    if (!attachmentDispatch.rows.length) {
+      // 수집 워커와 웹의 자동 호출이 같은 예약을 공유한다.
+      await transaction.executeMultiple(`
+        CREATE TABLE g2b_attachment_dispatch (
+          id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT, expires_at INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO g2b_attachment_dispatch (id) VALUES (1);
+        INSERT INTO g2b_schema_migrations (version) VALUES (15);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

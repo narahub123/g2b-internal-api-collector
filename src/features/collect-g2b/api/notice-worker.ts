@@ -49,10 +49,11 @@ async function discoverRun(
  * @throws 실행권 획득·갱신이나 큐 DB 접근을 계속할 수 없는 경우.
  * @param execute 선점한 공고의 단건 실행기. 기본값은 실제 수집을 수행한다.
  * @param discover 기간 실행의 최초 대상 탐색기. 기본값은 나라장터 목록을 조회한다.
- * @param options once 모드는 최대 한 재시도 간격 동안 다음 작업을 기다리며, 저장 오류가 반복되면 실패한다.
+ * @param options once 모드는 한 재시도 간격까지 대기한다. onCollected는 성공 커밋 뒤 큐와 별도로 실행한다.
  */
 export async function runNoticeWorker(
-  signal: AbortSignal, execute = executeNoticeJob, discover = listNoticePeriodTargets, { once = false } = {},
+  signal: AbortSignal, execute = executeNoticeJob, discover = listNoticePeriodTargets,
+  { once = false, onCollected }: { once?: boolean; onCollected?: () => Promise<unknown> } = {},
 ) {
   if (signal.aborted) return;
   const lease = await acquireNoticeWorkerLease(getG2bDatabase().client);
@@ -62,6 +63,14 @@ export async function runNoticeWorker(
   const lost = new AbortController();
   const stopped = AbortSignal.any([signal, lost.signal]);
   let heartbeatFailure: unknown;
+  let pendingDispatch: Promise<void> | undefined;
+  function notifyCollected() {
+    // 공고 완료 기록과 분리하고 이전 호출이 진행 중이면 새 네트워크 요청을 만들지 않는다.
+    if (!onCollected || pendingDispatch) return;
+    pendingDispatch = Promise.resolve().then(onCollected).then(() => {}, (error) => {
+      logNoticeQueueError("dispatch-attachments", error);
+    }).finally(() => { pendingDispatch = undefined; });
+  }
   // 외부 API 응답을 기다리는 동안에도 실행권을 갱신한다.
   const renew = (async () => {
     while (!heartbeat.signal.aborted) {
@@ -83,19 +92,24 @@ export async function runNoticeWorker(
   })();
 
   try {
-    await withNoticeWorkerToken(lease.token, () => drainQueue(stopped, execute, discover, once));
+    await withNoticeWorkerToken(lease.token, () => drainQueue(stopped, execute, discover, once, notifyCollected));
   } catch (error) {
     if (once || !(error instanceof NoticeWorkerLeaseLostError)) throw error;
   } finally {
     heartbeat.abort();
     await renew;
-    await lease.release();
+    try {
+      await lease.release();
+    } finally {
+      await pendingDispatch;
+    }
   }
   if (heartbeatFailure) throw heartbeatFailure;
   if (once && lost.signal.aborted) throw new NoticeWorkerLeaseLostError();
 }
 
-async function drainQueue(signal: AbortSignal, execute: typeof executeNoticeJob, discover: typeof listNoticePeriodTargets, once: boolean) {
+async function drainQueue(signal: AbortSignal, execute: typeof executeNoticeJob, discover: typeof listNoticePeriodTargets,
+  once: boolean, notifyCollected: () => void) {
   const queue = getG2bRepository().noticeQueue;
   if (once) await queue.releaseWorkerDispatch();
   await queue.recover();
@@ -176,6 +190,7 @@ async function drainQueue(signal: AbortSignal, execute: typeof executeNoticeJob,
         const current = await queue.get(job.id);
         if (current?.status === "running" && current.executions === job.executions) {
           await queue.finish(job.id, outcome, completedAt, attempts);
+          if (outcome.kind === "success") notifyCollected();
         }
         break;
       } catch (error) {

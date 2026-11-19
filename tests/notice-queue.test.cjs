@@ -171,16 +171,26 @@ test('기간 수집 API 접수 후 워커가 초기 공고와 연관 공고를 �
       const input = { number: 'R26BK1', revision: '000', methodCode: '', title: '최초 공고' };
       const child = { ...input, revision: '001', title: '' };
       let discoveries = 0;
+      let eventRevision;
+      let startedBeforeNext = false;
+      let nextJobStarted = false;
       await runNoticeWorker(stop.signal, async ({ input }) => {
         if (input.revision === '000') return { kind: 'success', related: [child], result: {} };
+        nextJobStarted = true;
         stop.abort();
         return { kind: 'internal_error', error: '상세 실패' };
       }, async (start, end) => {
         discoveries++;
         assert.deepEqual([start, end], [period.startMinute, period.endMinute]);
         return [input];
-      });
+      }, { onCollected: async () => {
+        startedBeforeNext = !nextJobStarted;
+        eventRevision = (await getG2bDatabase().prepare('SELECT revision FROM g2b_attachment_events ORDER BY id LIMIT 1').get())?.revision;
+        throw new Error('GitHub 호출 실패를 재현한다');
+      } });
       assert.equal(discoveries, 1);
+      assert.equal(startedBeforeNext, true);
+      assert.equal(eventRevision, '000');
       const readRun = (query = '') => byId(new Request('http://localhost/' + query), {
         params: Promise.resolve({ id: String(id) }),
       });

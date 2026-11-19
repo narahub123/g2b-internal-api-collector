@@ -2,9 +2,6 @@ name: 첨부 처리
 
 on:
   workflow_dispatch:
-  schedule:
-    # 예약 주기는 매시 2분부터 5분 간격이다.
-    - cron: "2-59/5 * * * *"
 
 permissions:
   contents: read
