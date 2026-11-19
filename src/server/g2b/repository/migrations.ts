@@ -381,6 +381,74 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (11);
       `);
     }
+    const attachments = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 12");
+    if (!attachments.rows.length) {
+      // 성공 상태와 이벤트는 동일 트랜잭션에서 기록해 워커 중단 중에도 인계를 보존한다.
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_collection_attempts ADD COLUMN attachment_number TEXT;
+        CREATE TABLE g2b_attachment_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, section TEXT NOT NULL,
+          number TEXT NOT NULL, revision TEXT NOT NULL, completion_id INTEGER NOT NULL
+        );
+        CREATE TRIGGER g2b_attachment_notice_completed AFTER UPDATE OF status ON g2b_notice_jobs
+          WHEN NEW.status = 'succeeded' AND OLD.status <> 'succeeded'
+          BEGIN
+            INSERT INTO g2b_attachment_events(section, number, revision, completion_id)
+              VALUES ('notices', NEW.number, NEW.revision, NEW.id);
+          END;
+        CREATE TRIGGER g2b_attachment_collection_completed AFTER UPDATE OF status ON g2b_collection_attempts
+          WHEN NEW.status = 'succeeded' AND OLD.status <> 'succeeded'
+            AND NEW.section IN ('order-plans', 'prior-specs')
+          BEGIN
+            INSERT INTO g2b_attachment_events(section, number, revision, completion_id)
+              VALUES (NEW.section, COALESCE(NEW.attachment_number, NEW.number), '', NEW.id);
+          END;
+        CREATE TABLE g2b_attachment_jobs (
+          position INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, file TEXT NOT NULL,
+          priority INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+          available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+          token TEXT, expires_at INTEGER, hash TEXT, error TEXT
+        );
+        CREATE INDEX g2b_attachment_ready ON g2b_attachment_jobs(priority DESC, position)
+          WHERE status = 'pending';
+        CREATE INDEX g2b_attachment_retry ON g2b_attachment_jobs(available_at)
+          WHERE status = 'retry_wait';
+        CREATE INDEX g2b_attachment_leases ON g2b_attachment_jobs(expires_at)
+          WHERE status = 'running';
+        INSERT INTO g2b_schema_migrations (version) VALUES (12);
+      `);
+    }
+    const attachmentRetry = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 13");
+    if (!attachmentRetry.rows.length) {
+      // 기존 이벤트는 즉시 처리하고, 최종 실패한 이벤트는 반복 조회 인덱스에서 제외한다.
+      await transaction.executeMultiple(`
+        ALTER TABLE g2b_attachment_events ADD COLUMN available_at INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE g2b_attachment_events ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE g2b_attachment_events ADD COLUMN error TEXT;
+        ALTER TABLE g2b_attachment_events ADD COLUMN failed_at INTEGER;
+        ALTER TABLE g2b_attachment_events ADD COLUMN generation INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX g2b_attachment_events_ready ON g2b_attachment_events(available_at, id)
+          WHERE failed_at IS NULL;
+        INSERT INTO g2b_schema_migrations (version) VALUES (13);
+      `);
+    }
+    const pdfExtraction = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 14");
+    if (!pdfExtraction.rows.length) {
+      // 기존 작업의 상태와 무관하게 수동 요청 전까지 해시 처리 모드를 보존한다.
+      await transaction.executeMultiple(`
+        CREATE TABLE g2b_attachment_pdf_results (
+          id INTEGER PRIMARY KEY, hash TEXT NOT NULL, version TEXT NOT NULL,
+          page_count INTEGER NOT NULL, character_count INTEGER NOT NULL, UNIQUE(hash, version)
+        );
+        CREATE TABLE g2b_attachment_pdf_pages (
+          result_id INTEGER NOT NULL REFERENCES g2b_attachment_pdf_results(id),
+          page_number INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY(result_id, page_number)
+        );
+        ALTER TABLE g2b_attachment_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'hash_only';
+        ALTER TABLE g2b_attachment_jobs ADD COLUMN pdf_result_id INTEGER REFERENCES g2b_attachment_pdf_results(id);
+        INSERT INTO g2b_schema_migrations (version) VALUES (14);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

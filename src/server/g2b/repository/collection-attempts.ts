@@ -168,7 +168,7 @@ export function openCollectionAttempts(db: G2bDatabase) {
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const finish = db.prepare(`
-    UPDATE g2b_collection_attempts SET finished_at = ?, status = ?, error = ?, diagnostics = ?
+    UPDATE g2b_collection_attempts SET finished_at = ?, status = ?, error = ?, diagnostics = ?, attachment_number = ?
     WHERE id = ? AND status = 'pending'
   `);
   const retry = db.prepare(`
@@ -396,10 +396,11 @@ export function openCollectionAttempts(db: G2bDatabase) {
 
     /**
      * 지정한 시도만 종료 처리한다. 다른 시도의 시작 순서와 결과는 보존된다.
+     * @param attachmentNumber 발주계획 요청 번호와 실제 저장 번호가 다를 때 첨부를 조회할 저장 번호.
      * @throws Turso가 결과를 저장하지 못한 경우.
      */
-    async finish(id: number, status: FinishedStatus, error: string | null = null, diagnostics?: CollectionDiagnostic): Promise<void> {
-      await finish.run(new Date().toISOString(), status, error, diagnostics ? JSON.stringify(diagnostics) : null, id);
+    async finish(id: number, status: FinishedStatus, error: string | null = null, diagnostics?: CollectionDiagnostic, attachmentNumber?: string): Promise<void> {
+      await finish.run(new Date().toISOString(), status, error, diagnostics ? JSON.stringify(diagnostics) : null, attachmentNumber ?? null, id);
     },
 
     /**

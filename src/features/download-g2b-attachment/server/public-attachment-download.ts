@@ -1,5 +1,6 @@
 import { g2bDownloadUrl } from "@/shared/api/g2b/g2b-download";
 import { readG2bResponse } from "@/shared/api/g2b/g2b-maintenance";
+import { ATTACHMENT_METADATA_TIMEOUT_MS } from "@/shared/config/g2b-attachment-worker";
 import {
   attachmentSources,
   publicAttachmentFiles,
@@ -13,6 +14,8 @@ const origin = "https://www.g2b.go.kr";
  * @param attachments 저장된 첨부 목록.
  * @param seq 첨부 그룹 내 파일 순번.
  * @param scope 첨부를 소유한 상세 자료 유형.
+ * @param expectedPath 큐에 등록할 때 확인한 경로. 이후 경로가 바뀐 파일은 처리하지 않는다.
+ * @param signal 첨부 작업 실행권이 상실되면 메타데이터 요청도 중단한다.
  * @returns 다운로드 주소. 공개 파일이 아니거나 응답에서 파일을 확인할 수 없으면 null.
  * @throws 메타데이터 응답이 점검 화면이거나 요청 또는 응답 검증에 실패한 경우.
  */
@@ -21,6 +24,8 @@ export async function resolvePublicAttachmentDownload(
   attachments: Record<string, unknown> | undefined,
   seq: string,
   scope: "order-plan" | "prior-spec" | "notice-post" | "private-notice" | "base-amount-adjustment",
+  expectedPath?: string,
+  signal?: AbortSignal,
 ): Promise<URL | null> {
   const savedFile = publicAttachmentFiles(group, attachments, scope).find(
     (file) => file.seq === seq && file.downloadable,
@@ -46,7 +51,7 @@ export async function resolvePublicAttachmentDownload(
       }),
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.any([AbortSignal.timeout(ATTACHMENT_METADATA_TIMEOUT_MS), ...(signal ? [signal] : [])]),
     },
   );
   const body = await readG2bResponse(response);
@@ -72,6 +77,7 @@ export async function resolvePublicAttachmentDownload(
     ((scope === "notice-post" || scope === "base-amount-adjustment") && (file.scrnIndtYn !== "Y" || file.dwnldPrmsYn !== "Y")) ||
     file.orgnlAtchFileNm !== savedFile.filename ||
     typeof path !== "string" ||
+    (expectedPath !== undefined && path !== expectedPath) ||
     !/^\/data\/Attachfiles\/[A-Za-z0-9_./-]+$/.test(path) ||
     path.includes("..")
   ) {

@@ -6,6 +6,7 @@ import type { openNoticeAutomatic } from "./notice-automatic";
 export const noticeRetryDelayMs = 60_000;
 
 export type NoticeAttemptCompletion = {
+  attachmentNumber?: string;
   id: number;
   status: "succeeded" | "failed" | "deferred";
   finishedAt: string;

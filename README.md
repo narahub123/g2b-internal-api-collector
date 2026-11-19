@@ -30,6 +30,44 @@
 
 Node.js 24 이상과 npm으로 실행합니다. Turso Cloud의 SQLite(libSQL) DB를 생성하고 DB URL과 읽기·쓰기 토큰을 `.env.local`의 `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`에 설정합니다. 최초 실행 전에 `npm run db:migrate`를 실행합니다. Next.js 서버에서 `selectItemAnncMngV.do`를 HTTP POST로 호출해 물품 공고 상세를 수집합니다.
 
+### 첨부 처리 워커
+
+1. 웹과 공고 워커를 새 버전으로 전환하기 전에 같은 DB에 `npm run db:migrate`를 적용합니다.
+2. `docker compose -f compose.attachments.yaml up -d --build`로 첨부 워커를 시작합니다. 로컬 프로세스로 실행할 때는 `npm run worker:attachments`를 사용합니다.
+3. 관리자 상세 화면에서 수동 우선 처리 요청을 허용하려면 웹 서버에 `ATTACHMENT_MANUAL_TOKEN`을 설정합니다. 공고·발주계획·사전규격 상세의 첨부 처리 영역에서 파일 상태와 해시를 볼 수 있습니다.
+
+첨부 워커를 중지한 동안에는 수집 완료 이벤트가 DB에 남고 재시작 뒤 이어서 처리됩니다. PDF 추출을 도입할 때는 기존 첨부 워커를 중지하고 마이그레이션 14를 적용한 뒤 새 이미지를 시작합니다. 새 워커가 처음 등록한 PDF만 자동 추출합니다. 기존 PDF 작업은 관리자 상세의 **추출 요청**으로 처리하며, 다른 형식은 다운로드와 해시 확인으로 완료합니다.
+
+PDF 원본은 임시 파일로만 사용합니다. 동일한 SHA-256과 추출기 버전으로 완료된 결과는 재사용합니다. 스캔본은 OCR 없이 **텍스트 없음**으로 표시합니다. 운영 반영 후 추출 실패율과 처리 시간, Turso Analytics에서 첨부 이벤트 조회와 선점 쿼리의 평균 Rows Read 및 실행 횟수를 확인합니다.
+
+#### GitHub Actions로 원격 실행
+
+1. 기본 브랜치에 `attachment-processing.yml`을 반영합니다. GitHub Environment `attachment-processing`에 마이그레이션 14를 적용한 테스트 DB의 `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`을 등록합니다. 예약 실행을 사용하려면 해당 Environment가 승인 대기 없이 기본 브랜치 실행을 허용해야 합니다.
+2. 테스트 DB에 공개 PDF가 포함된 수집 건을 준비하고 Actions의 **첨부 처리** 워크플로를 수동 실행합니다. 실행 로그와 관리자 상세에서 추출 완료를 확인합니다. 첨부 원본이나 추출 본문은 Actions 아티팩트로 업로드하지 않습니다.
+3. 운영 DB에 마이그레이션 14가 적용됐는지 확인하고 상시 첨부 워커를 중지합니다. GitHub Environment 시크릿을 운영 DB로 전환합니다. Vercel에 `ATTACHMENT_WORKER_MODE=github-actions`를 설정해 재배포합니다. 수동 호출은 기존 `NOTICE_GITHUB_REPOSITORY`, `NOTICE_GITHUB_REF`, `NOTICE_GITHUB_TOKEN`을 재사용합니다. 토큰에는 해당 저장소의 Actions 쓰기 권한이 필요합니다.
+4. 관리자 수동 요청과 예약 실행을 각각 확인합니다. 예약 실행은 매시 2분부터 5분 주기로 요청되며 실제 시작은 늦어질 수 있습니다. 수동 실행 요청에 실패해도 Turso 작업은 다음 실행에서 처리됩니다. 초기 운영에서 시작 지연, 실패율, Actions 사용량과 Turso Rows Read를 확인합니다.
+
+로컬에서 같은 일회 모드를 실행하려면 `npm run worker:attachments -- --once`를 사용합니다. 큐가 비면 즉시 종료하고, 실행 시작 2분 뒤에는 신규 작업을 가져오지 않습니다. 이미 선점한 다운로드와 추출은 각 작업 제한 내에서 완료합니다.
+
+대형 PDF 회귀 테스트는 Docker에서 별도로 실행합니다. 50 MiB에 가까운 합성 PDF의 500개 페이지에 벡터 표를 배치하고 그중 240개에 압축 이미지를 넣습니다. 모든 페이지의 텍스트 순서, 추출 시간, 컨테이너 최대 메모리와 OOM 발생 여부를 확인합니다. Docker의 Linux cgroup v2에서 실행하며 운영 DB나 나라장터에 연결하지 않습니다.
+
+```powershell
+docker compose -f compose.attachments.yaml build attachments
+docker run --rm --network none --memory 512m --cpus 0.5 --mount "type=bind,source=$((Get-Location).Path)\tests,target=/app/tests,readonly" g2b-internal-api-collector-attachments:latest node --test tests/attachment-pdf.stress.cjs
+```
+
+첨부 자동 등록에 실패하면 30초, 60초, 120초 후 재시도합니다. 모두 실패하면 이벤트와 마지막 오류가 DB에 남습니다. 원인을 해결한 뒤 Turso SQL 콘솔에서 실패 이벤트 ID를 확인하고, 아래 예시의 `123`을 복구할 ID로 바꿔 실행합니다. 워커는 대상 이벤트를 다시 읽습니다.
+
+```sql
+SELECT id, section, number, revision, failures, error
+FROM g2b_attachment_events WHERE failed_at IS NOT NULL ORDER BY id;
+
+UPDATE g2b_attachment_events
+SET failures = 0, available_at = 0, failed_at = NULL, error = NULL,
+    generation = generation + 1
+WHERE id = 123 AND failed_at IS NOT NULL;
+```
+
 ```powershell
 npm ci
 npm run db:migrate

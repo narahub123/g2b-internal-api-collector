@@ -7,6 +7,7 @@
     "build": "next build --webpack",
     "start": "next start --hostname 127.0.0.1",
     "worker:notices": "node scripts/notice-worker.cjs",
+    "worker:attachments": "node scripts/attachment-worker.cjs",
     "typecheck": "tsc --noEmit",
     "db:migrate": "node scripts/g2b-migrate.cjs"
   },
@@ -23,6 +24,7 @@
     "entities": "^8.1.0",
     "lucide-react": "^1.70.0",
     "next": "^16.4.5",
+    "pdfjs-dist": "6.4.299",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",
     "react-day-picker": "^10.0.2",
