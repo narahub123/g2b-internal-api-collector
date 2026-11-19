@@ -18,3 +18,11 @@ export type PdfExtraction = {
 export function isPdfAttachment(filename: string) {
   return /\.pdf$/i.test(decodeHTMLStrict(filename));
 }
+
+/** 페이지 본문을 요청하는 데 필요한 저장 결과의 식별자와 범위다. */
+export type AttachmentPdfPreview = { resultId: number; pageCount: number; signature: string };
+
+/** 첨부 출처와 그룹 안에서 원본 순번에 해당하는 추출 결과를 찾는다. */
+export type AttachmentPdfLookup = (
+  source: string, group: string | undefined, seq: string,
+) => AttachmentPdfPreview | undefined;

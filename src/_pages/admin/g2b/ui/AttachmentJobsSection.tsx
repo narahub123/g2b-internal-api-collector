@@ -1,7 +1,6 @@
 import { decodeHTMLStrict } from "entities";
-import { listAttachmentJobs, preferredPdfFiles } from "@/features/download-g2b-attachment/server/attachment-catalog";
-import { getG2bDatabase } from "@/server/g2b/repository";
-import { openAttachmentQueue, type AttachmentOwner } from "@/server/g2b/repository/attachment-queue";
+import type { AttachmentOwner } from "@/server/g2b/repository/attachment-queue";
+import { loadAttachmentJobs } from "./attachment-preview-data";
 import { AttachmentRequestForm } from "./AttachmentRequestForm";
 import { requestAttachment } from "./attachment-request";
 import { isPdfAttachment } from "@/shared/model/g2b/attachment-pdf";
@@ -14,13 +13,9 @@ const labels: Record<string, string> = {
 /** 수집 상세의 공개 첨부별 처리 상태와 수동 우선 요청을 표시한다. */
 export async function AttachmentJobsSection({ owner }: { owner: AttachmentOwner }) {
   try {
-    const files = await listAttachmentJobs(owner);
-    if (!files.length) return null;
-    const queue = openAttachmentQueue(getG2bDatabase());
+    const jobs = await loadAttachmentJobs(owner.section, owner.number, owner.revision);
+    if (!jobs.length) return null;
     const manualEnabled = Boolean(process.env.ATTACHMENT_MANUAL_TOKEN?.trim());
-    const jobs = await Promise.all(files.map(async (file) => ({
-      file, pdfs: preferredPdfFiles(file, files), status: await queue.status(file.id),
-    })));
     return (
       <section aria-label="첨부 처리" className="space-y-3 rounded-lg border bg-card p-4">
         <h2 className="font-semibold">첨부 처리</h2>

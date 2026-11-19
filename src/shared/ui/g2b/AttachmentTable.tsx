@@ -1,3 +1,5 @@
+import type { AttachmentPdfPreview } from "@/shared/model/g2b/attachment-pdf";
+import { AttachmentPdfButton, AttachmentPdfPanel } from "./AttachmentPdfPanel";
 import { decodeHTMLStrict } from "entities";
 import { formatAttachmentFileSize } from "@/shared/model/g2b/attachment-file-size";
 import type { publicAttachmentFiles } from "@/shared/model/g2b/g2b-attachments";
@@ -13,6 +15,7 @@ type AttachmentTableProps = {
   showFileSize?: boolean;
   /** 각 상세 화면에서 생성한 다운로드 경로를 전달받는다. */
   getDownloadHref: (file: AttachmentFile) => string | undefined;
+  getPdfPreview?: (seq: string) => AttachmentPdfPreview | undefined;
 };
 
 /**
@@ -24,18 +27,20 @@ type AttachmentTableProps = {
  *
  * 파일의 수집·공개 여부 판단과 다운로드 URL 생성은 각 화면에서 처리한다.
  * 이 컴포넌트는 전달받은 파일을 원래 배열 순서대로 표시한다.
+ * @param props.getPdfPreview 표시 행의 순번으로 결과 메타데이터를 찾는 서버 콜백. 지정하면 추출 내용 열을 표시한다.
  */
 export function AttachmentTable({
   files,
   showDocumentType = false,
   showFileSize = true,
   getDownloadHref,
+  getPdfPreview,
 }: AttachmentTableProps) {
   // 파일명은 항상 표시하고, 선택적으로 표시하는 열의 수를 더한다.
   // 빈 목록 메시지의 colSpan에도 실제 표시 열 개수를 적용한다.
-  const columnCount = 1 + Number(showDocumentType) + Number(showFileSize);
+  const columnCount = 1 + Number(showDocumentType) + Number(showFileSize) + Number(Boolean(getPdfPreview));
 
-  return (
+  const table = (
     <div className="overflow-x-auto rounded-md border">
       <table className="w-full text-left text-sm" aria-label="파일첨부">
         <thead className="bg-secondary">
@@ -54,6 +59,7 @@ export function AttachmentTable({
                 파일크기
               </th>
             )}
+            {getPdfPreview && <th scope="col" className="whitespace-nowrap px-3 py-2">추출 내용</th>}
           </tr>
         </thead>
         <tbody>
@@ -72,6 +78,7 @@ export function AttachmentTable({
             // 다운로드 URL은 각 화면의 기존 생성 로직을 그대로 사용한다.
             const href = file.downloadable ? getDownloadHref(file) : undefined;
             const filename = decodeHTMLStrict(file.filename);
+            const preview = file.downloadable ? getPdfPreview?.(file.seq) : undefined;
 
             return (
               <tr key={file.seq} className="border-t">
@@ -99,6 +106,11 @@ export function AttachmentTable({
                     {formatAttachmentFileSize(file.fileSize) ?? ""}
                   </td>
                 )}
+                {getPdfPreview && (
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {preview && <AttachmentPdfButton file={{ ...preview, filename, rowKey: file.seq }} />}
+                  </td>
+                )}
               </tr>
             );
           })}
@@ -106,4 +118,6 @@ export function AttachmentTable({
       </table>
     </div>
   );
+
+  return getPdfPreview ? <AttachmentPdfPanel>{table}</AttachmentPdfPanel> : table;
 }

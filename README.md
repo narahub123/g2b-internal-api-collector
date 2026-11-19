@@ -89,6 +89,6 @@ npm exec -- postman --version
 
 1. 테스트 Turso DB에 `npm run db:migrate`를 실행합니다. 웹과 GitHub 환경 `notice-collection`에 같은 테스트 DB의 `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`을 설정합니다. 수집 워크플로가 GitHub 기본 브랜치에 있어야 호출할 수 있습니다.
 2. 테스트 웹 서버에 `NOTICE_WORKER_MODE=github-actions`, `NOTICE_GITHUB_REPOSITORY`(소유자/저장소), `NOTICE_GITHUB_REF`(실행할 브랜치 또는 태그), `NOTICE_GITHUB_TOKEN`(대상 저장소 Actions 쓰기 권한), `NOTICE_CRON_TOKEN`(정기 호출 전용 비밀값)을 설정합니다. 로컬 상시 워커를 함께 실행할 경우 기존 워커가 실행권을 계속 사용하므로 Actions 경로를 검증할 때에는 테스트용 상시 워커를 종료합니다.
-3. 배포 환경에서 관리자 화면과 쓰기 API를 인증으로 보호합니다. HTTPS의 `POST /api/g2b/notice-queue/tick` 경로만 정기 호출에 허용하고 애플리케이션의 전용 토큰 검증을 사용합니다. cron-job.org에서 매분 POST와 `Authorization: Bearer <NOTICE_CRON_TOKEN>` 헤더를 설정합니다. 응답은 호출을 요청했으면 202, 실행할 작업이 없거나 이미 예약됐으면 204, 인증 실패 시 401, 호출 오류 시 503입니다.
+3. 배포 환경에서 관리자 화면과 쓰기 API, PDF 페이지 조회 경로(`/api/g2b/attachment-results/*`)를 같은 인증 정책으로 보호합니다. HTTPS의 `POST /api/g2b/notice-queue/tick` 경로만 정기 호출에 허용하고 애플리케이션의 전용 토큰 검증을 사용합니다. cron-job.org에서 매분 POST와 `Authorization: Bearer <NOTICE_CRON_TOKEN>` 헤더를 설정합니다. 응답은 호출을 요청했으면 202, 실행할 작업이 없거나 이미 예약됐으면 204, 인증 실패 시 401, 호출 오류 시 503입니다.
 4. 테스트 화면에서 수동 수집과 자동 수집 시작·재개를 요청하고 워크플로 실행 및 Turso 저장을 확인합니다. Actions 호출이 실패해도 큐 접수는 유지됩니다. 다음 정기 호출은 실행 가능한 작업을 재확인하고, 러너가 시작하지 않은 예약은 3분 후 만료됩니다.
 5. **공고·첨부 실행 기록 정리**를 `dry_run=true`로 수동 실행해 누적 삭제 후보를 확인합니다. 실제 예약 정리를 활성화하려면 GitHub **Settings → Secrets and variables → Actions → Variables**의 **Repository variables**에 `NOTICE_ACTIONS_CLEANUP_ENABLED=true`를 등록합니다. GitHub가 매시간 17분에 실행을 요청합니다. 두 워크플로의 완료 후 24시간 지난 성공 실행만 정리하며 이전 시도에 실패가 있었던 실행과 실패·취소 기록은 보존합니다.

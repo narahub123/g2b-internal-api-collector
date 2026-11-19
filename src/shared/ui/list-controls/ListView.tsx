@@ -22,7 +22,7 @@ type ListViewProps = {
  * 검색·정렬, 필터, 결과, 페이지 이동 순서로 목록의 공통 배치를 적용한다.
  * 좁은 화면에서는 조작부가 줄바꿈되며, 설정이 없거나 옵션이 빈 조작부는 공간을 차지하지 않는다.
  * @param props.children 업무별 결과 목록과 빈 결과·로딩 등 목록 상태를 표시할 영역.
- * @param props.pagination 호출부에서 조회한 페이지 정보와 현재 조건을 보존하는 링크 생성 함수.
+ * @param props.pagination 호출부에서 조회한 페이지 정보와 이동 링크 생성 함수 또는 화면 내 이동 콜백.
  * @param props.controlsLabel 지정하면 검색·필터·정렬을 처음에는 닫힌 아코디언에 표시한다.
  * @param props.onReset 전체 조회 조건을 기본값으로 되돌리는 콜백. 편집 중인 입력도 함께 지운다.
  */

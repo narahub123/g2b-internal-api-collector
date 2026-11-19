@@ -1,4 +1,5 @@
 import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { loadAttachmentPdfLookup } from "@/_pages/admin/g2b/ui/attachment-preview-data";
 import { AttachmentJobsSection } from "@/_pages/admin/g2b/ui/AttachmentJobsSection";
 import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
 import { orderPlanPath } from "@/_pages/admin/config/routes";
@@ -22,6 +23,7 @@ export async function PriorSpecDetailPage({
   if (g2bNumber(number) !== number) notFound();
   const repository = getG2bRepository();
   const spec = await repository.findPriorSpec(number);
+  const pdfLookup = spec && await loadAttachmentPdfLookup({ section: "prior-specs", number, revision: "" });
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
@@ -29,6 +31,7 @@ export async function PriorSpecDetailPage({
       <h1 className="sr-only">사전규격</h1>
       {spec ? (
         <PriorSpecDetail
+          pdfLookup={pdfLookup || undefined}
           spec={spec}
           orderPlanPath={orderPlanPath}
           actions={

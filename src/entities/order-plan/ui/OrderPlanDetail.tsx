@@ -12,6 +12,7 @@ import {
   orderPlanNoticeReferences,
   type OrderPlan,
 } from "../model/order-plan";
+import type { AttachmentPdfLookup } from "@/shared/model/g2b/attachment-pdf";
 import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
 
 const rowClass = "grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]";
@@ -23,6 +24,7 @@ const linkClass = "text-primary underline underline-offset-2";
  * @returns 페이지에 넣을 발주계획 본문.
  */
 export function OrderPlanDetail({
+  pdfLookup,
   plan,
   notices,
   noticePath,
@@ -30,6 +32,7 @@ export function OrderPlanDetail({
   actions,
 }: {
   plan: OrderPlan;
+  pdfLookup?: AttachmentPdfLookup;
   notices: ReturnType<typeof orderPlanNoticeReferences>;
   noticePath: (key: { number: string; revision: string }) => string | undefined;
   priorSpecPath: (number: string) => string | undefined | Promise<string | undefined>;
@@ -141,6 +144,7 @@ export function OrderPlanDetail({
             ) : (
               <AttachmentTable
                 files={files}
+                getPdfPreview={pdfLookup && ((seq) => pdfLookup("order-plan", orderPlanAttachmentGroup(plan), seq))}
                 getDownloadHref={(file) =>
                   `/api/order-plans/${encodeURIComponent(plan.number)}/attachments/${file.seq}`
                 }

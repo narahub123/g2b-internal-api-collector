@@ -48,7 +48,7 @@ export function openAttachmentQueue(db: G2bDatabase, workerToken?: string) {
   const insert = db.prepare(`INSERT INTO g2b_attachment_jobs(id,file,priority,mode) VALUES (?,?,?,?)
     ON CONFLICT(id) DO NOTHING`);
   const read = db.prepare(`SELECT j.status, j.priority, j.attempts, j.hash, j.error, j.mode,
-    j.pdf_result_id AS pdfResultId, r.character_count AS characterCount
+    j.pdf_result_id AS pdfResultId, r.character_count AS characterCount, r.page_count AS pageCount
     FROM g2b_attachment_jobs j LEFT JOIN g2b_attachment_pdf_results r ON r.id = j.pdf_result_id WHERE j.id = ?`);
   const findPdf = db.prepare("SELECT id FROM g2b_attachment_pdf_results WHERE hash = ? AND version = ?");
   const ownsJob = "id = ? AND token = ? AND status = 'running' AND expires_at > unixepoch()";

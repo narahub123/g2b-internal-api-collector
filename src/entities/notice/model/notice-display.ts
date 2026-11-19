@@ -2,7 +2,7 @@ import { openingResultQuery } from "@/entities/opening-result/model/opening-resu
 import { noticeBaseAmountRows } from "./base-amount";
 import type { Notice } from "./types";
 import { etcNoticeDetail, noticeAttachmentGroup, privateNoticeResult } from "./notice-detail";
-import { publicAttachmentFiles } from "@/shared/model/g2b/g2b-attachments";
+import { attachmentGroup, publicAttachmentFiles } from "@/shared/model/g2b/g2b-attachments";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import { getNoticePriorSpecNumber } from "@/entities/prior-spec/model/prior-spec";
 import { getNoticeAttachmentKindName } from "@/shared/model/g2b/attachment-kind-codes";
@@ -288,6 +288,7 @@ export function getNoticeAttachmentFiles(
     return publicAttachmentFiles(noticeAttachmentGroup(payload), documents?.attachments, "etc-notice")
       .map((file) => ({
         ...file,
+        attachmentGroup: noticeAttachmentGroup(payload),
         href: file.downloadable ? attachmentDownloadUrl(downloadKey, { atchFileSqno: file.seq }) : undefined,
       }));
   }
@@ -298,6 +299,7 @@ export function getNoticeAttachmentFiles(
     return {
       filename: displayValue(source.orgnlAtchFileNm) ?? "",
       seq: String(source.atchFileSqno ?? ""),
+      attachmentGroup: attachmentGroup(source.untyAtchFileNo) ?? noticeAttachmentGroup(payload),
       documentType: row.documentType,
       fileSize: source.fileSz,
       downloadable: Boolean(href),
@@ -334,6 +336,8 @@ export function getNoticeProposalFiles(
     return {
       filename: displayValue(row.orgnlAtchFileNm) ?? "",
       seq: String(index),
+      attachmentGroup: row.fileNo,
+      attachmentSeq: row.seq,
       documentType: row.kind,
       fileSize: undefined,
       downloadable: Boolean(href),

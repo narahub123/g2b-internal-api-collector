@@ -5,12 +5,13 @@ import { Button } from "@/shared/ui/button";
 import { Pagination, PaginationContent, PaginationItem } from "@/shared/ui/pagination";
 import { getPageNumbers } from "./model";
 
-/** 이동할 수 있는 항목은 링크로, 경계의 이동 항목은 비활성 버튼으로 렌더링한다. */
-function PageControl({ href, label, current, shallow, children }: {
+/** 화면의 이동 방식에 맞는 링크나 버튼을 렌더링하고 경계 항목을 비활성화한다. */
+function PageControl({ href, label, current, shallow, onClick, children }: {
   href?: string;
   label: string;
   current?: boolean;
   shallow?: boolean;
+  onClick?: () => void;
   children: ReactNode;
 }) {
   const variant = current ? "outline" : "ghost";
@@ -19,7 +20,8 @@ function PageControl({ href, label, current, shallow, children }: {
   return (
     <PaginationItem>
       {href === undefined ? (
-        <Button type="button" variant={variant} size="sm" className={className} title={label} aria-label={label} disabled>
+        <Button type="button" variant={variant} size="sm" className={className} title={label} aria-label={label}
+          aria-current={current ? "page" : undefined} disabled={!onClick} onClick={onClick}>
           {children}
         </Button>
       ) : (
@@ -42,37 +44,44 @@ function PageControl({ href, label, current, shallow, children }: {
  * 전체 페이지가 1 이하이면 렌더링하지 않으며, 현재 페이지는 유효 범위로 보정한다.
  * @param props.page 1부터 시작하는 현재 페이지.
  * @param props.hrefForPage 검색·필터 등 기존 조건을 보존한 목적지 링크를 만드는 함수.
+ * @param props.onPageChange 주소를 유지하는 화면에서 선택한 페이지를 적용하는 콜백.
  * @param props.shallow 목록 API를 따로 조회하는 화면에서 같은 화면의 주소만 갱신한다.
  */
-export function ListPagination({ page, totalPages, hrefForPage, shallow }: {
+export function ListPagination({ page, totalPages, hrefForPage, shallow, onPageChange }: {
   page: number;
   totalPages: number;
-  hrefForPage: (page: number) => string;
   shallow?: boolean;
-}) {
+} & (
+  | { hrefForPage: (page: number) => string; onPageChange?: never }
+  | { onPageChange: (page: number) => void; hrefForPage?: never }
+)) {
   if (totalPages <= 1) return null;
   const current = Math.min(totalPages, Math.max(1, page));
   const canGoBack = current > 1;
   const canGoForward = current < totalPages;
+  const destination = (page?: number) => ({
+    href: page === undefined ? undefined : hrefForPage?.(page),
+    onClick: page === undefined || !onPageChange ? undefined : () => onPageChange(page),
+  });
 
   return (
     <Pagination>
       <PaginationContent>
-        <PageControl shallow={shallow} href={canGoBack ? hrefForPage(1) : undefined} label="처음으로">
+        <PageControl shallow={shallow} {...destination(canGoBack ? 1 : undefined)} label="처음으로">
           <ChevronsLeft aria-hidden="true" />
         </PageControl>
-        <PageControl shallow={shallow} href={canGoBack ? hrefForPage(current - 1) : undefined} label="이전">
+        <PageControl shallow={shallow} {...destination(canGoBack ? current - 1 : undefined)} label="이전">
           <ChevronLeft aria-hidden="true" />
         </PageControl>
         {getPageNumbers(current, totalPages).map((number) => (
-          <PageControl key={number} shallow={shallow} href={hrefForPage(number)} label={`${number} 페이지`} current={number === current}>
+          <PageControl key={number} shallow={shallow} {...destination(number)} label={`${number} 페이지`} current={number === current}>
             {number}
           </PageControl>
         ))}
-        <PageControl shallow={shallow} href={canGoForward ? hrefForPage(current + 1) : undefined} label="다음">
+        <PageControl shallow={shallow} {...destination(canGoForward ? current + 1 : undefined)} label="다음">
           <ChevronRight aria-hidden="true" />
         </PageControl>
-        <PageControl shallow={shallow} href={canGoForward ? hrefForPage(totalPages) : undefined} label="마지막으로">
+        <PageControl shallow={shallow} {...destination(canGoForward ? totalPages : undefined)} label="마지막으로">
           <ChevronsRight aria-hidden="true" />
         </PageControl>
       </PaginationContent>

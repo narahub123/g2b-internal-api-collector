@@ -1,4 +1,5 @@
 import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { loadAttachmentPdfLookup } from "@/_pages/admin/g2b/ui/attachment-preview-data";
 import { AttachmentJobsSection } from "@/_pages/admin/g2b/ui/AttachmentJobsSection";
 import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
 import { noticePath, priorSpecPath } from "@/_pages/admin/config/routes";
@@ -23,6 +24,7 @@ export async function OrderPlanDetailPage({
   if (g2bNumber(number) !== number) notFound();
   const repository = getG2bRepository();
   const plan = await repository.findOrderPlan(number);
+  const pdfLookup = plan && await loadAttachmentPdfLookup({ section: "order-plans", number, revision: "" });
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
@@ -30,6 +32,7 @@ export async function OrderPlanDetailPage({
       <h1 className="sr-only">발주계획</h1>
       {plan ? (
         <OrderPlanDetail
+          pdfLookup={pdfLookup || undefined}
           plan={plan}
           notices={orderPlanNoticeReferences(plan, await repository.findNoticesForOrderPlan(number))}
           noticePath={noticePath}

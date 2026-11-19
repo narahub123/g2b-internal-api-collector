@@ -273,3 +273,63 @@ test('스트리밍 해시는 청크 구분과 무관하며 중단하거나 잘�
   await assert.rejects(pending, /abort/i);
   assert.equal(canceled, true);
 });
+
+test('저장된 PDF 페이지 하나를 복합 기본 키로 조회한다', async () => {
+  const { readAttachmentPdfPage, ATTACHMENT_PDF_PAGE_SQL } = require('../src/server/g2b/repository/attachment-pdf');
+  const client = createClient({ url: ':memory:' });
+  try {
+    await migrateG2bDatabase(client);
+    await client.executeMultiple(`
+      INSERT INTO g2b_attachment_pdf_results(id,hash,version,page_count,character_count)
+      VALUES (1,'a','v',2,3),(2,'b','v',1,5);
+      INSERT INTO g2b_attachment_pdf_pages VALUES (1,1,'abc'),(1,2,''),(2,1,'other');
+    `);
+    const db = new G2bDatabase(client);
+    assert.deepEqual(await readAttachmentPdfPage(db, 1, 1), { pageNumber: 1, text: 'abc' });
+    assert.deepEqual(await readAttachmentPdfPage(db, 1, 2), { pageNumber: 2, text: '' });
+    assert.equal(await readAttachmentPdfPage(db, 1, 3), undefined);
+    const { rows } = await client.execute({ sql: 'EXPLAIN QUERY PLAN ' + ATTACHMENT_PDF_PAGE_SQL, args: [1, 2] });
+    assert.match(rows[0].detail, /SEARCH .*result_id=\? AND page_number=\?/);
+  } finally {
+    client.close();
+  }
+});
+
+test('PDF 페이지 API는 결과별 서명을 검증하고 유효한 요청만 조회한다', async (t) => {
+  const env = { TURSO_DATABASE_URL: ':memory:', TURSO_AUTH_TOKEN: 'pdf-route-test' };
+  for (const [key, value] of Object.entries(env)) {
+    const previous = process.env[key];
+    process.env[key] = value;
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+  }
+  const { getG2bDatabase } = require('../src/server/g2b/repository');
+  const { signAttachmentPdfResult } = require('../src/features/download-g2b-attachment/server/pdf-preview-access');
+  const { GET } = require('../app/api/g2b/attachment-results/[resultId]/pages/[page]/route');
+  const db = getG2bDatabase();
+  try {
+    await migrateG2bDatabase(db.client);
+    await db.client.executeMultiple(`
+      INSERT INTO g2b_attachment_pdf_results VALUES (1,'test','v',1,3);
+      INSERT INTO g2b_attachment_pdf_pages VALUES (1,1,'abc');
+    `);
+    const request = (resultId, page, signature) => GET(
+      new Request('http://localhost', {
+        headers: signature ? { 'X-Attachment-Pdf-Signature': signature } : undefined,
+      }),
+      { params: Promise.resolve({ resultId, page }) },
+    );
+    assert.equal((await request('1', '0')).status, 400);
+    assert.equal((await request('1', '1')).status, 403);
+    assert.equal((await request('2', '1', signAttachmentPdfResult(1))).status, 403);
+    assert.equal((await request('1', '2', signAttachmentPdfResult(1))).status, 404);
+    const response = await request('1', '1', signAttachmentPdfResult(1));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'private, no-store');
+    assert.deepEqual(await response.json(), { pageNumber: 1, text: 'abc' });
+  } finally {
+    db.client.close();
+  }
+});
