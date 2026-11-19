@@ -1,5 +1,5 @@
 // 일회 워커는 이 시간 뒤 신규 작업의 선점을 멈추고 실행 중인 작업을 마무리한다.
-export const ATTACHMENT_ADMISSION_TIMEOUT_MS = 120_000;
+export const ATTACHMENT_ADMISSION_TIMEOUT_MS = 300_000;
 // 상시 워커의 유휴 조회 간격으로, 큐가 비었을 때 DB 조회 빈도를 제한한다.
 export const ATTACHMENT_IDLE_POLL_MS = 5_000;
 // 수집 진행 호출과 외부 복구 호출이 같은 워크플로 실행을 반복 요청하지 않게 한다.
