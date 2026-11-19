@@ -1,0 +1,10 @@
+services:
+  attachments:
+    build:
+      context: .
+      dockerfile: Dockerfile.attachments
+    env_file: .env.local
+    init: true
+    restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 512m

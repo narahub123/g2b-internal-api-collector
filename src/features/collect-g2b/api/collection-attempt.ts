@@ -42,11 +42,12 @@ export async function trackCollectionAttempt<Result>(
   const recordFailure = (error: unknown) => {
     partial.push(error);
   };
-  const finish = async (status: NoticeAttemptCompletion["status"], error: string | null = null, diagnostics?: NoticeAttemptCompletion["diagnostics"]) => {
+  const finish = async (status: NoticeAttemptCompletion["status"], error: string | null = null,
+    diagnostics?: NoticeAttemptCompletion["diagnostics"], attachmentNumber?: string) => {
     if (context) {
-      context.attempts.push({ id, status, finishedAt: new Date().toISOString(), error, diagnostics });
+      context.attempts.push({ id, status, finishedAt: new Date().toISOString(), error, diagnostics, attachmentNumber });
     } else {
-      await history.finish(id, status, error, diagnostics);
+      await history.finish(id, status, error, diagnostics, attachmentNumber);
     }
   };
   const finishFailure = async (error: unknown, errors: unknown[], status: "failed" | "deferred") => {
@@ -74,7 +75,10 @@ export async function trackCollectionAttempt<Result>(
       await finishFailure(error, [], "failed");
       job?.onPartialFailure(error);
     } else {
-      await finish("succeeded");
+      // 공고와 연결된 발주계획은 요청 번호 대신 나라장터가 응답한 번호로 저장될 수 있다.
+      const attachmentNumber = target.section === "order-plans" && result && typeof result === "object" &&
+        "number" in result && typeof result.number === "string" ? result.number : undefined;
+      await finish("succeeded", null, undefined, attachmentNumber);
     }
     return result;
   } finally {

@@ -1,4 +1,5 @@
 import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { AttachmentJobsSection } from "@/_pages/admin/g2b/ui/AttachmentJobsSection";
 import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
 import { noticePath, priorSpecPath } from "@/_pages/admin/config/routes";
 import { notFound } from "next/navigation";
@@ -50,6 +51,7 @@ export async function OrderPlanDetailPage({
           />
         </div>
       )}
+      {plan && <AttachmentJobsSection owner={{ section: "order-plans", number, revision: "" }} />}
     </div>
   );
 }

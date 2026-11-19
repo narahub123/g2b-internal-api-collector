@@ -408,11 +408,11 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
         if (!current) return;
         if (attempts.length) {
           const finishAttempt = db.prepare(`UPDATE g2b_collection_attempts
-            SET status = ?, finished_at = ?, error = ?, diagnostics = ?
+            SET status = ?, finished_at = ?, error = ?, diagnostics = ?, attachment_number = ?
             WHERE id = ? AND job_id = ? AND status = 'pending'`);
           for (const attempt of attempts) {
             await finishAttempt.run(attempt.status, attempt.finishedAt, attempt.error,
-              attempt.diagnostics ? JSON.stringify(attempt.diagnostics) : null, attempt.id, id);
+              attempt.diagnostics ? JSON.stringify(attempt.diagnostics) : null, attempt.attachmentNumber ?? null, attempt.id, id);
           }
         }
         const retryable = outcome.kind === "failure" || (outcome.kind === "internal_error" && current.source === "automatic");

@@ -30,6 +30,14 @@
 
 Node.js 24 이상과 npm으로 실행합니다. Turso Cloud의 SQLite(libSQL) DB를 생성하고 DB URL과 읽기·쓰기 토큰을 `.env.local`의 `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`에 설정합니다. 최초 실행 전에 `npm run db:migrate`를 실행합니다. Next.js 서버에서 `selectItemAnncMngV.do`를 HTTP POST로 호출해 물품 공고 상세를 수집합니다.
 
+### 첨부 처리 워커
+
+1. 웹과 공고 워커를 새 버전으로 전환하기 전에 같은 DB에 `npm run db:migrate`를 적용합니다.
+2. `docker compose -f compose.attachments.yaml up -d --build`로 첨부 워커를 시작합니다. 로컬 프로세스로 실행할 때는 `npm run worker:attachments`를 사용합니다.
+3. 관리자 상세 화면에서 수동 우선 처리 요청을 허용하려면 웹 서버에 `ATTACHMENT_MANUAL_TOKEN`을 설정합니다. 공고·발주계획·사전규격 상세의 첨부 처리 영역에서 파일 상태와 해시를 볼 수 있습니다.
+
+첨부 워커를 중지한 동안에는 수집 완료 이벤트가 DB에 남고 재시작 뒤 이어서 처리됩니다. 1차 첨부 작업은 다운로드와 해시 확인으로 완료되며, 파일 원본과 추출 내용은 저장하지 않습니다. 운영 반영 후 Turso Analytics에서 첨부 이벤트 조회와 선점 쿼리의 평균 Rows Read 및 실행 횟수를 확인합니다.
+
 ```powershell
 npm ci
 npm run db:migrate

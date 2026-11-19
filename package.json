@@ -7,6 +7,7 @@
     "build": "next build --webpack",
     "start": "next start --hostname 127.0.0.1",
     "worker:notices": "node scripts/notice-worker.cjs",
+    "worker:attachments": "node scripts/attachment-worker.cjs",
     "typecheck": "tsc --noEmit",
     "db:migrate": "node scripts/g2b-migrate.cjs"
   },
