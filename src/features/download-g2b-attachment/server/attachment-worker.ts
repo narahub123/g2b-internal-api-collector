@@ -3,6 +3,12 @@ import { open } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { getG2bDatabase } from "@/server/g2b/repository";
 import { openAttachmentQueue } from "@/server/g2b/repository/attachment-queue";
+import {
+  ATTACHMENT_ADMISSION_TIMEOUT_MS,
+  ATTACHMENT_DOWNLOAD_TIMEOUT_MS,
+  ATTACHMENT_IDLE_POLL_MS,
+  ATTACHMENT_LEASE_RENEWAL_MS,
+} from "@/shared/config/g2b-attachment-worker";
 import { listAttachmentJobs, preferredPdfFiles } from "./attachment-catalog";
 import { PDF_EXTRACTOR_VERSION, PDF_MAX_BYTES } from "@/shared/model/g2b/attachment-pdf";
 import { cleanAbandonedPdfs, extractPdfProcess, PermanentPdfError, removeTemporaryPdf, temporaryPdfPath } from "./pdf-process";
@@ -62,12 +68,12 @@ async function processClaim(queue: Queue, claim: Claim, stopping: AbortSignal) {
   const lost = new AbortController();
   // 다운로드 제한은 네트워크 단계에만 적용하고 자식 추출은 자체 제한을 적용한다.
   const lifecycle = AbortSignal.any([stopping, lost.signal]);
-  const signal = AbortSignal.any([lifecycle, AbortSignal.timeout(600_000)]);
+  const signal = AbortSignal.any([lifecycle, AbortSignal.timeout(ATTACHMENT_DOWNLOAD_TIMEOUT_MS)]);
   const pdfPath = claim.mode === "pdf_extract" ? temporaryPdfPath() : undefined;
   const renewal = (async () => {
     try {
       while (!heartbeat.signal.aborted) {
-        await delay(30_000, undefined, { signal: heartbeat.signal });
+        await delay(ATTACHMENT_LEASE_RENEWAL_MS, undefined, { signal: heartbeat.signal });
         if (!await queue.renew(claim)) throw new Error("첨부 작업 실행권을 잃었습니다.");
       }
     } catch (error) {
@@ -139,7 +145,7 @@ async function processClaim(queue: Queue, claim: Claim, stopping: AbortSignal) {
  */
 export async function runAttachmentWorker(stopping: AbortSignal, options: { once?: boolean } = {}) {
   // 시간 한도는 새 작업을 받는 데만 적용한다. 다운로드·추출의 취소 신호와 분리한다.
-  const deadline = options.once ? performance.now() + 120_000 : Infinity;
+  const deadline = options.once ? performance.now() + ATTACHMENT_ADMISSION_TIMEOUT_MS : Infinity;
   const canStart = () => !stopping.aborted && performance.now() < deadline;
   await cleanAbandonedPdfs();
   const queue = openAttachmentQueue(getG2bDatabase());
@@ -181,6 +187,6 @@ export async function runAttachmentWorker(stopping: AbortSignal, options: { once
       console.error("[첨부 워커]", error);
     }
     if (options.once) return;
-    await delay(5_000, undefined, { signal: stopping }).catch(() => {});
+    await delay(ATTACHMENT_IDLE_POLL_MS, undefined, { signal: stopping }).catch(() => {});
   }
 }

@@ -1,5 +1,6 @@
 import { g2bDownloadUrl } from "@/shared/api/g2b/g2b-download";
 import { readG2bResponse } from "@/shared/api/g2b/g2b-maintenance";
+import { ATTACHMENT_METADATA_TIMEOUT_MS } from "@/shared/config/g2b-attachment-worker";
 import {
   attachmentSources,
   publicAttachmentFiles,
@@ -50,7 +51,7 @@ export async function resolvePublicAttachmentDownload(
       }),
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.any([AbortSignal.timeout(15000), ...(signal ? [signal] : [])]),
+      signal: AbortSignal.any([AbortSignal.timeout(ATTACHMENT_METADATA_TIMEOUT_MS), ...(signal ? [signal] : [])]),
     },
   );
   const body = await readG2bResponse(response);

@@ -1,5 +1,6 @@
 import { g2bDownloadUrl } from '@/shared/api/g2b/g2b-download';
 import { readG2bResponse } from '@/shared/api/g2b/g2b-maintenance';
+import { ATTACHMENT_METADATA_TIMEOUT_MS } from '@/shared/config/g2b-attachment-worker';
 
 const origin = 'https://www.g2b.go.kr';
 // 다운로드 메타데이터 API에는 UUID 형식으로 저장된 첨부 그룹만 전달한다.
@@ -30,7 +31,7 @@ export async function resolveProposalDownload(fileNo: string, seq: string, filen
     }),
     cache: 'no-store',
     redirect: 'error',
-    signal: AbortSignal.any([AbortSignal.timeout(15000), ...(signal ? [signal] : [])]),
+    signal: AbortSignal.any([AbortSignal.timeout(ATTACHMENT_METADATA_TIMEOUT_MS), ...(signal ? [signal] : [])]),
   });
   const body = await readG2bResponse(response);
   if (!response.ok) throw new Error('제안요청 첨부 메타데이터를 가져오지 못했습니다.');

@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import {
+  ATTACHMENT_EVENT_RETRY_SECONDS,
+  ATTACHMENT_LEASE_SECONDS,
+  ATTACHMENT_MAX_ATTEMPTS,
+  ATTACHMENT_RETRY_BASE_SECONDS,
+} from "@/shared/config/g2b-attachment-worker";
 import { isPdfAttachment, PDF_EXTRACTOR_VERSION, type PdfExtraction } from "@/shared/model/g2b/attachment-pdf";
 import type { G2bDatabase } from "./database";
 
@@ -18,7 +24,6 @@ type AttachmentEvent = AttachmentOwner & { id: number; failures: number; generat
 
 // 운영자가 실패 횟수를 초기화한 뒤에도 이전 처리 결과를 거부할 수 있도록 세대를 함께 확인한다.
 const currentEvent = "id = ? AND failures = ? AND generation = ? AND failed_at IS NULL";
-const eventRetrySeconds = [30, 60, 120] as const;
 
 // 페이지 단위 왕복을 줄이면서 일반적인 PDF의 바인딩 크기를 제한한다.
 function* pageBatches(pages: PdfExtraction["pages"]) {
@@ -107,7 +112,7 @@ export function openAttachmentQueue(db: G2bDatabase) {
     },
     /** 최신 시도만 지연하거나 최종 실패로 기록한다. 다른 워커에서 처리했다면 결과가 없다. */
     async failEvent(event: AttachmentEvent, error: string) {
-      const retry = eventRetrySeconds[event.failures];
+      const retry = ATTACHMENT_EVENT_RETRY_SECONDS[event.failures];
       return db.prepare(`UPDATE g2b_attachment_events SET failures = failures + 1, error = ?,
         available_at = unixepoch() + ?, failed_at = CASE WHEN ? THEN unixepoch() END
         WHERE ${currentEvent} RETURNING failures, available_at AS retryAt, failed_at AS failedAt`)
@@ -126,11 +131,11 @@ export function openAttachmentQueue(db: G2bDatabase) {
         await db.prepare(`UPDATE g2b_attachment_jobs SET status = 'pending'
           WHERE status = 'retry_wait' AND available_at <= unixepoch()`).run();
         await db.prepare(`UPDATE g2b_attachment_jobs
-          SET status = CASE WHEN attempts >= 4 THEN 'failed' ELSE 'pending' END,
+          SET status = CASE WHEN attempts >= ${ATTACHMENT_MAX_ATTEMPTS} THEN 'failed' ELSE 'pending' END,
           token = NULL, expires_at = NULL, error = '첨부 작업 선점 만료'
           WHERE status = 'running' AND expires_at <= unixepoch()`).run();
         const row = await db.prepare(`UPDATE g2b_attachment_jobs
-          SET status = 'running', token = ?, expires_at = unixepoch() + 90, attempts = attempts + 1
+          SET status = 'running', token = ?, expires_at = unixepoch() + ${ATTACHMENT_LEASE_SECONDS}, attempts = attempts + 1
           WHERE position = (SELECT position FROM g2b_attachment_jobs WHERE status = 'pending'
             ORDER BY priority DESC, position LIMIT 1) RETURNING file, attempts, mode`).get(token);
         if (row) return { file: JSON.parse(String(row.file)), token, attempts: Number(row.attempts), mode: row.mode as Mode };
@@ -138,7 +143,7 @@ export function openAttachmentQueue(db: G2bDatabase) {
     },
     /** DB 시각 기준으로 유효한 동일 토큰만 선점을 연장한다. */
     async renew(claim: Claim) {
-      return Boolean((await db.prepare(`UPDATE g2b_attachment_jobs SET expires_at = unixepoch() + 90
+      return Boolean((await db.prepare(`UPDATE g2b_attachment_jobs SET expires_at = unixepoch() + ${ATTACHMENT_LEASE_SECONDS}
         WHERE id = ? AND token = ? AND status = 'running' AND expires_at > unixepoch()`)
         .run(claim.file.id, claim.token)).rowsAffected);
     },
@@ -153,7 +158,7 @@ export function openAttachmentQueue(db: G2bDatabase) {
         if (success && claim.mode === "pdf_extract" && !outcome.pdf) {
           throw new Error("PDF 추출 작업에 완료 결과가 없습니다.");
         }
-        const retry = !success && outcome.retry && claim.attempts < 4;
+        const retry = !success && outcome.retry && claim.attempts < ATTACHMENT_MAX_ATTEMPTS;
         let resultId = null;
         if (success && outcome.pdf) {
           const pdf = outcome.pdf;
@@ -171,7 +176,7 @@ export function openAttachmentQueue(db: G2bDatabase) {
         const updated = await db.prepare(`UPDATE g2b_attachment_jobs SET status = ?, available_at = unixepoch() + ?,
           hash = COALESCE(?, hash), error = ?, pdf_result_id = ?, token = NULL, expires_at = NULL WHERE ${ownsJob}`)
           .run(promoted ? "pending" : success ? "succeeded" : retry ? "retry_wait" : "failed",
-            !promoted && retry ? 30 * 2 ** (claim.attempts - 1) : 0,
+            !promoted && retry ? ATTACHMENT_RETRY_BASE_SECONDS * 2 ** (claim.attempts - 1) : 0,
             success ? outcome.hash : null, success || promoted ? null : outcome.error, resultId, ...key);
         // 페이지 저장 도중 실행권이 만료되면 결과까지 함께 롤백한다.
         if (!updated.rowsAffected) throw new Error("첨부 작업 실행권이 결과 저장 중 만료되었습니다.");

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readdir, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { ATTACHMENT_PDF_EXTRACTION_TIMEOUT_MS, ATTACHMENT_PDF_MAX_OLD_SPACE_MIB } from "@/shared/config/g2b-attachment-worker";
 import type { PdfExtraction } from "@/shared/model/g2b/attachment-pdf";
 
 // 시작 시 청소 범위를 이 워커가 만든 파일로 한정하고 PID로 소유 프로세스를 확인한다.
@@ -51,14 +52,14 @@ export async function cleanAbandonedPdfs() {
  * @throws 실행·추출 실패, 중단 또는 5분 제한 초과 시 오류를 전달한다.
  */
 export function extractPdfProcess(path: string, signal: AbortSignal): Promise<PdfExtraction> {
-  const extraction = AbortSignal.any([signal, AbortSignal.timeout(300_000)]);
+  const extraction = AbortSignal.any([signal, AbortSignal.timeout(ATTACHMENT_PDF_EXTRACTION_TIMEOUT_MS)]);
   extraction.throwIfAborted();
   return new Promise((resolveResult, reject) => {
     const child = fork(resolve("scripts/attachment-pdf-extract.cjs"), [path], {
       // 파서는 임시 파일만 읽으므로 DB 인증 정보가 들어 있는 부모 환경을 상속하지 않는다.
       env: { NODE_ENV: "production", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
       // 부모 워커와 함께 컨테이너 메모리를 사용하므로 자식의 V8 힙 상한을 둔다.
-      execArgv: ["--max-old-space-size=256"],
+      execArgv: [`--max-old-space-size=${ATTACHMENT_PDF_MAX_OLD_SPACE_MIB}`],
       stdio: ["ignore", "ignore", "inherit", "ipc"],
       windowsHide: true,
     });

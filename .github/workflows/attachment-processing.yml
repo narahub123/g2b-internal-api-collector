@@ -3,6 +3,7 @@ name: 첨부 처리
 on:
   workflow_dispatch:
   schedule:
+    # 예약 주기는 매시 2분부터 5분 간격이다.
     - cron: "2-59/5 * * * *"
 
 permissions:
@@ -16,6 +17,7 @@ concurrency:
 jobs:
   process:
     runs-on: ubuntu-latest
+    # 이미지 빌드와 이미 선점한 파일의 처리 시간을 포함하는 전체 작업 한도다.
     timeout-minutes: 25
     environment: attachment-processing
     steps:
@@ -32,7 +34,13 @@ jobs:
           cache-from: type=gha,scope=attachment-worker
           cache-to: type=gha,mode=max,scope=attachment-worker
       - name: 첨부 큐 처리
-        run: docker run --rm --init --memory 512m --cpus 0.5 -e TURSO_DATABASE_URL -e TURSO_AUTH_TOKEN g2b-attachment-worker:run node scripts/attachment-worker.cjs --once
+        run: >-
+          docker run --rm --init --memory "$ATTACHMENT_DOCKER_MEMORY" --cpus "$ATTACHMENT_DOCKER_CPUS"
+          -e TURSO_DATABASE_URL -e TURSO_AUTH_TOKEN
+          g2b-attachment-worker:run node scripts/attachment-worker.cjs --once
         env:
+          # 컨테이너 한도는 상시 워커의 compose.attachments.yaml에도 정의한다.
+          ATTACHMENT_DOCKER_MEMORY: "512m"
+          ATTACHMENT_DOCKER_CPUS: "0.5"
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
