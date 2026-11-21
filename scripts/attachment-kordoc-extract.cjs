@@ -1,6 +1,5 @@
 // 빌드에서 준비된 모델만 읽고 실행 중 외부 요청을 차단한다.
-process.env.KORDOC_OFFLINE = "1";
-if (process.env.ATTACHMENT_MODEL_CACHE) process.env.KORDOC_MODEL_CACHE = process.env.ATTACHMENT_MODEL_CACHE;
+require("./attachment-ocr-models.cjs").configureAttachmentOcr();
 const { parse } = require("kordoc");
 
 const permanentCodes = new Set([

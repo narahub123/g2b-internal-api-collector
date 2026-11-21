@@ -3,7 +3,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 ENV ATTACHMENT_MODEL_CACHE=/opt/attachment-models
-RUN KORDOC_MODEL_CACHE="$ATTACHMENT_MODEL_CACHE" ./node_modules/.bin/kordoc check-ocr-models
+COPY scripts/attachment-ocr-models.cjs ./scripts/
+RUN npm run attachments:ocr:prepare
 COPY --chown=node:node src ./src
 COPY --chown=node:node scripts ./scripts
 USER node
