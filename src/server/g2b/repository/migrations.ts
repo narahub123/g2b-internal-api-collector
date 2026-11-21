@@ -470,6 +470,28 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (16);
       `);
     }
+    const attachmentExtraction = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 17");
+    if (!attachmentExtraction.rows.length) {
+      // 기존 PDF 미리보기의 서명과 페이지 경로가 같은 결과를 가리키도록 ID와 순번을 보존한다.
+      await transaction.executeMultiple(`
+        CREATE TABLE g2b_attachment_results (
+          id INTEGER PRIMARY KEY, hash TEXT NOT NULL, format TEXT NOT NULL, extractor_version TEXT NOT NULL,
+          unit_count INTEGER NOT NULL, character_count INTEGER NOT NULL, UNIQUE(hash, format, extractor_version)
+        );
+        CREATE TABLE g2b_attachment_result_units (
+          result_id INTEGER NOT NULL REFERENCES g2b_attachment_results(id),
+          unit_number INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY(result_id, unit_number)
+        );
+        ALTER TABLE g2b_attachment_jobs ADD COLUMN result_id INTEGER REFERENCES g2b_attachment_results(id);
+        INSERT INTO g2b_attachment_results
+          SELECT id, hash, 'pdf', version, page_count, character_count FROM g2b_attachment_pdf_results;
+        INSERT INTO g2b_attachment_result_units
+          SELECT result_id, page_number, text FROM g2b_attachment_pdf_pages;
+        UPDATE g2b_attachment_jobs SET result_id = pdf_result_id WHERE pdf_result_id IS NOT NULL;
+        UPDATE g2b_attachment_jobs SET mode = 'extract' WHERE mode = 'pdf_extract';
+        INSERT INTO g2b_schema_migrations (version) VALUES (17);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

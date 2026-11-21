@@ -1,6 +1,6 @@
 import { decodeHTMLStrict } from "entities";
 import { Accordion } from "@/shared/ui/accordion";
-import type { AttachmentPdfLookup } from "@/shared/model/g2b/attachment-pdf";
+import type { AttachmentPreviewLookup } from "@/shared/model/g2b/attachment-extraction";
 import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import {
@@ -20,11 +20,11 @@ import type { NoticeKey } from "../model/types";
 /** 저장된 순서대로 공지를 표시하고, 기초금액 공지는 전용 저장 자료의 첨부로 연결한다. */
 export function NoticePostsSection({
   posts,
-  pdfLookup,
+  previewLookup,
   number,
   revision,
   source,
-}: NoticeKey & { posts: NoticePosts; source?: "base-amount"; pdfLookup?: AttachmentPdfLookup }) {
+}: NoticeKey & { posts: NoticePosts; source?: "base-amount"; previewLookup?: AttachmentPreviewLookup }) {
   const rows = noticePostRows(posts.list);
   if (!rows.length) return null;
 
@@ -115,7 +115,7 @@ export function NoticePostsSection({
                     >
                       <AttachmentTable
                         files={files}
-                        getPdfPreview={pdfLookup && ((seq) => pdfLookup(
+                        getAttachmentPreview={previewLookup && ((seq) => previewLookup(
                           JSON.stringify([source === "base-amount" ? "base-amount-post" : "notice-post", bbsNo, pstNo]), group, seq,
                         ))}
                         getDownloadHref={({ seq }) =>

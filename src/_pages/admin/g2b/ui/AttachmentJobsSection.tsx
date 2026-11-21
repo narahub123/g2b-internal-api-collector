@@ -3,7 +3,7 @@ import type { AttachmentOwner } from "@/server/g2b/repository/attachment-queue";
 import { loadAttachmentJobs } from "./attachment-preview-data";
 import { AttachmentRequestForm } from "./AttachmentRequestForm";
 import { requestAttachment } from "./attachment-request";
-import { isPdfAttachment } from "@/shared/model/g2b/attachment-pdf";
+import { findAttachmentExtractor } from "@/shared/model/g2b/attachment-extraction";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 
@@ -28,17 +28,17 @@ export async function AttachmentJobsSection({ owner }: { owner: AttachmentOwner 
                   <div className="text-sm text-muted-foreground">
                     {pdfs.length
                       ? `PDF 우선 처리 · ${pdfs.map((pdf) => decodeHTMLStrict(pdf.filename)).join(", ")}`
-                      : status?.pdfResultId != null
-                        ? status.characterCount === 0 ? "텍스트 없음" : "PDF 추출 완료"
-                        : status?.status === "running" && status.mode === "pdf_extract" ? "PDF 처리 중"
+                      : status?.resultId != null
+                        ? status.characterCount === 0 ? "텍스트 없음" : "추출 완료"
+                        : status?.status === "running" && status.mode === "extract" ? "추출 처리 중"
                         : labels[String(status?.status)] ?? "등록 전"}
                     {!!status && ` · ${status.priority === 1 ? "수동" : "자동"}`}
                   </div>
                   {!!status?.hash && <code className="wrap-anywhere text-xs">{String(status.hash)}</code>}
                   {status?.status === "failed" && !!status.error && <p className="text-sm">{String(status.error)}</p>}
-                  {manualEnabled && !pdfs.length && (isPdfAttachment(file.filename) ? status?.pdfResultId == null : status?.status !== "succeeded") && (
+                  {manualEnabled && !pdfs.length && (findAttachmentExtractor(file.filename) ? status?.resultId == null : status?.status !== "succeeded") && (
                     <AttachmentRequestForm action={requestAttachment.bind(null, owner, file.id)}
-                      label={isPdfAttachment(file.filename) ? "추출 요청" : "우선 처리 요청"} />
+                      label={findAttachmentExtractor(file.filename) ? "추출 요청" : "우선 처리 요청"} />
                   )}
                 </li>
               ))}

@@ -2,12 +2,12 @@
 
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { AttachmentPdfPreview } from "@/shared/model/g2b/attachment-pdf";
+import type { AttachmentPreview } from "@/shared/model/g2b/attachment-extraction";
 import { Button } from "@/shared/ui/button";
 import { ListView } from "@/shared/ui/list-controls/ListView";
 
-type Preview = AttachmentPdfPreview & { filename: string; rowKey: string };
-type PdfPage = { pageNumber: number; text: string };
+type Preview = AttachmentPreview & { filename: string; rowKey: string };
+type TextUnitResponse = { pageNumber: number; text: string };
 
 const PreviewContext = createContext<{
   panelId: string;
@@ -16,7 +16,7 @@ const PreviewContext = createContext<{
 } | null>(null);
 
 /** 테이블의 선택 상태를 관리하고 선택한 파일의 미리보기를 바로 아래에 표시한다. */
-export function AttachmentPdfPanel({ children }: { children: ReactNode }) {
+export function AttachmentPreviewPanel({ children }: { children: ReactNode }) {
   const panelId = useId();
   const [selection, setSelection] = useState<{ file: Preview; page: number }>();
 
@@ -29,7 +29,7 @@ export function AttachmentPdfPanel({ children }: { children: ReactNode }) {
       <div className="grid min-w-0 gap-3">
         {children}
         {selection && (
-          <PdfPagePreview
+          <TextUnitPreview
             id={panelId}
             file={selection.file}
             page={selection.page}
@@ -43,7 +43,7 @@ export function AttachmentPdfPanel({ children }: { children: ReactNode }) {
 }
 
 /** 해당 행을 선택하고 파일의 첫 페이지를 테이블 하단에 연다. */
-export function AttachmentPdfButton({ file }: { file: Preview }) {
+export function AttachmentPreviewButton({ file }: { file: Preview }) {
   const panel = useContext(PreviewContext);
   if (!panel) return null;
   const expanded = panel.activeRow === file.rowKey;
@@ -57,7 +57,7 @@ export function AttachmentPdfButton({ file }: { file: Preview }) {
 }
 
 /** 현재 페이지를 처음 열 때만 조회하고 성공한 본문은 탭의 메모리에서 재사용한다. */
-function PdfPagePreview({ id, file, page, onPageChange, onClose }: {
+function TextUnitPreview({ id, file, page, onPageChange, onClose }: {
   id: string;
   file: Preview;
   page: number;
@@ -65,15 +65,15 @@ function PdfPagePreview({ id, file, page, onPageChange, onClose }: {
   onClose: () => void;
 }) {
   const query = useQuery({
-    queryKey: ["attachment-pdf-page", file.resultId, page],
+    queryKey: ["attachment-result-unit", file.resultId, page],
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
-    queryFn: async (): Promise<PdfPage> => {
+    queryFn: async (): Promise<TextUnitResponse> => {
       const response = await fetch(`/api/g2b/attachment-results/${file.resultId}/pages/${page}`, {
         headers: { "X-Attachment-Pdf-Signature": file.signature },
       });
-      if (!response.ok) throw new Error("PDF 페이지를 조회하지 못했습니다.");
+      if (!response.ok) throw new Error("추출 내용을 조회하지 못했습니다.");
       return response.json();
     },
   });
@@ -84,12 +84,12 @@ function PdfPagePreview({ id, file, page, onPageChange, onClose }: {
         <h4 id={`${id}-title`} className="min-w-0 wrap-anywhere font-medium">{file.filename}</h4>
         <Button type="button" size="sm" variant="ghost" onClick={onClose}>닫기</Button>
       </div>
-      <ListView pagination={{ page, totalPages: file.pageCount, onPageChange }}>
-        <p className="mb-2 text-sm text-muted-foreground" aria-live="polite">{page} / {file.pageCount} 페이지</p>
+      <ListView pagination={{ page, totalPages: file.unitCount, onPageChange }}>
+        <p className="mb-2 text-sm text-muted-foreground" aria-live="polite">{page} / {file.unitCount} {file.format === "pdf" ? "페이지" : "단위"}</p>
         {query.isPending ? <p role="status">추출 내용을 불러오는 중입니다.</p>
           : query.isError ? (
             <div className="flex flex-wrap items-center gap-2">
-              <p role="alert">PDF 페이지를 조회하지 못했습니다.</p>
+              <p role="alert">추출 내용을 조회하지 못했습니다.</p>
               <Button type="button" size="sm" variant="outline" disabled={query.isFetching}
                 onClick={() => void query.refetch()}>다시 시도</Button>
             </div>
@@ -97,7 +97,7 @@ function PdfPagePreview({ id, file, page, onPageChange, onClose }: {
             <pre className="max-h-[32rem] overflow-auto wrap-anywhere whitespace-pre-wrap rounded-md bg-muted p-3 text-sm">
               {query.data.text}
             </pre>
-          ) : <p>이 페이지에 추출된 텍스트가 없습니다.</p>}
+          ) : <p>추출된 텍스트가 없습니다.</p>}
       </ListView>
     </section>
   );

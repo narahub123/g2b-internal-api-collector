@@ -11,7 +11,7 @@ import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import type { PriorSpec } from "../model/prior-spec";
 import { priorSpecDisplay } from "../model/prior-spec-display";
-import type { AttachmentPdfLookup } from "@/shared/model/g2b/attachment-pdf";
+import type { AttachmentPreviewLookup } from "@/shared/model/g2b/attachment-extraction";
 import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
 
 const linkStyle = "text-primary underline underline-offset-2";
@@ -72,13 +72,13 @@ function DetailTable({
  * @returns 페이지에 넣을 사전규격 상세 본문.
  */
 export function PriorSpecDetail({
-  pdfLookup,
+  previewLookup,
   spec,
   orderPlanPath,
   actions,
 }: {
   spec: PriorSpec;
-  pdfLookup?: AttachmentPdfLookup;
+  previewLookup?: AttachmentPreviewLookup;
   orderPlanPath: (number: string) => string | undefined | Promise<string | undefined>;
   actions?: ReactNode;
 }) {
@@ -178,7 +178,7 @@ export function PriorSpecDetail({
             ) : (
               <AttachmentTable
                 files={files}
-                getPdfPreview={pdfLookup && ((seq) => pdfLookup("prior-spec", group, seq))}
+                getAttachmentPreview={previewLookup && ((seq) => previewLookup("prior-spec", group, seq))}
                 getDownloadHref={(file) =>
                   `${endpoint}/attachments/${file.seq}`
                 }

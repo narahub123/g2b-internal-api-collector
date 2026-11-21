@@ -36,13 +36,15 @@ Node.js 24 이상과 npm으로 실행합니다. Turso Cloud의 SQLite(libSQL) DB
 2. `docker compose -f compose.attachments.yaml up -d --build`로 첨부 워커를 시작합니다. 로컬 프로세스로 실행할 때는 `npm run worker:attachments`를 사용합니다.
 3. 관리자 상세 화면에서 수동 우선 처리 요청을 허용하려면 웹 서버에 `ATTACHMENT_MANUAL_TOKEN`을 설정합니다. 공고·발주계획·사전규격 상세의 첨부 처리 영역에서 파일 상태와 해시를 볼 수 있습니다.
 
-첨부 워커를 중지한 동안에는 수집 완료 이벤트가 DB에 남고 재시작 뒤 이어서 처리됩니다. PDF 추출을 도입할 때는 기존 첨부 워커를 중지하고 마이그레이션 14를 적용한 뒤 새 이미지를 시작합니다. 새 워커가 처음 등록한 PDF만 자동 추출합니다. 기존 PDF 작업은 관리자 상세의 **추출 요청**으로 처리하며, 다른 형식은 다운로드와 해시 확인으로 완료합니다.
+첨부 워커를 중지한 동안에는 수집 완료 이벤트가 DB에 남고 재시작 뒤 이어서 처리됩니다. 새 작업은 확장자에 등록된 추출기로 처리하며, 미등록 형식은 다운로드와 해시 확인으로 완료합니다. 기존 해시 작업은 관리자 상세의 **추출 요청**으로 추출 작업으로 전환할 수 있습니다. 같은 수집 건에 확장자만 다른 PDF가 있으면 PDF를 우선합니다.
 
-PDF 원본은 임시 파일로만 사용합니다. 동일한 SHA-256과 추출기 버전으로 완료된 결과는 재사용합니다. 스캔본은 OCR 없이 **텍스트 없음**으로 표시합니다. 운영 반영 후 추출 실패율과 처리 시간, Turso Analytics에서 첨부 이벤트 조회와 선점 쿼리의 평균 Rows Read 및 실행 횟수를 확인합니다.
+추출용 원본은 임시 파일로만 사용합니다. 동일한 SHA-256, 형식, 추출기 버전으로 완료된 결과는 재사용합니다. PDF 스캔본은 OCR 없이 **텍스트 없음**으로 표시합니다. 운영 반영 후 추출 실패율과 처리 시간, Turso Analytics에서 첨부 이벤트 조회와 선점 쿼리의 평균 Rows Read 및 실행 횟수를 확인합니다.
+
+공통 추출 구조를 배포할 때는 첨부 요청 접수와 워커·첨부 Actions의 신규 실행을 중지하고 진행 중인 작업이 끝날 때까지 기다립니다. 운영 DB를 백업하고 `npm run db:migrate`로 마이그레이션 17을 적용한 후 웹과 워커를 함께 전환합니다. 접수를 재개한 뒤 기존 PDF 미리보기와 신규 PDF 추출을 확인합니다. 구버전으로 복귀할 때는 전환 직전 백업을 사용합니다.
 
 #### GitHub Actions로 원격 실행
 
-1. 운영 Turso에 `npm run db:migrate`로 마이그레이션 16을 먼저 적용합니다. 기존 첨부 워커와 첨부 Actions 실행이 끝난 뒤 기본 브랜치에 웹과 워크플로 변경을 배포합니다. GitHub Environment `attachment-processing`의 Turso 시크릿이 웹·공고 수집과 같은 DB를 가리키고, 기본 브랜치의 실행을 승인 대기 없이 허용하는지 확인합니다.
+1. 위 첨부 추출 배포 순서에 따라 운영 Turso의 마이그레이션과 웹·워크플로 전환을 진행합니다. GitHub Environment `attachment-processing`의 Turso 시크릿이 웹·공고 수집과 같은 DB를 가리키고, 기본 브랜치의 실행을 승인 대기 없이 허용하는지 확인합니다.
 2. 기본 브랜치의 공고 수집 Actions는 공고 한 건의 성공을 기록하면 내장 GitHub 토큰으로 첨부 처리 Actions를 호출합니다. Vercel의 관리자 수동 요청과 복구 호출은 `ATTACHMENT_WORKER_MODE=github-actions` 및 기존 `NOTICE_GITHUB_REPOSITORY`, `NOTICE_GITHUB_REF`, `NOTICE_GITHUB_TOKEN`을 사용합니다.
 3. cron-job.org에 기존 공고 수집 작업과 별도로 **매분** 실행하는 HTTPS `POST /api/g2b/attachment-queue/tick`을 등록합니다. 요청 헤더는 기존 공고 수집 작업과 같은 `Authorization: Bearer <NOTICE_CRON_TOKEN>`입니다. 응답은 실행 접수 202, 빈 큐 또는 예약 중 204, 인증 실패 401, 설정이나 호출 오류 503입니다. GitHub 자체 예약 실행은 사용하지 않습니다.
 4. 여러 공고를 수집하면서 첫 성공 뒤 별도 첨부 Actions가 시작되는지 확인합니다. 관리자 수동 요청과 외부 복구도 각각 확인합니다. 초기 운영에서 시작 지연, 실패율, Actions 사용량과 Turso의 평균 Rows Read 및 실행 횟수를 비교합니다.

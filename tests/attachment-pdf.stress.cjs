@@ -6,8 +6,9 @@ const { open, readFile } = require('node:fs/promises');
 const { Readable } = require('node:stream');
 const { deflateSync } = require('node:zlib');
 const { hashAttachmentBody } = require('../src/features/download-g2b-attachment/server/attachment-worker');
-const { extractPdfProcess, temporaryPdfPath, removeTemporaryPdf } =
-  require('../src/features/download-g2b-attachment/server/pdf-process');
+const { runExtractionProcess, temporaryAttachmentPath, removeTemporaryAttachment } =
+  require('../src/features/download-g2b-attachment/server/extraction-process');
+const { pdfExtractor } = require("../src/shared/model/g2b/attachment-extraction");
 
 // 압축 이미지와 벡터 표를 모두 실제 페이지에 배치해 PDF 크기와 추출 부하를 재현한다.
 async function writeFixture(path) {
@@ -86,20 +87,19 @@ test('512 MiB 컨테이너에서 500페이지 이미지·벡터 표 PDF를 제�
   const limit = 512 * 1024 * 1024;
   assert.equal(Number(await readFile('/sys/fs/cgroup/memory.max', 'utf8')), limit);
   const before = await memoryEvents();
-  const source = temporaryPdfPath();
-  const input = temporaryPdfPath();
+  const source = temporaryAttachmentPath();
+  const input = temporaryAttachmentPath();
   try {
     const bytes = await writeFixture(source);
     assert.ok(bytes > 45 * 1024 * 1024 && bytes <= 50 * 1024 * 1024, `PDF 크기: ${bytes}`);
     const download = Readable.toWeb(createReadStream(source));
     const started = performance.now();
-    assert.match(await hashAttachmentBody(download, t.signal, bytes, input), /^[a-f0-9]{64}$/);
-    const result = await extractPdfProcess(input, t.signal);
-    assert.equal(result.pages.length, 500);
-    for (const [index, page] of result.pages.entries()) {
-      assert.equal(page.pageNumber, index + 1);
-      assert.ok(page.text.startsWith(`Page ${index + 1}\n`), `페이지 제목 누락: ${page.pageNumber}`);
-      assert.match(page.text, /Row 1 Column 1[\s\S]*Row 1 Column 4[\s\S]*Row 24 Column 4[\s\S]*End of schedule/);
+    assert.match(await hashAttachmentBody(download, t.signal, bytes, { path: input, extractor: pdfExtractor }), /^[a-f0-9]{64}$/);
+    const result = await runExtractionProcess(pdfExtractor, input, t.signal);
+    assert.equal(result.units.length, 500);
+    for (const [index, page] of result.units.entries()) {
+      assert.ok(page.startsWith(`Page ${index + 1}\n`), `페이지 제목 누락: ${index + 1}`);
+      assert.match(page, /Row 1 Column 1[\s\S]*Row 1 Column 4[\s\S]*Row 24 Column 4[\s\S]*End of schedule/);
     }
     const after = await memoryEvents();
     assert.equal(after.oom, before.oom, 'cgroup OOM 발생');
@@ -108,7 +108,7 @@ test('512 MiB 컨테이너에서 500페이지 이미지·벡터 표 PDF를 제�
     assert.ok(peak < limit);
     t.diagnostic(`PDF ${(bytes / 1024 ** 2).toFixed(1)} MiB · 최대 메모리 ${(peak / 1024 ** 2).toFixed(1)} MiB · 처리 ${((performance.now() - started) / 1000).toFixed(1)}초`);
   } finally {
-    await removeTemporaryPdf(input);
-    await removeTemporaryPdf(source);
+    await removeTemporaryAttachment(input);
+    await removeTemporaryAttachment(source);
   }
 });

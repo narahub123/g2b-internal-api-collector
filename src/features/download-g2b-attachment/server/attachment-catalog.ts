@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { decodeHTMLStrict } from "entities";
+import { attachmentNameParts } from "@/shared/model/g2b/attachment-extraction";
 import { getNoticeAttachmentFiles, getPublicProposalRows } from "@/entities/notice/model/notice-display";
 import { etcNoticeDetail, noticeAttachmentGroup, privateNoticeResult } from "@/entities/notice/model/notice-detail";
 import { noticePostRecord as record } from "@/entities/notice/model/notice-posts";
@@ -14,19 +14,14 @@ import { resolveProposalDownload } from "./proposal-download";
 type Scope = Parameters<typeof resolvePublicAttachmentDownload>[3];
 type ListedFile = AttachmentJobFile & { resolve: (signal: AbortSignal) => Promise<URL | null> };
 
-function nameParts(filename: string) {
-  const name = decodeHTMLStrict(filename).normalize("NFC");
-  const dot = name.lastIndexOf(".");
-  return { stem: dot > 0 ? name.slice(0, dot) : name, pdf: dot > 0 && name.slice(dot + 1).toLowerCase() === "pdf" };
-}
-
 /** 같은 수집 건에서 확장자만 다른 비 PDF에 대응하는 모든 PDF를 찾는다. */
 export function preferredPdfFiles<T extends { filename: string }>(file: T, files: readonly T[]) {
-  const { stem, pdf } = nameParts(file.filename);
-  if (pdf) return [];
+  const { stem, extension } = attachmentNameParts(file.filename);
+  if (extension === "pdf") return [];
+  const normalizedStem = stem.normalize("NFC");
   return files.filter((candidate) => {
-    const parts = nameParts(candidate.filename);
-    return parts.pdf && parts.stem === stem;
+    const parts = attachmentNameParts(candidate.filename);
+    return parts.extension === "pdf" && parts.stem.normalize("NFC") === normalizedStem;
   });
 }
 

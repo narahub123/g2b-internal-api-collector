@@ -5,7 +5,7 @@ import {
   ATTACHMENT_MAX_ATTEMPTS,
   ATTACHMENT_RETRY_BASE_SECONDS,
 } from "@/shared/config/g2b-attachment-worker";
-import { isPdfAttachment, PDF_EXTRACTOR_VERSION, type PdfExtraction } from "@/shared/model/g2b/attachment-pdf";
+import { findAttachmentExtractor, type AttachmentExtraction, type AttachmentExtractor } from "@/shared/model/g2b/attachment-extraction";
 import type { G2bDatabase } from "./database";
 
 /** 수집 자료를 다시 읽을 때 사용하는 업무별 식별자다. */
@@ -17,20 +17,20 @@ export type AttachmentJobFile = {
   group: string; seq: string; path?: string; bytes?: number;
 };
 
-type Mode = "hash_only" | "pdf_extract";
+type Mode = "hash_only" | "extract";
 type Claim = { file: AttachmentJobFile; token: string; attempts: number; mode: Mode };
-type Outcome = { hash: string; pdf?: PdfExtraction | { version: string } } | { error: string; retry: boolean };
+type Outcome = { hash: string; extraction?: { format: string; version: string; result?: AttachmentExtraction } } | { error: string; retry: boolean };
 type AttachmentEvent = AttachmentOwner & { id: number; failures: number; generation: number };
 
 // 운영자가 실패 횟수를 초기화한 뒤에도 이전 처리 결과를 거부할 수 있도록 세대를 함께 확인한다.
 const currentEvent = "id = ? AND failures = ? AND generation = ? AND failed_at IS NULL";
 
-// 페이지 단위 왕복을 줄이면서 일반적인 PDF의 바인딩 크기를 제한한다.
-function* pageBatches(pages: PdfExtraction["pages"]) {
+// 텍스트 저장의 DB 왕복을 줄이면서 배치의 바인딩 크기를 제한한다.
+function* unitBatches(units: string[]) {
   let batch: string[] = [];
   let bytes = 2;
-  for (const page of pages) {
-    const entry = JSON.stringify([page.pageNumber, page.text]);
+  for (const [index, text] of units.entries()) {
+    const entry = JSON.stringify([index + 1, text]);
     const entryBytes = Buffer.byteLength(entry) + 1;
     if (batch.length && bytes + entryBytes > 128 * 1024) {
       yield `[${batch.join(",")}]`;
@@ -43,14 +43,17 @@ function* pageBatches(pages: PdfExtraction["pages"]) {
   if (batch.length) yield `[${batch.join(",")}]`;
 }
 
-/** 첨부 전용 상태와 실행권을 관리한다. 외부 다운로드 중에는 트랜잭션을 열어 두지 않는다. */
-export function openAttachmentQueue(db: G2bDatabase, workerToken?: string) {
+/**
+ * 첨부 전용 상태와 실행권을 관리한다. 외부 다운로드 중에는 트랜잭션을 열어 두지 않는다.
+ * @param resolveExtractor 자동·수동 접수에서 작업 모드와 캐시 키를 결정한다.
+ */
+export function openAttachmentQueue(db: G2bDatabase, workerToken?: string, resolveExtractor = findAttachmentExtractor) {
   const insert = db.prepare(`INSERT INTO g2b_attachment_jobs(id,file,priority,mode) VALUES (?,?,?,?)
     ON CONFLICT(id) DO NOTHING`);
   const read = db.prepare(`SELECT j.status, j.priority, j.attempts, j.hash, j.error, j.mode,
-    j.pdf_result_id AS pdfResultId, r.character_count AS characterCount, r.page_count AS pageCount
-    FROM g2b_attachment_jobs j LEFT JOIN g2b_attachment_pdf_results r ON r.id = j.pdf_result_id WHERE j.id = ?`);
-  const findPdf = db.prepare("SELECT id FROM g2b_attachment_pdf_results WHERE hash = ? AND version = ?");
+    j.result_id AS resultId, r.character_count AS characterCount, r.unit_count AS unitCount, r.format
+    FROM g2b_attachment_jobs j LEFT JOIN g2b_attachment_results r ON r.id = j.result_id WHERE j.id = ?`);
+  const findResult = db.prepare("SELECT id FROM g2b_attachment_results WHERE hash = ? AND format = ? AND extractor_version = ?");
   const ownsJob = "id = ? AND token = ? AND status = 'running' AND expires_at > unixepoch()";
   async function verifyWorker() {
     if (!await db.prepare(`SELECT 1 FROM g2b_attachment_dispatch WHERE id = 1 AND worker_token = ?
@@ -69,27 +72,27 @@ export function openAttachmentQueue(db: G2bDatabase, workerToken?: string) {
   }
   return {
     /**
-     * 수동 PDF 요청은 이전 해시 확인 작업도 추출로 승격하며 저장된 결과를 재사용한다.
+     * 수동 추출 요청은 이전 해시 확인 작업도 추출로 승격하며 저장된 결과를 재사용한다.
      * @returns 작업 상태와 신규 등록·승격·재대기로 실행 요청이 필요한지를 반환한다.
      * @throws DB 조회나 저장 실패 시 등록 트랜잭션을 롤백한다.
      */
     enqueue(file: AttachmentJobFile, manual: boolean) {
       return db.transaction(async () => {
-        const extract = manual && isPdfAttachment(file.filename);
-        const inserted = await insert.run(file.id, JSON.stringify(file), Number(manual), extract ? "pdf_extract" : "hash_only");
+        const extractor = resolveExtractor(file.filename);
+        const inserted = await insert.run(file.id, JSON.stringify(file), Number(manual), extractor ? "extract" : "hash_only");
         let changed = Boolean(inserted.rowsAffected);
-        if (extract) {
+        if (manual && extractor) {
           const current = await read.get(file.id);
           if (!current) return;
-          if (current.pdfResultId != null) return { job: current, shouldDispatch: false };
+          if (current.resultId != null) return { job: current, shouldDispatch: false };
           const cached = typeof current.hash === "string" && current.status !== "running"
-            ? await findPdf.get(current.hash, PDF_EXTRACTOR_VERSION) : undefined;
+            ? await findResult.get(current.hash, extractor.format, extractor.version) : undefined;
           // 이미 수동 추출 대기 중인 작업은 다시 제출해도 새 실행을 예약하지 않는다.
-          const alreadyPending = current.status === "pending" && current.priority === 1 && current.mode === "pdf_extract";
+          const alreadyPending = current.status === "pending" && current.priority === 1 && current.mode === "extract";
           if (alreadyPending && !cached) return { job: current, shouldDispatch: changed };
-          await db.prepare(`UPDATE g2b_attachment_jobs SET priority = 1, mode = 'pdf_extract',
+          await db.prepare(`UPDATE g2b_attachment_jobs SET priority = 1, mode = 'extract',
             status = CASE WHEN status = 'running' THEN status WHEN ? IS NOT NULL THEN 'succeeded' ELSE 'pending' END,
-            pdf_result_id = ?, available_at = 0,
+            result_id = ?, available_at = 0,
             attempts = CASE WHEN mode = 'hash_only' OR status IN ('failed','succeeded') THEN 0 ELSE attempts END,
             error = NULL WHERE id = ?`).run(cached?.id ?? null, cached?.id ?? null, file.id);
           changed = true;
@@ -105,8 +108,10 @@ export function openAttachmentQueue(db: G2bDatabase, workerToken?: string) {
     },
     /** 현재 파일의 상태와 해시를 관리자 화면에 반환한다. */
     status(id: string) { return read.get(id); },
-    /** 동일한 바이트와 추출기 버전으로 저장된 PDF 결과가 있는지 확인한다. */
-    async hasPdf(hash: string) { return Boolean(await findPdf.get(hash, PDF_EXTRACTOR_VERSION)); },
+    /** 동일한 원본 바이트, 형식, 추출기 버전으로 저장된 결과가 있는지 확인한다. */
+    async hasExtraction(hash: string, extractor: Pick<AttachmentExtractor, "format" | "version">) {
+      return Boolean(await findResult.get(hash, extractor.format, extractor.version));
+    },
     /** DB 시각에 실행 가능한 가장 이른 수집 이벤트를 반환한다. */
     async event() {
       return await db.prepare(`SELECT id, section, number, revision, failures, generation FROM g2b_attachment_events
@@ -120,7 +125,7 @@ export function openAttachmentQueue(db: G2bDatabase, workerToken?: string) {
           .run(event.id, event.failures, event.generation);
         if (!deleted.rowsAffected) return false;
         for (const file of files) {
-          await insert.run(file.id, JSON.stringify(file), 0, isPdfAttachment(file.filename) ? "pdf_extract" : "hash_only");
+          await insert.run(file.id, JSON.stringify(file), 0, resolveExtractor(file.filename) ? "extract" : "hash_only");
         }
         return true;
       });
@@ -162,38 +167,39 @@ export function openAttachmentQueue(db: G2bDatabase, workerToken?: string) {
         WHERE id = ? AND token = ? AND status = 'running' AND expires_at > unixepoch()`)
         .run(claim.file.id, claim.token)).rowsAffected));
     },
-    /** 현재 실행권의 결과만 저장하고 PDF 결과와 첨부 완료를 같은 트랜잭션에서 확정한다. */
+    /** 현재 실행권의 결과만 저장하고 추출 결과와 첨부 완료를 같은 트랜잭션에서 확정한다. */
     async finish(claim: Claim, outcome: Outcome) {
       return workerTransaction(async () => {
         const key = [claim.file.id, claim.token] as const;
         const job = await db.prepare(`SELECT mode FROM g2b_attachment_jobs WHERE ${ownsJob}`).get(...key);
         if (!job) return false;
-        const promoted = claim.mode === "hash_only" && job.mode === "pdf_extract";
+        const promoted = claim.mode === "hash_only" && job.mode === "extract";
         const success = "hash" in outcome;
-        if (success && claim.mode === "pdf_extract" && !outcome.pdf) {
-          throw new Error("PDF 추출 작업에 완료 결과가 없습니다.");
+        if (success && claim.mode === "extract" && !outcome.extraction) {
+          throw new Error("첨부 추출 작업에 완료 결과가 없습니다.");
         }
         const retry = !success && outcome.retry && claim.attempts < ATTACHMENT_MAX_ATTEMPTS;
         let resultId = null;
-        if (success && outcome.pdf) {
-          const pdf = outcome.pdf;
-          let saved = await findPdf.get(outcome.hash, pdf.version);
-          if (!saved && "pages" in pdf) {
-            saved = await db.prepare(`INSERT INTO g2b_attachment_pdf_results(hash,version,page_count,character_count)
-              VALUES (?,?,?,?) RETURNING id`).get(outcome.hash, pdf.version, pdf.pages.length, pdf.characterCount);
-            const insertPages = db.prepare(`INSERT INTO g2b_attachment_pdf_pages(result_id,page_number,text)
+        if (success && outcome.extraction) {
+          const { format, version, result } = outcome.extraction;
+          let saved = await findResult.get(outcome.hash, format, version);
+          if (!saved && result) {
+            const characterCount = result.units.reduce((count, text) => count + text.length, 0);
+            saved = await db.prepare(`INSERT INTO g2b_attachment_results(hash,format,extractor_version,unit_count,character_count)
+              VALUES (?,?,?,?,?) RETURNING id`).get(outcome.hash, format, version, result.units.length, characterCount);
+            const insertUnits = db.prepare(`INSERT INTO g2b_attachment_result_units(result_id,unit_number,text)
               SELECT ?, json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)`);
-            for (const batch of pageBatches(pdf.pages)) await insertPages.run(saved!.id, batch);
+            for (const batch of unitBatches(result.units)) await insertUnits.run(saved!.id, batch);
           }
-          if (!saved) throw new Error("재사용할 PDF 추출 결과가 없습니다.");
+          if (!saved) throw new Error("재사용할 첨부 추출 결과가 없습니다.");
           resultId = saved.id;
         }
         const updated = await db.prepare(`UPDATE g2b_attachment_jobs SET status = ?, available_at = unixepoch() + ?,
-          hash = COALESCE(?, hash), error = ?, pdf_result_id = ?, token = NULL, expires_at = NULL WHERE ${ownsJob}`)
+          hash = COALESCE(?, hash), error = ?, result_id = ?, token = NULL, expires_at = NULL WHERE ${ownsJob}`)
           .run(promoted ? "pending" : success ? "succeeded" : retry ? "retry_wait" : "failed",
             !promoted && retry ? ATTACHMENT_RETRY_BASE_SECONDS * 2 ** (claim.attempts - 1) : 0,
             success ? outcome.hash : null, success || promoted ? null : outcome.error, resultId, ...key);
-        // 페이지 저장 도중 실행권이 만료되면 결과까지 함께 롤백한다.
+        // 텍스트 저장 도중 실행권이 만료되면 결과까지 함께 롤백한다.
         if (!updated.rowsAffected) throw new Error("첨부 작업 실행권이 결과 저장 중 만료되었습니다.");
         return true;
       });

@@ -29,9 +29,9 @@ export async function requestAttachment(owner: AttachmentOwner, id: string, _pre
     if (pdfs.length) return `대응 PDF를 선택하세요. ${pdfs.map((pdf) => decodeHTMLStrict(pdf.filename)).join(", ")}`;
     const result = await openAttachmentQueue(getG2bDatabase()).enqueue(file, true);
     const job = result?.job;
-    if (job?.pdfResultId != null) return job.characterCount === 0 ? "텍스트 없음" : "PDF 추출 완료";
+    if (job?.resultId != null) return job.characterCount === 0 ? "텍스트 없음" : "추출 완료";
     if (job?.status === "succeeded") return `다운로드·해시 확인 완료 ${job.hash}`;
-    if (job?.status === "running") return job.mode === "pdf_extract" ? "추출 요청 반영 · 처리 중" : "다운로드 처리 중";
+    if (job?.status === "running") return job.mode === "extract" ? "추출 요청 반영 · 처리 중" : "다운로드 처리 중";
     if (result?.shouldDispatch && process.env.ATTACHMENT_WORKER_MODE === "github-actions") {
       try {
         await dispatchPendingAttachments();

@@ -6,7 +6,7 @@ import { orderPlanUnavailableMessage, orderPlanUnprocessableStatus } from "@/sha
 import { priorSpecUnavailableMessage, priorSpecUnavailableStatus } from "@/shared/config/g2b-prior-spec";
 import { Accordion } from "@/shared/ui/accordion";
 import { NoticePostsSection } from "./NoticePostsSection";
-import type { AttachmentPdfLookup } from "@/shared/model/g2b/attachment-pdf";
+import type { AttachmentPreviewLookup } from "@/shared/model/g2b/attachment-extraction";
 import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
@@ -108,14 +108,14 @@ function originalNoticeHref({ number, revision }: NumberWithRevision) {
  * @returns 공고 상세 본문과 조건에 따른 관련 정보 및 첨부 목록.
  */
 export async function NoticeDetail({
-  pdfLookup,
+  previewLookup,
   notice,
   orderPlanNumber,
   links,
   renderActions,
 }: {
   notice: Notice;
-  pdfLookup?: AttachmentPdfLookup;
+  previewLookup?: AttachmentPreviewLookup;
   orderPlanNumber?: string;
   links: {
     contractPath: (key: { number: string; revision: string }) => string | undefined | Promise<string | undefined>;
@@ -188,10 +188,10 @@ export async function NoticeDetail({
   const mainAttachmentGroup = noticeAttachmentGroup(notice.payload);
   const attachmentPdfBySeq = new Map(attachmentFiles.map((file) => [
     file.seq,
-    pdfLookup?.(attachmentSource, "attachmentGroup" in file && typeof file.attachmentGroup === "string" ? file.attachmentGroup : mainAttachmentGroup, file.seq),
+    previewLookup?.(attachmentSource, "attachmentGroup" in file && typeof file.attachmentGroup === "string" ? file.attachmentGroup : mainAttachmentGroup, file.seq),
   ]));
   const proposalPdfBySeq = new Map(proposalFiles.map((file) => [file.seq,
-    file.attachmentSeq ? pdfLookup?.("proposal", file.attachmentGroup, file.attachmentSeq) : undefined,
+    file.attachmentSeq ? previewLookup?.("proposal", file.attachmentGroup, file.attachmentSeq) : undefined,
   ]));
   const detail = noticeDetail(notice.payload);
   const posts = isEtc ? undefined : notice.posts;
@@ -233,7 +233,7 @@ export async function NoticeDetail({
         {posts && (
           <NoticePostsSection
             posts={posts}
-            pdfLookup={pdfLookup}
+            previewLookup={previewLookup}
             number={number}
             revision={revision}
           />
@@ -362,14 +362,14 @@ export async function NoticeDetail({
               {title === "파일첨부" ? (
                 <AttachmentTable
                   files={attachmentFiles}
-                  getPdfPreview={pdfLookup && ((seq) => attachmentPdfBySeq.get(seq))}
+                  getAttachmentPreview={previewLookup && ((seq) => attachmentPdfBySeq.get(seq))}
                   showDocumentType={!isEtc}
                   getDownloadHref={(file) => attachmentHrefBySeq.get(file.seq)}
                 />
               ) : title === "제안요청정보" ? (
                 <AttachmentTable
                   files={proposalFiles}
-                  getPdfPreview={pdfLookup && ((seq) => proposalPdfBySeq.get(seq))}
+                  getAttachmentPreview={previewLookup && ((seq) => proposalPdfBySeq.get(seq))}
                   showDocumentType
                   showFileSize={false}
                   getDownloadHref={(file) => proposalHrefBySeq.get(file.seq)}
@@ -378,7 +378,7 @@ export async function NoticeDetail({
                 <BaseAmountDisclosure key={JSON.stringify([number, revision])}>
                   <NoticeTable {...section} />
                   <BaseAmountPanel>
-                    <BaseAmountDetail notice={notice} pdfLookup={pdfLookup} />
+                    <BaseAmountDetail notice={notice} previewLookup={previewLookup} />
                   </BaseAmountPanel>
                 </BaseAmountDisclosure>
               ) : (

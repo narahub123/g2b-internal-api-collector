@@ -1,5 +1,5 @@
 import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
-import { loadAttachmentPdfLookup } from "@/_pages/admin/g2b/ui/attachment-preview-data";
+import { loadAttachmentPreviewLookup } from "@/_pages/admin/g2b/ui/attachment-preview-data";
 import { AttachmentJobsSection } from "@/_pages/admin/g2b/ui/AttachmentJobsSection";
 import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
 import { notFound } from "next/navigation";
@@ -54,7 +54,7 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
     );
   }
 
-  const pdfLookup = await loadAttachmentPdfLookup({ section: "notices", ...key });
+  const previewLookup = await loadAttachmentPreviewLookup({ section: "notices", ...key });
   const number = notice.orderPlanNumber ?? getNoticeOrderPlanNumber(notice.payload);
   const orderPlanNumber =
     number && (await repository.findOrderPlan(number)) ? number : undefined;
@@ -68,7 +68,7 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
         </section>
       )}
       <NoticeDetail
-        pdfLookup={pdfLookup}
+        previewLookup={previewLookup}
         notice={notice}
         orderPlanNumber={orderPlanNumber}
         links={{

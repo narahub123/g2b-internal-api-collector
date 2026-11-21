@@ -1,10 +1,12 @@
 require('../scripts/register-project-typescript.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { writeFile, truncate, readFile, readdir } = require('node:fs/promises');
+const { writeFile, truncate, readFile, readdir, mkdtemp, unlink, rmdir } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
-const { extractPdfProcess, PermanentPdfError, temporaryPdfPath, removeTemporaryPdf } =
-  require('../src/features/download-g2b-attachment/server/pdf-process');
+const { join } = require('node:path');
+const { runExtractionProcess, PermanentExtractionError, temporaryAttachmentPath, removeTemporaryAttachment } =
+  require('../src/features/download-g2b-attachment/server/extraction-process');
+const { pdfExtractor } = require("../src/shared/model/g2b/attachment-extraction");
 const { hashAttachmentBody, runAttachmentWorker } = require('../src/features/download-g2b-attachment/server/attachment-worker');
 
 function fixture({ stream = '', pageCount = 2, encrypted = false } = {}) {
@@ -35,7 +37,7 @@ function fixture({ stream = '', pageCount = 2, encrypted = false } = {}) {
 }
 
 test('PDF 자식 프로세스는 한글·표 순서·빈 페이지를 추출하며 다운로드 바이트를 그대로 사용한다', async () => {
-  const path = temporaryPdfPath();
+  const path = temporaryAttachmentPath();
   const signal = new AbortController().signal;
   const bytes = fixture({ stream: [
     'BT /F1 10 Tf 20 700 Td (1. Estimate) Tj ET',
@@ -45,41 +47,41 @@ test('PDF 자식 프로세스는 한글·표 순서·빈 페이지를 추출하�
     'BT /F1 10 Tf 85 642 Td (Road service) Tj ET',
   ].join('\n') });
   try {
-    const hash = await hashAttachmentBody(new Response(bytes).body, signal, bytes.length, path);
+    const hash = await hashAttachmentBody(new Response(bytes).body, signal, bytes.length, { path, extractor: pdfExtractor });
     assert.deepEqual(await readFile(path), bytes);
     assert.match(hash, /^[a-f0-9]{64}$/);
-    const result = await extractPdfProcess(path, signal);
-    assert.equal(result.pages.length, 2);
-    assert.match(result.pages[0].text, /1\. Estimate[\s\S]*한글[\s\S]*Road service[\s\S]*2\. Schedule/);
-    assert.deepEqual(result.pages[1], { pageNumber: 2, text: '' });
+    const result = await runExtractionProcess(pdfExtractor, path, signal);
+    assert.equal(result.units.length, 2);
+    assert.match(result.units[0], /1\. Estimate[\s\S]*한글[\s\S]*Road service[\s\S]*2\. Schedule/);
+    assert.equal(result.units[1], '');
   } finally {
-    await removeTemporaryPdf(path);
+    await removeTemporaryAttachment(path);
   }
   await assert.rejects(readFile(path), { code: 'ENOENT' });
 });
 
 test('빈 PDF를 완료하고 암호화·손상·페이지·용량 제한을 구분한다', async () => {
-  const path = temporaryPdfPath();
+  const path = temporaryAttachmentPath();
   const signal = new AbortController().signal;
   const rejectPdf = async (bytes, message) => {
     await writeFile(path, bytes);
-    await assert.rejects(extractPdfProcess(path, signal), (error) =>
-      error instanceof PermanentPdfError && message.test(error.message));
+    await assert.rejects(runExtractionProcess(pdfExtractor, path, signal), (error) =>
+      error instanceof PermanentExtractionError && message.test(error.message));
   };
   try {
     await writeFile(path, fixture({ stream: 'q 10 0 0 10 10 10 cm BI /W 1 /H 1 /BPC 8 /CS /G ID x EI Q' }));
-    assert.equal((await extractPdfProcess(path, signal)).characterCount, 0);
+    assert.equal((await runExtractionProcess(pdfExtractor, path, signal)).units.join(''), '');
     await rejectPdf(fixture({ encrypted: true }), /암호화/);
     await rejectPdf('%PDF-broken', /손상/);
     await rejectPdf(fixture({ pageCount: 501 }), /500페이지/);
     await truncate(path, 50 * 1024 * 1024 + 1);
-    await assert.rejects(extractPdfProcess(path, signal), /50 MiB/);
+    await assert.rejects(runExtractionProcess(pdfExtractor, path, signal), /50 MiB/);
     const abort = new AbortController();
-    const extraction = extractPdfProcess(path, abort.signal);
+    const extraction = runExtractionProcess(pdfExtractor, path, abort.signal);
     abort.abort();
     await assert.rejects(extraction, /abort/i);
   } finally {
-    await removeTemporaryPdf(path);
+    await removeTemporaryAttachment(path);
   }
 });
 
@@ -139,7 +141,7 @@ test('일회 워커가 수동 호출 실패를 복구하고 선점 기한 이후
     const clock = t.mock.method(performance, 'now', () => now);
     global.fetch = async (url) => {
       assert.match(String(url), /R26BK01830378/);
-      now = 120_001;
+      now = 300_001;
       return new Response(bytes, { headers: { 'Content-Type': 'application/pdf' } });
     };
     await runAttachmentWorker(stop.signal, { once: true });
@@ -151,19 +153,70 @@ test('일회 워커가 수동 호출 실패를 복구하고 선점 기한 이후
       return new Response(bytes, { headers: { 'Content-Type': 'application/pdf' } });
     };
     await runAttachmentWorker(stop.signal, { once: true });
-    assert.equal(await requestAttachment(owner, manualFile.id, '', form), 'PDF 추출 완료');
+    assert.equal(await requestAttachment(owner, manualFile.id, '', form), '추출 완료');
     assert.equal(dispatches, 1);
-    const jobs = await db.prepare("SELECT status, hash, pdf_result_id FROM g2b_attachment_jobs WHERE status = 'succeeded'").all();
+    const jobs = await db.prepare("SELECT status, hash, result_id FROM g2b_attachment_jobs WHERE status = 'succeeded'").all();
     assert.equal(jobs.length, 2);
-    assert.ok(jobs[0].pdf_result_id);
-    assert.equal(jobs[0].pdf_result_id, jobs[1].pdf_result_id);
+    assert.ok(jobs[0].result_id);
+    assert.equal(jobs[0].result_id, jobs[1].result_id);
     assert.equal(jobs[0].hash, jobs[1].hash);
-    assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM g2b_attachment_pdf_results').get()).count, 1);
-    assert.equal((await db.prepare('SELECT text FROM g2b_attachment_pdf_pages WHERE page_number = 1').get()).text, '한글');
+    assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM g2b_attachment_results').get()).count, 1);
+    assert.equal((await db.prepare('SELECT text FROM g2b_attachment_result_units WHERE unit_number = 1').get()).text, '한글');
+
+    await t.test('registered non-PDF extractor uses automatic and manual jobs and the preview API', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'attachment-extractor-test-'));
+      const entrypoint = join(directory, 'extract.cjs');
+      try {
+        await writeFile(entrypoint, "const text = require('node:fs').readFileSync(process.argv[2], 'utf8');\n" +
+          "process.send({ result: { units: [text, ''] } }, () => process.disconnect());\n");
+        const extractor = { ...pdfExtractor, format: 'testdoc', version: 'v1', entrypoint };
+        const resolveExtractor = (filename) => filename.endsWith('.testdoc') ? extractor : undefined;
+        const testQueue = openAttachmentQueue(db, undefined, resolveExtractor);
+        const text = 'test document';
+        const numbers = ['R26BK01830379', 'R26BK01830380'];
+        for (const number of numbers) {
+          const notice = {
+            payload: { dmItemMap: { bidPbancNo: number, bidPbancOrd: '000', prcmBsneSeCd: '03', untyAtchFileNo: group } },
+            documents: { attachments: { dlUntyAtchFileL: [{
+              untyAtchFileNo: group, atchFileSqno: 1, orgnlAtchFileNm: 'test.testdoc', scrnIndtYn: 'Y', fileSz: Buffer.byteLength(text),
+            }] } },
+          };
+          await db.prepare("INSERT INTO notices(number,revision,collected_at,data,query_data) VALUES (?,'000','test',?,'{}')")
+            .run(number, JSON.stringify(notice));
+        }
+        await db.prepare("INSERT INTO g2b_attachment_events(section,number,revision,completion_id) VALUES ('notices',?,'000',1)")
+          .run(numbers[0]);
+        const manualOwner = { ...owner, number: numbers[1] };
+        const [testFile] = await listAttachmentJobs(manualOwner);
+        assert.equal((await testQueue.enqueue(testFile, true)).job.mode, 'extract');
+        global.fetch = async () => new Response(text);
+        await runAttachmentWorker(stop.signal, { once: true, resolveExtractor });
+        const [autoFile] = await listAttachmentJobs({ ...owner, number: numbers[0] });
+        const manual = await testQueue.status(testFile.id);
+        const automatic = await testQueue.status(autoFile.id);
+        assert.equal(manual.status, 'succeeded');
+        assert.equal(automatic.status, 'succeeded');
+        assert.equal(automatic.resultId, manual.resultId);
+        const { loadAttachmentPreviewLookup } = require('../src/_pages/admin/g2b/ui/attachment-preview-data');
+        const lookup = await loadAttachmentPreviewLookup(manualOwner);
+        const preview = lookup(testFile.source, testFile.group, testFile.seq);
+        assert.equal(preview.format, 'testdoc');
+        assert.equal(preview.unitCount, 2);
+        const { GET } = require('../app/api/g2b/attachment-results/[resultId]/pages/[page]/route');
+        const response = await GET(new Request('http://localhost', {
+          headers: { 'X-Attachment-Pdf-Signature': preview.signature },
+        }), { params: Promise.resolve({ resultId: String(preview.resultId), page: '1' }) });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { pageNumber: 1, text });
+      } finally {
+        await unlink(entrypoint).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+        await rmdir(directory);
+      }
+    });
   } finally {
     stop.abort();
     global.fetch = originalFetch;
     db.client.close();
   }
-  assert.ok(!(await readdir(tmpdir())).some((name) => name.startsWith(`g2b-attachment-pdf-${process.pid}-`)));
+  assert.ok(!(await readdir(tmpdir())).some((name) => name.startsWith(`g2b-attachment-source-${process.pid}-`)));
 });

@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { revisionRoute } from "@/shared/lib/g2b/revision-route";
-import type { AttachmentPdfLookup } from "@/shared/model/g2b/attachment-pdf";
+import type { AttachmentPreviewLookup } from "@/shared/model/g2b/attachment-extraction";
 import { publicAttachmentFiles } from "@/shared/model/g2b/g2b-attachments";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
@@ -73,9 +73,9 @@ function tableRowGroups(children: BaseAmountNode[]): BaseAmountNode[][] {
  * 저장된 원본을 공고 상세의 아코디언과 필드·표 스타일로 표시한다.
  * 미수집과 조회 실패를 구분하고, 공지는 원본 상세의 마지막 위치에 둔다.
  */
-export function BaseAmountDetail({ notice, pdfLookup }: {
+export function BaseAmountDetail({ notice, previewLookup }: {
   notice: Notice;
-  pdfLookup?: AttachmentPdfLookup;
+  previewLookup?: AttachmentPreviewLookup;
 }) {
   const saved = notice.baseAmount;
   const view = saved?.detail && getBaseAmountDisplay(saved.detail);
@@ -88,7 +88,7 @@ export function BaseAmountDetail({ notice, pdfLookup }: {
     ? revisionRoute("api/notices", notice) + "/base-amount-adjustment"
     : undefined;
   const posts = saved?.posts?.entries.length ? (
-    <NoticePostsSection source="base-amount" posts={saved.posts} pdfLookup={pdfLookup} number={notice.number} revision={notice.revision} />
+    <NoticePostsSection source="base-amount" posts={saved.posts} previewLookup={previewLookup} number={notice.number} revision={notice.revision} />
   ) : null;
   const visibleNodes = new Map(view ? view.nodes.map((node) => [node.id, node] as const) : []);
   // const help = visibleNodes.get("grpHelpBox");
