@@ -3,11 +3,14 @@
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { AttachmentPreview } from "@/shared/model/g2b/attachment-extraction";
+import type { DocumentUnit } from "@/shared/model/g2b/attachment-document";
+import { AttachmentDocumentBlocks } from "./AttachmentDocumentBlocks";
 import { Button } from "@/shared/ui/button";
 import { ListView } from "@/shared/ui/list-controls/ListView";
 
 type Preview = AttachmentPreview & { filename: string; rowKey: string };
-type TextUnitResponse = { pageNumber: number; text: string };
+type UnitResponse = { pageNumber: number } & ({ text: string } | { document: DocumentUnit });
+const locationLabels = { page: "페이지", section: "구역", sheet: "시트", slide: "슬라이드" };
 
 const PreviewContext = createContext<{
   panelId: string;
@@ -69,7 +72,7 @@ function TextUnitPreview({ id, file, page, onPageChange, onClose }: {
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
-    queryFn: async (): Promise<TextUnitResponse> => {
+    queryFn: async (): Promise<UnitResponse> => {
       const response = await fetch(`/api/g2b/attachment-results/${file.resultId}/pages/${page}`, {
         headers: { "X-Attachment-Pdf-Signature": file.signature },
       });
@@ -92,6 +95,20 @@ function TextUnitPreview({ id, file, page, onPageChange, onClose }: {
               <p role="alert">추출 내용을 조회하지 못했습니다.</p>
               <Button type="button" size="sm" variant="outline" disabled={query.isFetching}
                 onClick={() => void query.refetch()}>다시 시도</Button>
+            </div>
+          ) : "document" in query.data ? (
+            <div className="grid min-w-0 gap-2">
+              {query.data.document.location && <p className="text-sm text-muted-foreground">
+                {locationLabels[query.data.document.location.kind]} {query.data.document.location.number}
+              </p>}
+              {query.data.document.warnings?.map((warning, index) => (
+                <p key={index} className="wrap-anywhere text-sm">
+                  {warning.page ? `${warning.page}쪽 · ` : ""}{warning.message}
+                </p>
+              ))}
+              {query.data.document.blocks.length > 0
+                ? <AttachmentDocumentBlocks blocks={query.data.document.blocks} />
+                : <p>추출된 내용이 없습니다.</p>}
             </div>
           ) : query.data.text.trim() ? (
             <pre className="max-h-[32rem] overflow-auto wrap-anywhere whitespace-pre-wrap rounded-md bg-muted p-3 text-sm">

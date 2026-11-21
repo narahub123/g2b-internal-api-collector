@@ -8,4 +8,4 @@ services:
     restart: unless-stopped
     # 상시 실행의 컨테이너 한도다. Actions 실행 한도는 attachment-processing.yml에서 관리한다.
     cpus: 0.5
-    mem_limit: 512m
+    mem_limit: 1g

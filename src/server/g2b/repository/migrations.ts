@@ -492,6 +492,19 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (17);
       `);
     }
+    const structuredAttachments = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 18");
+    if (!structuredAttachments.rows.length) {
+      // 문서 단위별 기본 키로 미리보기에서 필요한 JSON만 읽는다.
+      await transaction.executeMultiple(`
+        CREATE TABLE g2b_attachment_document_units (
+          result_id INTEGER NOT NULL REFERENCES g2b_attachment_results(id),
+          unit_number INTEGER NOT NULL,
+          payload TEXT NOT NULL CHECK(json_valid(payload)),
+          PRIMARY KEY(result_id, unit_number)
+        );
+        INSERT INTO g2b_schema_migrations (version) VALUES (18);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

@@ -43,7 +43,7 @@ jobs:
         env:
           ATTACHMENT_RESERVATION_TOKEN: ${{ inputs.reservation_token }}
           # 컨테이너 한도는 상시 워커의 compose.attachments.yaml에도 정의한다.
-          ATTACHMENT_DOCKER_MEMORY: "512m"
+          ATTACHMENT_DOCKER_MEMORY: "1g"
           ATTACHMENT_DOCKER_CPUS: "0.5"
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}

@@ -57,7 +57,8 @@ export function runExtractionProcess(extractor: AttachmentExtractor, path: strin
   return new Promise((resolveResult, reject) => {
     const child = fork(resolve(extractor.entrypoint), [path], {
       // 파서는 임시 파일만 읽으므로 DB 인증 정보가 들어 있는 부모 환경을 상속하지 않는다.
-      env: { NODE_ENV: "production", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+      env: { NODE_ENV: "production", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+        ATTACHMENT_MODEL_CACHE: process.env.ATTACHMENT_MODEL_CACHE },
       // 부모 워커와 함께 컨테이너 메모리를 사용하므로 자식의 V8 힙 상한을 둔다.
       execArgv: [`--max-old-space-size=${extractor.maxOldSpaceMiB}`],
       stdio: ["ignore", "ignore", "inherit", "ipc"],
@@ -73,11 +74,17 @@ export function runExtractionProcess(extractor: AttachmentExtractor, path: strin
       extraction.removeEventListener("abort", abort);
       if (extraction.aborted) reject(signal.aborted ? signal.reason : new Error("첨부 추출 시간 제한을 초과했습니다."));
       else if (spawnError) reject(spawnError);
-      else if (code === 0 && Array.isArray(message?.result?.units) &&
-        message.result.units.every((text) => typeof text === "string")) resolveResult(message.result);
+      else if (code === 0 && message?.result && validExtraction(message.result)) resolveResult(message.result);
       else if (message?.permanent) reject(new PermanentExtractionError(message.error));
       else reject(new Error(message?.error ?? `첨부 추출 프로세스가 종료됐습니다 (${code}).`));
     });
     if (extraction.aborted) abort();
   });
+}
+
+function validExtraction(result: AttachmentExtraction) {
+  return "document" in result
+    ? result.document?.schemaVersion === 1 && Array.isArray(result.document.units)
+      && result.document.units.length > 0 && result.document.units.every((unit) => Array.isArray(unit?.blocks))
+    : Array.isArray(result.units) && result.units.every((text) => typeof text === "string");
 }
