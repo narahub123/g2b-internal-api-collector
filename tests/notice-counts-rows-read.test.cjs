@@ -40,7 +40,7 @@ for (const [name, saved, attempts] of cases) test(name, () => {
   db.close();
 });
 test('목록 공통 SQL은 유지하고 counts만 분기한다', () => {
-  assert.match(source, /const counts = orderPlans \|\| section === "opening-results" \|\| section === "notices" \? undefined/);
+  assert.match(source, /const counts = orderPlans \|\| section === "opening-results" \|\| section === "notices" \|\| section === "contract-requests" \|\| section === "contracts"\s*\? undefined/);
   assert.match(source, /section === "notices"\s*\? await noticeCounts\.get\(\)/);
   assert.match(source, /const overview = db\.prepare/);
 });
