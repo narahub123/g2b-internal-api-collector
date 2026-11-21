@@ -10,7 +10,7 @@ function positiveInteger(value: string) {
 }
 
 /**
- * 관리자 배포 접근 제어 아래에서 저장된 추출 페이지 한 장을 JSON으로 반환한다.
+ * 관리자 접근 제어 아래에서 구조화 단위 한 건 또는 기존 PDF 페이지 텍스트를 반환한다.
  * 잘못된 경로는 400, 서명 오류는 403, 미저장 페이지는 404, 저장소 오류는 500으로 응답한다.
  */
 export async function GET(request: Request, { params }: {
@@ -28,7 +28,9 @@ export async function GET(request: Request, { params }: {
   try {
     const result = await readAttachmentResultUnit(getG2bDatabase(), resultId, page);
     // 기존 PDF 미리보기 클라이언트가 사용하는 응답 필드를 유지한다.
-    return result ? Response.json({ pageNumber: result.unitNumber, text: result.text }, { headers })
+    return result ? Response.json("document" in result
+      ? { pageNumber: result.unitNumber, document: result.document }
+      : { pageNumber: result.unitNumber, text: result.text }, { headers })
       : Response.json({ error: "저장된 페이지가 없습니다." }, { status: 404, headers });
   } catch (error) {
     console.error("[첨부 추출 페이지 조회]", error);

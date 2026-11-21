@@ -12,7 +12,8 @@ const { pdfExtractor } = require('../src/shared/model/g2b/attachment-extraction'
 test('format registry normalizes encoded extensions and keeps unsupported files hash-only', () => {
   const { findAttachmentExtractor } = require('../src/shared/model/g2b/attachment-extraction');
   assert.equal(findAttachmentExtractor('규격&#46;PDF').format, 'pdf');
-  assert.equal(findAttachmentExtractor('규격.hwp'), undefined);
+  assert.equal(findAttachmentExtractor('규격.hwp').entrypoint, findAttachmentExtractor('규격.pdf').entrypoint);
+  assert.equal(findAttachmentExtractor('규격.zip'), undefined);
 });
 
 test('마이그레이션 14는 배포 전 모든 PDF 상태에서 해시 처리 모드를 유지한다', async () => {
@@ -82,7 +83,7 @@ test('기존 PDF는 자동 인계에서 처리 모드를 보존하고 실행 중
   const client = createClient({ url: ':memory:' });
   try {
     await migrateG2bDatabase(client);
-    const queue = openAttachmentQueue(new G2bDatabase(client));
+    const queue = openAttachmentQueue(new G2bDatabase(client), undefined, () => pdfExtractor);
     const old = { id: 'old', filename: 'old.pdf' };
     const fresh = { id: 'fresh', filename: 'fresh.PDF' };
     await client.execute({ sql: 'INSERT INTO g2b_attachment_jobs(id,file,priority) VALUES (?,?,0)', args: [old.id, JSON.stringify(old)] });
@@ -122,7 +123,7 @@ test('기존 PDF는 자동 인계에서 처리 모드를 보존하고 실행 중
   }
 });
 
-test('첨부 완료 갱신이 실패하면 같은 트랜잭션에서 쓴 결과와 텍스트를 롤백한다', async () => {
+test('첨부 완료 갱신이 실패하면 같은 트랜잭션에서 쓴 결과와 JSON을 롤백한다', async () => {
   const client = createClient({ url: ':memory:' });
   try {
     await migrateG2bDatabase(client);
@@ -134,10 +135,12 @@ test('첨부 완료 갱신이 실패하면 같은 트랜잭션에서 쓴 결과�
       WHEN NEW.result_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'finish failed'); END;
     `);
     await assert.rejects(queue.finish(claim, { hash: 'new', extraction: {
-      format: pdfExtractor.format, version: pdfExtractor.version, result: { units: ['text', ''] },
+      format: pdfExtractor.format, version: pdfExtractor.version, result: {
+        document: { schemaVersion: 1, units: [{ blocks: [{ id: '1', kind: 'paragraph', text: '본문' }] }] },
+      },
     } }), /finish failed/);
     assert.equal(await queue.hasExtraction('new', pdfExtractor), false);
-    const { rows } = await client.execute('SELECT count(*) AS count FROM g2b_attachment_result_units');
+    const { rows } = await client.execute('SELECT count(*) AS count FROM g2b_attachment_document_units');
     assert.equal(rows[0].count, 0);
     assert.equal((await queue.status('rollback')).status, 'running');
   } finally {
@@ -150,7 +153,7 @@ test('수동 작업은 자동 작업보다 먼저 실행되고 만료된 실행�
   try {
     await migrateG2bDatabase(client);
     const queue = openAttachmentQueue(new G2bDatabase(client));
-    const file = { id: 'automatic', filename: 'a.xlsx' };
+    const file = { id: 'automatic', filename: 'a.zip' };
     await queue.enqueue(file, false);
     await queue.enqueue({ ...file, id: 'manual' }, false);
     assert.equal((await queue.enqueue({ ...file, id: 'manual' }, true)).shouldDispatch, true);

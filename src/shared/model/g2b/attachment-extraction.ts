@@ -1,4 +1,5 @@
 import { decodeHTMLStrict } from "entities";
+import type { AttachmentDocument } from "./attachment-document";
 
 /** 큐와 워커가 공유하는 형식 식별자, 결과 버전, 격리 실행 설정이다. */
 export type AttachmentExtractor = {
@@ -11,8 +12,8 @@ export type AttachmentExtractor = {
   maxOldSpaceMiB: number;
 };
 
-/** 추출기가 원본 순서대로 반환하는 텍스트다. 빈 텍스트도 결과로 저장한다. */
-export type AttachmentExtraction = { units: string[] };
+/** 기존 텍스트 추출기와 구조화 추출기의 IPC 결과를 구분한다. */
+export type AttachmentExtraction = { units: string[] } | { document: AttachmentDocument };
 
 /** 상세 화면에서 저장 결과를 한 단위씩 조회하는 데 필요한 정보다. */
 export type AttachmentPreview = { resultId: number; unitCount: number; signature: string; format: string };
@@ -32,7 +33,19 @@ export const pdfExtractor: AttachmentExtractor = {
   maxOldSpaceMiB: 256,
 };
 
-const extractors = new Map([[pdfExtractor.format, pdfExtractor]]);
+// 동일 진입점을 사용해도 캐시와 화면에서는 원본 확장자를 구분한다.
+const supportedFormats = [
+  "pdf", "hwp", "hwpx", "hml", "hwpml", "xls", "xlsx", "docx", "pptx",
+  "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "avif", "heic", "heif", "pcx", "dcx",
+];
+const extractors = new Map<string, AttachmentExtractor>(supportedFormats.map((format) => [format, {
+  format,
+  version: "kordoc/4.25.2 / document-v1",
+  entrypoint: "scripts/attachment-kordoc-extract.cjs",
+  maxBytes: pdfExtractor.maxBytes,
+  timeoutMs: pdfExtractor.timeoutMs,
+  maxOldSpaceMiB: 512,
+}]));
 
 /** 나라장터 표시 인코딩을 해제하고 파일명의 마지막 확장자만 소문자로 정규화한다. */
 export function attachmentNameParts(filename: string) {

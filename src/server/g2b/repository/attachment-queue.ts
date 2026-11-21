@@ -6,6 +6,7 @@ import {
   ATTACHMENT_RETRY_BASE_SECONDS,
 } from "@/shared/config/g2b-attachment-worker";
 import { findAttachmentExtractor, type AttachmentExtraction, type AttachmentExtractor } from "@/shared/model/g2b/attachment-extraction";
+import { countDocumentCharacters } from "@/shared/model/g2b/attachment-document";
 import type { G2bDatabase } from "./database";
 
 /** 수집 자료를 다시 읽을 때 사용하는 업무별 식별자다. */
@@ -25,7 +26,7 @@ type AttachmentEvent = AttachmentOwner & { id: number; failures: number; generat
 // 운영자가 실패 횟수를 초기화한 뒤에도 이전 처리 결과를 거부할 수 있도록 세대를 함께 확인한다.
 const currentEvent = "id = ? AND failures = ? AND generation = ? AND failed_at IS NULL";
 
-// 텍스트 저장의 DB 왕복을 줄이면서 배치의 바인딩 크기를 제한한다.
+// 본문 저장의 DB 왕복을 줄이면서 배치의 바인딩 크기를 제한한다.
 function* unitBatches(units: string[]) {
   let batch: string[] = [];
   let bytes = 2;
@@ -184,12 +185,29 @@ export function openAttachmentQueue(db: G2bDatabase, workerToken?: string, resol
           const { format, version, result } = outcome.extraction;
           let saved = await findResult.get(outcome.hash, format, version);
           if (!saved && result) {
-            const characterCount = result.units.reduce((count, text) => count + text.length, 0);
+            const document = "document" in result ? result.document : undefined;
+            const texts = "units" in result ? result.units : [];
+            const characterCount = document
+              ? document.units.reduce((count, unit) => count + countDocumentCharacters(unit.blocks), 0)
+              : texts.reduce((count, value) => count + value.length, 0);
             saved = await db.prepare(`INSERT INTO g2b_attachment_results(hash,format,extractor_version,unit_count,character_count)
-              VALUES (?,?,?,?,?) RETURNING id`).get(outcome.hash, format, version, result.units.length, characterCount);
-            const insertUnits = db.prepare(`INSERT INTO g2b_attachment_result_units(result_id,unit_number,text)
-              SELECT ?, json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)`);
-            for (const batch of unitBatches(result.units)) await insertUnits.run(saved!.id, batch);
+              VALUES (?,?,?,?,?) RETURNING id`).get(outcome.hash, format, version, document?.units.length ?? texts.length, characterCount);
+            if (document) {
+              const insertDocument = db.prepare(`INSERT INTO g2b_attachment_document_units(result_id,unit_number,payload)
+                SELECT ?, json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)`);
+              let bytes = 0;
+              const units = document.units.map((unit) => {
+                const payload = JSON.stringify({ schemaVersion: document.schemaVersion, ...unit });
+                bytes += Buffer.byteLength(payload, "utf8");
+                return payload;
+              });
+              for (const batch of unitBatches(units)) await insertDocument.run(saved!.id, batch);
+              console.info("[첨부 추출 JSON 크기]", { format, bytes });
+            } else {
+              const insertUnits = db.prepare(`INSERT INTO g2b_attachment_result_units(result_id,unit_number,text)
+                SELECT ?, json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)`);
+              for (const batch of unitBatches(texts)) await insertUnits.run(saved!.id, batch);
+            }
           }
           if (!saved) throw new Error("재사용할 첨부 추출 결과가 없습니다.");
           resultId = saved.id;
@@ -199,7 +217,7 @@ export function openAttachmentQueue(db: G2bDatabase, workerToken?: string, resol
           .run(promoted ? "pending" : success ? "succeeded" : retry ? "retry_wait" : "failed",
             !promoted && retry ? ATTACHMENT_RETRY_BASE_SECONDS * 2 ** (claim.attempts - 1) : 0,
             success ? outcome.hash : null, success || promoted ? null : outcome.error, resultId, ...key);
-        // 텍스트 저장 도중 실행권이 만료되면 결과까지 함께 롤백한다.
+        // 본문 저장 도중 실행권이 만료되면 결과까지 함께 롤백한다.
         if (!updated.rowsAffected) throw new Error("첨부 작업 실행권이 결과 저장 중 만료되었습니다.");
         return true;
       });

@@ -93,7 +93,7 @@ test('일회 워커가 수동 호출 실패를 복구하고 선점 기한 이후
   const db = getG2bDatabase();
   const stop = new AbortController();
   const originalFetch = global.fetch;
-  const bytes = fixture({ stream: 'BT /F1 10 Tf 20 700 Td <4142> Tj ET' });
+  const bytes = fixture({ pageCount: 1, stream: `BT /F1 10 Tf 20 700 Td <${'4142'.repeat(24)}> Tj ET` });
   try {
     await migrateG2bDatabase(db.client);
     const { requestAttachment } = require('../src/_pages/admin/g2b/ui/attachment-request');
@@ -161,7 +161,21 @@ test('일회 워커가 수동 호출 실패를 복구하고 선점 기한 이후
     assert.equal(jobs[0].result_id, jobs[1].result_id);
     assert.equal(jobs[0].hash, jobs[1].hash);
     assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM g2b_attachment_results').get()).count, 1);
-    assert.equal((await db.prepare('SELECT text FROM g2b_attachment_result_units WHERE unit_number = 1').get()).text, '한글');
+    assert.equal((await db.prepare('SELECT count(*) AS count FROM g2b_attachment_result_units').get()).count, 0);
+    const { readAttachmentResultUnit } = require('../src/server/g2b/repository/attachment-results');
+    const stored = await readAttachmentResultUnit(db, jobs[0].result_id, 1);
+    assert.equal(stored.document.schemaVersion, 1);
+    assert.match(stored.document.blocks[0].text, /한글/);
+    const { signAttachmentResult } = require('../src/features/download-g2b-attachment/server/attachment-preview-access');
+    const { GET } = require('../app/api/g2b/attachment-results/[resultId]/pages/[page]/route');
+    const resultId = jobs[0].result_id;
+    const response = await GET(new Request('http://localhost', {
+      headers: { 'X-Attachment-Pdf-Signature': signAttachmentResult(resultId) },
+    }), { params: Promise.resolve({ resultId: String(resultId), page: '1' }) });
+    assert.deepEqual(await response.json(), { pageNumber: 1, document: stored.document });
+    const lookup = await db.client.execute(`EXPLAIN QUERY PLAN SELECT payload
+      FROM g2b_attachment_document_units WHERE result_id = 1 AND unit_number = 1`);
+    assert.match(lookup.rows[0].detail, /SEARCH .* USING INDEX/);
 
     await t.test('registered non-PDF extractor uses automatic and manual jobs and the preview API', async () => {
       const directory = await mkdtemp(join(tmpdir(), 'attachment-extractor-test-'));
