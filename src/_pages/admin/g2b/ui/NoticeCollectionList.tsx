@@ -1,5 +1,6 @@
 "use client";
 
+import { businessFetch } from "@/features/service-auth/business-client";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -50,7 +51,7 @@ export function NoticeCollectionList({ kind, scope, roundId, panelOpen, pollInte
       if (scope === "automatic" && roundId !== undefined) query.set("walkId", String(roundId));
       const endpoint = scope === "period"
         ? `/api/g2b/notice-collection-runs/${roundId}` : "/api/g2b/notice-queue/automatic/notices";
-      const response = await fetch(`${endpoint}?${query}`, { signal, cache: "no-store" });
+      const response = await businessFetch(`${endpoint}?${query}`, { signal, cache: "no-store" });
       if (!response.ok) throw new Error("수집 공고 목록을 불러오지 못했습니다.");
       return response.json();
     },

@@ -1,4 +1,5 @@
 require('../scripts/register-project-typescript.cjs');
+require("./mock-business-session.cjs").mockBusinessSession();
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 

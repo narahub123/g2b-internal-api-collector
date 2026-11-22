@@ -1,3 +1,4 @@
+import { AttachmentLink } from "@/shared/ui/g2b/AttachmentLink";
 import type { AttachmentPreview } from "@/shared/model/g2b/attachment-extraction";
 import { AttachmentPreviewButton, AttachmentPreviewPanel } from "./AttachmentPreviewPanel";
 import { decodeHTMLStrict } from "entities";
@@ -91,12 +92,12 @@ export function AttachmentTable({
                 )}
                 <td className="wrap-anywhere whitespace-pre-wrap px-3 py-2">
                   {href ? (
-                    <a
+                    <AttachmentLink
                       href={href}
                       className="text-primary underline underline-offset-2"
                     >
                       {filename}
-                    </a>
+                    </AttachmentLink>
                   ) : (
                     filename
                   )}

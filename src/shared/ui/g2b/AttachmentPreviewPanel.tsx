@@ -1,5 +1,6 @@
 "use client";
 
+import { businessFetch } from "@/features/service-auth/business-client";
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { AttachmentPreview } from "@/shared/model/g2b/attachment-extraction";
@@ -73,7 +74,7 @@ function TextUnitPreview({ id, file, page, onPageChange, onClose }: {
     gcTime: Infinity,
     retry: false,
     queryFn: async (): Promise<UnitResponse> => {
-      const response = await fetch(`/api/g2b/attachment-results/${file.resultId}/pages/${page}`, {
+      const response = await businessFetch(`/api/g2b/attachment-results/${file.resultId}/pages/${page}`, {
         headers: { "X-Attachment-Pdf-Signature": file.signature },
       });
       if (!response.ok) throw new Error("추출 내용을 조회하지 못했습니다.");

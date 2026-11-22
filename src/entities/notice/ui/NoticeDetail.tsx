@@ -1,3 +1,4 @@
+import { AttachmentLink } from "@/shared/ui/g2b/AttachmentLink";
 import type { ReactNode } from "react";
 import { decodeHTMLStrict } from "entities";
 import Link from "next/link";
@@ -71,12 +72,12 @@ function NoticeTable({
                   value === "기초금액조회" ? (
                     <BaseAmountButton />
                   ) : value === undefined ? null : href ? (
-                    <a
+                    <AttachmentLink
                       href={href}
                       className="wrap-anywhere text-primary underline underline-offset-2"
                     >
                       {decodeHTMLStrict(value)}
-                    </a>
+                    </AttachmentLink>
                   ) : (
                     <NoticeValue value={value ?? ""} />
                   )}

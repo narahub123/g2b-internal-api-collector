@@ -9,6 +9,8 @@ import {
 } from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { deleteCollection } from "../actions/delete-collection";
+import { handleBusinessFailure } from "@/features/service-auth/business-client";
+import { withSessionCookieWrite } from "@/features/service-auth/session-writes";
 
 type Props = {
   section: CollectionSection;
@@ -36,8 +38,9 @@ export function DeleteCollectionDialog({
     setError("");
     startTransition(async () => {
       try {
-        const result = await deleteCollection(section, targets);
+        const result = await withSessionCookieWrite(() => deleteCollection(section, targets));
         if (result.ok === false) {
+          if ("auth" in result) handleBusinessFailure(result);
           setError(result.error);
           return;
         }

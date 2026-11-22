@@ -1,5 +1,6 @@
 "use client";
 
+import { businessFetch } from "@/features/service-auth/business-client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { contractRequestRevision } from "@/entities/contract-request/model/contract-request";
 import { contractRevision } from "@/entities/contract/model/contract";
@@ -120,7 +121,7 @@ export function CollectG2bForm({ section, onCollected, onFailure }: {
     const controller = new AbortController();
     requestController.current = controller;
     try {
-      const response = await fetch(config.endpoint(key), {
+      const response = await businessFetch(config.endpoint(key), {
         method: "POST",
         signal: controller.signal,
         ...(body && { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),

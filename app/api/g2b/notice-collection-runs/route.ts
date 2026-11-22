@@ -1,10 +1,11 @@
+import { withBusinessAccess } from "@/server/auth/business-access";
 import { validateNoticePeriod } from "@/features/collect-g2b/api/notice-period";
 import { wakeNoticeWorker } from "@/features/collect-g2b/api/notice-actions";
 import { logNoticeQueueError } from "@/features/collect-g2b/api/notice-queue-diagnostics";
 import { getG2bRepository } from "@/server/g2b/repository";
 
 /** 한국 시각의 기간을 검증하고 워커가 처리할 실행을 영속 접수한다. */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   // 브라우저의 외부 출처 단순 요청으로 로컬 관리자 수집이 시작되지 않도록 JSON만 받는다.
   const contentType = request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase();
   if (contentType !== "application/json") {
@@ -35,7 +36,7 @@ export async function POST(request: Request) {
 }
 
 /** 새로고침 또는 접수 응답 유실 시 복원할 최근 실행을 반환한다. */
-export async function GET(request?: Request) {
+async function handleGET(request?: Request) {
   try {
     const queue = getG2bRepository().noticeQueue;
     const summary = request && new URL(request.url).searchParams.get("view") === "summary";
@@ -45,3 +46,8 @@ export async function GET(request?: Request) {
     return Response.json({ error: "최근 기간 수집 상태를 조회하지 못했습니다." }, { status: 503 });
   }
 }
+
+// 최신 관리자 권한을 확인한 뒤 운영 기능을 실행한다.
+export const POST = withBusinessAccess("ADMIN", handlePOST);
+// 최신 관리자 권한을 확인한 뒤 운영 기능을 실행한다.
+export const GET = withBusinessAccess("ADMIN", handleGET);

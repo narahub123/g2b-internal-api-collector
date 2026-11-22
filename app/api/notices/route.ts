@@ -1,3 +1,4 @@
+import { withBusinessAccess } from "@/server/auth/business-access";
 import { getG2bRepository } from '@/server/g2b/repository';
 import { parseCollectNoticeInput } from '@/features/collect-g2b/server';
 import { acceptNoticeJob } from '@/features/collect-g2b/api/notice-queue-service';
@@ -6,7 +7,7 @@ import { acceptNoticeJob } from '@/features/collect-g2b/api/notice-queue-service
  * 목록 화면에 표시할 공고 요약을 SQLite에서 읽어 반환한다.
  * @throws 저장소를 열거나 목록을 조회하지 못한 경우.
  */
-export async function GET() {
+async function handleGET() {
   return Response.json(await getG2bRepository().list());
 }
 
@@ -15,7 +16,7 @@ export async function GET() {
  * @param request JSON 본문에 공고번호, 공고차수, 낙찰방법 코드를 전달한다.
  * @returns 접수 시 작업 ID와 202, 입력 오류는 400, 큐 저장 실패는 503.
  */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const body = await request.json().catch(() => null);
   const input = parseCollectNoticeInput(body);
   if (!input) {
@@ -24,3 +25,8 @@ export async function POST(request: Request) {
 
   return acceptNoticeJob(input);
 }
+
+// 로그인한 사용자에게 저장 목록 조회를 허용한다.
+export const GET = withBusinessAccess("USER", handleGET);
+// 최신 관리자 권한을 확인한 뒤 운영 기능을 실행한다.
+export const POST = withBusinessAccess("ADMIN", handlePOST);

@@ -1,3 +1,4 @@
+import { withBusinessAccess } from "@/server/auth/business-access";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type { NoticeKey } from "@/entities/notice/model/types";
 import {
@@ -55,7 +56,7 @@ function responseDetails(report: OpeningCollectionReport | undefined, noticeSave
  * 수집 실패는 502, 점검은 503으로 응답한다.
  * @throws 저장된 공고나 개찰결과 조회에 실패한 경우.
  */
-export async function POST(
+async function handlePOST(
   request: Request,
   { params }: { params: Promise<NoticeKey> },
 ) {
@@ -115,3 +116,6 @@ export async function POST(
   }
   return Response.json({ ...key, ...details });
 }
+
+// 최신 관리자 권한을 확인한 뒤 운영 기능을 실행한다.
+export const POST = withBusinessAccess("ADMIN", handlePOST);

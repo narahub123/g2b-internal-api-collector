@@ -1,3 +1,4 @@
+import { businessFetch } from "@/features/service-auth/business-client";
 import type { NoticeJob } from "@/server/g2b/repository/notice-queue-types";
 
 /**
@@ -9,7 +10,7 @@ export async function waitForNoticeJob(response: Response, onAccepted: (id: numb
   const { jobId } = await response.json();
   onAccepted(jobId);
   while (!signal.aborted) {
-    const status = await fetch(`/api/g2b/notice-queue/jobs/${jobId}`, { signal, cache: "no-store" });
+    const status = await businessFetch(`/api/g2b/notice-queue/jobs/${jobId}`, { signal, cache: "no-store" });
     if (!status.ok) throw new Error(`수집 상태를 확인하지 못했습니다. 공고 수집 큐에서 작업 ${jobId}을 확인하세요.`);
     const job: NoticeJob = await status.json();
     if (job.status === "succeeded") return;

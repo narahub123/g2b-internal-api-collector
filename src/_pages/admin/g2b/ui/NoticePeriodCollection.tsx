@@ -1,5 +1,6 @@
 "use client";
 
+import { businessFetch } from "@/features/service-auth/business-client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -49,7 +50,7 @@ export function NoticePeriodCollection() {
       fetching = true;
       try {
         const path = activeId === undefined ? endpoint : `${endpoint}/${activeId}`;
-        const response = await fetch(`${path}?view=summary`, {
+        const response = await businessFetch(`${path}?view=summary`, {
           cache: "no-store", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
         });
         if (!response.ok) throw new Error("수집 상태 조회 실패");
@@ -106,7 +107,7 @@ export function NoticePeriodCollection() {
     requestController.current = controller;
     setSubmitting(true);
     try {
-      const response = await fetch(endpoint, {
+      const response = await businessFetch(endpoint, {
         method: "POST", body,
         headers: { "Content-Type": "application/json", "Idempotency-Key": submission.current.key },
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),

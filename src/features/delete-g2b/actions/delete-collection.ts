@@ -3,6 +3,7 @@
 import { refresh } from "next/cache";
 import { headers } from "next/headers";
 import { getG2bRepository } from "@/server/g2b/repository";
+import { checkAdminAction } from "@/server/auth/business-access";
 import { isLocalDeletionRequest, parseCollectionDeletion } from "../model/input";
 
 /**
@@ -10,6 +11,9 @@ import { isLocalDeletionRequest, parseCollectionDeletion } from "../model/input"
  * @returns 삭제 완료 여부 및 확인창에 표시할 검증·충돌·저장소 오류 메시지.
  */
 export async function deleteCollection(section: unknown, input: unknown) {
+  // 페이지 접근 여부와 별개로 현재 관리자 권한을 검증한다.
+  const failure = await checkAdminAction();
+  if (failure) return { ok: false, ...failure } as const;
   if (!isLocalDeletionRequest(await headers())) {
     return { ok: false, error: "로컬 관리자 화면에서만 삭제할 수 있습니다." } as const;
   }

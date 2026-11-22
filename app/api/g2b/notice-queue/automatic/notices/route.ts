@@ -1,9 +1,10 @@
+import { withBusinessAccess } from "@/server/auth/business-access";
 import { logNoticeQueueError } from "@/features/collect-g2b/api/notice-queue-diagnostics";
 import type { NoticeAutomaticCursor } from "@/features/collect-g2b/model/notice-automatic";
 import { getG2bRepository } from "@/server/g2b/repository";
 
 /** 자동 수집 목록의 한 페이지를 반환한다. 잘못된 목록 종류나 이동 경계는 400으로 응답한다. */
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   const params = new URL(request.url).searchParams;
   const kind = params.get("kind");
   const value = params.get("cursor");
@@ -36,3 +37,6 @@ export async function GET(request: Request) {
     return Response.json({ error: "자동 수집 공고 목록을 조회하지 못했습니다." }, { status: 503 });
   }
 }
+
+// 최신 관리자 권한을 확인한 뒤 운영 기능을 실행한다.
+export const GET = withBusinessAccess("ADMIN", handleGET);

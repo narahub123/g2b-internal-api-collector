@@ -22,6 +22,8 @@ function renderCollectionForm(refreshCollectionNavigation, push) {
       collectionDetailPaths: { "order-plans": ({ number }) => `/admin/g2b/order-plans/${number}` },
     },
     "../actions/refresh-collection-navigation": { refreshCollectionNavigation },
+    "@/features/service-auth/business-client": { handleBusinessFailure: () => {} },
+    "@/features/service-auth/session-writes": { withSessionCookieWrite: (action) => action() },
   };
   const exports = {};
   new Function("require", "exports", code)((id) => dependencies[id], exports);

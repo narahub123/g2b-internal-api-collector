@@ -1,3 +1,4 @@
+import { withBusinessAccess } from "@/server/auth/business-access";
 import { verifyAttachmentResult } from "@/features/download-g2b-attachment/server/attachment-preview-access";
 import { getG2bDatabase } from "@/server/g2b/repository";
 import { readAttachmentResultUnit } from "@/server/g2b/repository/attachment-results";
@@ -13,7 +14,7 @@ function positiveInteger(value: string) {
  * 관리자 접근 제어 아래에서 구조화 단위 한 건 또는 기존 PDF 페이지 텍스트를 반환한다.
  * 잘못된 경로는 400, 서명 오류는 403, 미저장 페이지는 404, 저장소 오류는 500으로 응답한다.
  */
-export async function GET(request: Request, { params }: {
+async function handleGET(request: Request, { params }: {
   params: Promise<{ resultId: string; page: string }>;
 }) {
   const input = await params;
@@ -37,3 +38,6 @@ export async function GET(request: Request, { params }: {
     return Response.json({ error: "추출 페이지를 조회하지 못했습니다." }, { status: 500, headers });
   }
 }
+
+// 최신 관리자 권한을 확인한 뒤 운영 기능을 실행한다.
+export const GET = withBusinessAccess("ADMIN", handleGET);

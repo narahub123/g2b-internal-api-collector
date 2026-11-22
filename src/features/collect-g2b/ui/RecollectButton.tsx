@@ -1,5 +1,6 @@
 "use client";
 
+import { businessFetch } from "@/features/service-auth/business-client";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { waitForNoticeJob } from "../api/wait-for-notice-job";
@@ -55,7 +56,7 @@ export function RecollectButton({
     setError("");
     setMessage("");
     try {
-      const response = await fetch(endpoint, {
+      const response = await businessFetch(endpoint, {
         method: "POST",
         signal: controller.signal,
         ...(requestBody && {

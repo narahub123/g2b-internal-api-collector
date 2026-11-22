@@ -1,5 +1,6 @@
 "use client";
 
+import { businessFetch } from "@/features/service-auth/business-client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import Link from "next/link";
@@ -50,7 +51,7 @@ export function NoticeAutomaticSettings() {
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: open ? "always" : false,
     queryFn: async ({ signal }) => {
-      const response = await fetch(endpoint, { signal, cache: "no-store" });
+      const response = await businessFetch(endpoint, { signal, cache: "no-store" });
       if (!response.ok)
         throw new Error("자동 수집 상태를 불러오지 못했습니다.");
       return response.json();
@@ -58,7 +59,7 @@ export function NoticeAutomaticSettings() {
   });
   const update = useMutation({
     mutationFn: async (command: NoticeAutomaticCommand): Promise<Settings> => {
-      const response = await fetch(endpoint, {
+      const response = await businessFetch(endpoint, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(command),

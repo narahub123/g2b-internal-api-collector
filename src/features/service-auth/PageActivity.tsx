@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useRef } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { AUTH_ERROR_PATH, isReturnablePage, parseInternalPage } from "@/shared/config/page-access";
 import { resolvePageReturn } from "./page-actions";
@@ -88,17 +88,24 @@ export function ClearPageHistory() {
 /**
  * 브라우저 탭 기록을 서버에서 검증한 다음 안전한 이전 페이지로 이동한다.
  * @param props.current 현재 접근이 거절된 경로.
+ * @param props.business 업무 실행 중 권한을 잃어 복귀 화면에서도 경고를 표시할지 여부.
  * @returns 이동 중 표시할 안내.
  */
-export function ReturnToPrevious({ current }: { current: unknown }) {
+export function ReturnToPrevious({ current, business = false }: { current: unknown; business?: boolean }) {
+  // 업무 오류는 복귀 화면에서 보인 Sonner 안내가 이동 뒤에도 유지되도록 한다.
+  const router = useRouter();
   const started = useRef(false);
   useEffect(() => {
     if (started.current) return;
     started.current = true;
+    if (business) toast.error("이 기능을 실행할 권한이 없습니다.", { id: "g2b-business-forbidden" });
     void resolvePageReturn(readHistory(), current)
-      .then((path) => window.location.replace(path))
+      .then((path) => {
+        if (business) router.replace(path);
+        else window.location.replace(path);
+      })
       .catch(() => window.location.replace(AUTH_ERROR_PATH));
-  }, [current]);
+  }, [business, current, router]);
   return <p role="status">접근할 수 있는 이전 페이지를 확인하는 중입니다.</p>;
 }
 

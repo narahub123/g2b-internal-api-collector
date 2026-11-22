@@ -28,6 +28,8 @@ const aliasHook = registerHooks({
     return next(specifier.startsWith('@/') ? join(__dirname, '../src', specifier.slice(2)) : specifier, context);
   },
 });
+// Next.js 요청 컨텍스트 없이 기존 업무 및 화면 동작을 검증한다.
+require("./mock-business-session.cjs").mockBusinessSession();
 
 const { createClient } = require('@libsql/client');
 const { G2bDatabase } = require('../src/server/g2b/repository/database');

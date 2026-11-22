@@ -6,6 +6,7 @@ import { dispatchPendingAttachments } from "@/features/download-g2b-attachment/s
 import { openAttachmentQueue, type AttachmentOwner } from "@/server/g2b/repository/attachment-queue";
 import { listAttachmentJobs, preferredPdfFiles } from "@/features/download-g2b-attachment/server/attachment-catalog";
 import { decodeHTMLStrict } from "entities";
+import { checkAdminAction } from "@/server/auth/business-access";
 
 function digest(value: string) {
   return createHash("sha256").update(value).digest();
@@ -13,6 +14,9 @@ function digest(value: string) {
 
 /** 관리자 토큰을 확인해 작업을 저장하고, 원격 모드에서는 대기 작업의 실행을 요청한다. */
 export async function requestAttachment(owner: AttachmentOwner, id: string, _previous: string, form: FormData) {
+  // 관리자 권한이 확인된 뒤에만 기존 수동 처리 토큰을 검사한다.
+  const failure = await checkAdminAction();
+  if (failure) return failure;
   const token = process.env.ATTACHMENT_MANUAL_TOKEN?.trim();
   const submitted = form.get("token");
   if (!token || typeof submitted !== "string" || !timingSafeEqual(digest(token), digest(submitted))) {

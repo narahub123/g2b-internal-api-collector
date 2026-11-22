@@ -1,9 +1,10 @@
+import { withBusinessAccess } from "@/server/auth/business-access";
 import { logNoticeQueueError } from "@/features/collect-g2b/api/notice-queue-diagnostics";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type { NoticeRunCursor } from "@/server/g2b/repository/notice-queue-types";
 
 /** 실행 요약이나 공고 한 페이지를 반환한다. 조회 옵션이 없으면 기존 전체 결과를 반환한다. */
-export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+async function handleGET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: rawId } = await params;
   const id = Number(rawId);
   if (!/^\d+$/.test(rawId) || !Number.isSafeInteger(id) || id < 1) return new Response(null, { status: 404 });
@@ -38,3 +39,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     return Response.json({ error: "기간 수집 상태를 조회하지 못했습니다." }, { status: 503 });
   }
 }
+
+// 최신 관리자 권한을 확인한 뒤 운영 기능을 실행한다.
+export const GET = withBusinessAccess("ADMIN", handleGET);

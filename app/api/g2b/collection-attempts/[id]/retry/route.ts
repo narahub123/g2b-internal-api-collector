@@ -1,3 +1,4 @@
+import { withBusinessAccess } from "@/server/auth/business-access";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { isCollectionAttemptActive } from "@/features/collect-g2b/api/collection-attempt";
 import {
@@ -17,7 +18,7 @@ import { maintenanceResponse } from "@/shared/api/g2b/g2b-maintenance";
  * 나라장터 점검은 503, 기타 수집 오류는 502를 반환한다.
  * @throws 재시도 대상 이력을 읽지 못한 경우.
  */
-export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const attemptId = Number(id);
   if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(attemptId)) {
@@ -68,3 +69,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       Response.json({ error: "나라장터 데이터를 다시 수집하지 못했습니다." }, { status: 502 });
   }
 }
+
+// 최신 관리자 권한을 확인한 뒤 운영 기능을 실행한다.
+export const POST = withBusinessAccess("ADMIN", handlePOST);

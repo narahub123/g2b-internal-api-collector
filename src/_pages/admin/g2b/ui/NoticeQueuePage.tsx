@@ -1,5 +1,6 @@
 "use client";
 
+import { businessFetch } from "@/features/service-auth/business-client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -28,7 +29,7 @@ const labels = {
 };
 
 async function readQueue<T>(query: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(`${endpoint}?${query}`, {
+  const response = await businessFetch(`${endpoint}?${query}`, {
     signal,
     cache: "no-store",
   });
@@ -132,7 +133,7 @@ export function NoticeQueuePage() {
 
   const updateManual = useMutation({
     mutationFn: async (manual: boolean) => {
-      const response = await fetch(endpoint, {
+      const response = await businessFetch(endpoint, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ manual }),

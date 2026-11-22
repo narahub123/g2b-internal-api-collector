@@ -140,6 +140,7 @@ test('기간 수집 API 접수 후 워커가 초기 공고와 연관 공고를 �
   const code = `
     const assert = require('node:assert/strict');
     require(${JSON.stringify(loader)});
+    require(${JSON.stringify(require.resolve("./mock-business-session.cjs"))}).mockBusinessSession();
     const { POST, GET } = require(${JSON.stringify(api)});
     const byId = require(${JSON.stringify(byId)}).GET;
     const { runNoticeWorker } = require(${JSON.stringify(worker)});
@@ -690,6 +691,7 @@ test('자동 수집 설정 API에서 시작과 중단을 접수하고 워커가 
   const result = spawnSync(process.execPath, ['-e', `
     const assert = require('node:assert/strict');
     require(${JSON.stringify(loader)});
+    require(${JSON.stringify(require.resolve("./mock-business-session.cjs"))}).mockBusinessSession();
     process.env.TURSO_DATABASE_URL = ':memory:';
     process.env.TURSO_AUTH_TOKEN = 'test-token';
     const { GET, PATCH } = require(${JSON.stringify(api)});

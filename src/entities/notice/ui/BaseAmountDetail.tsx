@@ -1,3 +1,4 @@
+import { AttachmentLink } from "@/shared/ui/g2b/AttachmentLink";
 import { Fragment, type ReactNode } from "react";
 import { revisionRoute } from "@/shared/lib/g2b/revision-route";
 import type { AttachmentPreviewLookup } from "@/shared/model/g2b/attachment-extraction";
@@ -151,7 +152,7 @@ export function BaseAmountDetail({ notice, previewLookup }: {
       case "download": {
         const adjustment = node.id === "btnInvsAmtAdjsSmrs";
         return adjustment && adjustmentHref ? (
-          <a className="mr-3 text-primary underline underline-offset-2" href={adjustmentHref}>{node.text}</a>
+          <AttachmentLink className="mr-3 text-primary underline underline-offset-2" href={adjustmentHref}>{node.text}</AttachmentLink>
         ) : (
           <span className="mr-3 text-muted-foreground" title={adjustment ? undefined : view.standardFilename}>
             {node.text} (다운로드 불가)
