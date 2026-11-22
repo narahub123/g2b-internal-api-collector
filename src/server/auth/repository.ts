@@ -48,6 +48,22 @@ export function openAuthRepository(client: Pick<Client, "execute">) {
       return rows.map((row) => ({ id: String(row.id), nickname: String(row.nickname) }));
     },
 
+    /**
+     * 선택 대상이 현재도 확인된 이메일을 사용하는지 내부 사용자 키로 검증한다.
+     * @param id 추가 인증으로 확인할 계정의 내부 ID.
+     * @param verifiedEmail 최초 가입 인증에서 검증한 이메일.
+     * @returns 계정이 존재하고 후보 조회와 같은 비교 규칙으로 이메일이 일치하면 true.
+     * @throws 저장소의 조회 오류를 전달한다.
+     */
+    async isEmailCandidate(id: string, verifiedEmail: string): Promise<boolean> {
+      // 내부 키로 한 행만 검색하고 이메일 비교는 후보 목록과 동일하게 처리한다.
+      const { rows } = await client.execute({
+        sql: "SELECT 1 FROM auth_users WHERE id = ? AND email = ? COLLATE NOCASE",
+        args: [id, verifiedEmail],
+      });
+      return rows.length > 0;
+    },
+
     /** 특정 항목의 최신 기록 하나를 읽어 같은 시각의 기록은 ID 순으로 구분한다. */
     async findLatestConsent(userId: string, itemId: string) {
       const [row] = (await client.execute({ sql: authQueries.latestConsent, args: [userId, itemId] })).rows;

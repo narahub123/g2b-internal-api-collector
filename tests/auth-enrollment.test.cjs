@@ -63,12 +63,13 @@ test("가입 저장, 미등록 로그인, 기존 회원, 후보 차단 및 저�
     assert.equal(registered.status, "registered");
     let issueCalls = 0;
     const failSession = async () => { issueCalls += 1; throw new Error("test session failure"); };
-    assert.equal(await startEnrollmentSession(registered, failSession), "registered-session-failed");
+    const evaluate = async () => ({ required: true, overdue: false });
+    assert.equal(await startEnrollmentSession(registered, failSession, evaluate), "registered-session-failed");
     assert.equal(issueCalls, 1);
     const existing = await resolveEnrollment(database, "login", identity, []);
-    assert.equal(await startEnrollmentSession(existing, failSession), "session-failed");
-    assert.equal(await startEnrollmentSession({ status: "signup-required" }, failSession), "signup-required");
-    assert.equal(await startEnrollmentSession({ status: "link-required" }, failSession), "link-required");
+    assert.equal(await startEnrollmentSession(existing, failSession, evaluate), "session-failed");
+    assert.equal(await startEnrollmentSession({ status: "signup-required" }, failSession, evaluate), "signup-required");
+    assert.equal(await startEnrollmentSession({ status: "link-required" }, failSession, evaluate), "link-required");
     assert.equal(issueCalls, 2);
     assert.deepEqual(await resolveEnrollment(database, "signup", { ...identity, nickname: "Changed" }, consent),
       { status: "existing", user: registered.user });

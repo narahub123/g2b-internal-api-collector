@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ConsentPolicy } from "@/shared/config/auth";
 import type { G2bDatabase } from "@/server/g2b/repository/database";
 import { openAuthRepository } from "./repository";
-import type { AuthProfile, AuthSessionUser } from "./types";
+import type { AuthProfile, AuthSessionUser, ConsentRenewal } from "./types";
 
 /**
  * 브라우저가 제출한 정책 버전과 항목별 선택 상태.
@@ -30,6 +30,9 @@ export type EnrollmentResult =
   | { status: "existing" | "registered"; user: AuthProfile }
   // 회원 또는 추가 확인 자료가 없어 세션을 발급할 수 없는 이유.
   | { status: "signup-required" | "incomplete-profile" | "link-required" };
+
+/** 기존 계정에 연결된 사용자 또는 추가 인증 실패·연결 충돌 결과. */
+type LinkResult = { status: "existing"; user: AuthProfile } | { status: "link-proof-failed" | "link-conflict" };
 
 /**
  * 현재 시행 중인 정책만 가입 화면과 서버 검증의 기준으로 사용한다.
@@ -65,6 +68,7 @@ export function validateSignupConsent(
  * @param database SQL 실행과 트랜잭션을 제공하는 저장소.
  * @param purpose 미등록 계정에서 로그인과 가입을 구분하는 목적.
  * @param identity 공급자 검증을 거친 고유 키와 프로필.
+ * @param options 후보 화면에서 별도 계정 생성을 선택한 경우 사용하는 서버 측 옵션.
  * @returns 기존 또는 신규 회원의 프로필이나 가입·확인이 필요한 상태.
  */
 export async function resolveEnrollment(
@@ -72,6 +76,7 @@ export async function resolveEnrollment(
   purpose: "login" | "signup",
   identity: OAuthIdentity,
   consent: readonly SignupConsent[],
+  options?: { allowSeparateAccount: boolean },
 ): Promise<EnrollmentResult> {
   // 연결 조회용 고유 키와 신규 회원에 사용할 프로필을 가져온다.
   const { provider, providerUserId, email, nickname, image } = identity;
@@ -98,7 +103,7 @@ export async function resolveEnrollment(
       // 경쟁 요청이 먼저 가입했으면 기존 회원으로 처리한다.
       if (linked) return { status: "existing", user: linked };
       // 이메일 후보가 있으면 추가 인증에 앞서 계정과 세션을 만들지 않는다.
-      if ((await repository.findEmailCandidates(email)).length) return { status: "link-required" };
+      if (!options?.allowSeparateAccount && (await repository.findEmailCandidates(email)).length) return { status: "link-required" };
       // 신규 가입에 필요한 표시 이름이 없으면 저장을 중단한다.
       if (!nickname) return { status: "incomplete-profile" };
 
@@ -142,21 +147,72 @@ export async function resolveEnrollment(
 }
 
 /**
+ * 추가 인증으로 확인한 기존 계정에 최초 OAuth 계정을 연결한다.
+ * @param database 조회와 쓰기 트랜잭션을 제공하는 저장소.
+ * @param source 최초 가입에서 검증한 미연결 OAuth 키와 이메일.
+ * @param targetId 사용자가 후보 화면에서 선택한 내부 사용자 ID.
+ * @param proof 추가 OAuth 인증에서 검증한 기존 계정의 OAuth 키.
+ * @returns 연결된 저장 프로필, 대상 인증 실패 또는 타 계정과의 연결 충돌.
+ * @throws 저장소 오류가 발생하면 연결 변경을 롤백하고 전달한다.
+ */
+export async function linkEnrollment(
+  database: Pick<G2bDatabase, "execute" | "transaction">,
+  source: OAuthIdentity,
+  targetId: string,
+  proof: Pick<OAuthIdentity, "provider" | "providerUserId">,
+): Promise<LinkResult> {
+  // 트랜잭션 안에서 대상과 OAuth 연결을 같은 시점의 데이터로 검증한다.
+  const repository = openAuthRepository(database);
+  /**
+   * 최초 계정과 추가 인증 계정을 대조하고 OAuth 연결 행만 기록한다.
+   * @returns 연결이 끝난 기존 회원 또는 연결을 중단한 이유.
+   */
+  return database.transaction(async () => {
+    // 처음 인증한 계정 자체는 기존 계정에 대한 독립적인 증명이 될 수 없다.
+    if (!source.email || (source.provider === proof.provider && source.providerUserId === proof.providerUserId)) {
+      return { status: "link-proof-failed" };
+    }
+    // 추가 인증에서 받은 고유 키가 선택 대상의 기존 OAuth 연결인지 확인한다.
+    const user = await repository.findUserByOAuth(proof.provider, proof.providerUserId);
+    if (user?.id !== targetId || !await repository.isEmailCandidate(targetId, source.email)) {
+      return { status: "link-proof-failed" };
+    }
+    // 다른 가입이나 연결이 먼저 저장된 경우 기존 연결을 옮기지 않는다.
+    const result = await database.execute({
+      sql: `INSERT INTO auth_oauth_accounts (provider, provider_user_id, user_id) VALUES (?, ?, ?)
+        ON CONFLICT (provider, provider_user_id) DO NOTHING`,
+      args: [source.provider, source.providerUserId, targetId],
+    });
+    if (result.rowsAffected === 0) {
+      const linked = await repository.findUserByOAuth(source.provider, source.providerUserId);
+      if (linked?.id !== targetId) return { status: "link-conflict" };
+    }
+    // 기존 사용자 정보와 동의 이력은 그대로 둔 채 저장된 프로필로 인증한다.
+    return { status: "existing", user };
+  });
+}
+
+/**
  * 가입 트랜잭션이 끝난 결과에서만 세션을 발급한다. 발급 오류는 가입 데이터에 손대지 않고
  * 재로그인 안내 코드로 반환하며, 계정 연결 대기나 미가입 로그인에서는 발급을 호출하지 않는다.
  * @param result 계산된 가입 결과와 해당하는 경우의 저장 프로필.
  * @param issue 검증된 서비스 사용자의 세션 쿠키 발급 함수.
+ * @param evaluate 기존 회원의 최신 동의와 현재 정책을 비교하는 함수.
  * @returns 인증 성공, 원래의 가입 안내 또는 신규·기존 회원별 발급 실패 코드.
  */
 export async function startEnrollmentSession(
   result: EnrollmentResult,
   issue: (user: AuthSessionUser) => Promise<void>,
+  evaluate: (userId: string) => Promise<ConsentRenewal>,
 ) {
   // 내부 사용자가 확정되지 않으면 원래의 상태를 전달한다.
   if (!("user" in result)) return result.status;
   try {
-    // 실제 동의 갱신 판단은 계정 연결 단계에서 연결한다.
-    await issue({ ...result.user, consentRenewal: { required: false, overdue: false } });
+    // 기존 회원의 동의 상태를 발급 시에만 판단하며 신규 계정에는 초기 상태를 부여한다.
+    const consentRenewal = result.status === "existing"
+      ? await evaluate(result.user.id)
+      : { required: false, overdue: false };
+    await issue({ ...result.user, consentRenewal });
     // 쿠키 발급 성공 후 공통 이동 경로를 선택할 수 있게 한다.
     return "authenticated";
   // 발급 실패 시 가입 기록은 보존하고 안내 코드를 결정한다.

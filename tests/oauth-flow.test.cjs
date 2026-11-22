@@ -33,6 +33,30 @@ test("단기 상태의 만료와 구조, 식별자 및 인증 단계를 검증�
   assert.equal(await decodeOAuthFlow("invalid-token", secret, first), undefined);
 });
 
+/** 추가 인증 취소·실패가 최초 선택 상태를 보존하며 두 OAuth 요청의 키를 혼동하지 않는지 확인한다. */
+test("추가 인증 콜백은 검증된 대상과 별도 흐름 키를 유지한다", async () => {
+  const { oauthCookieName, decodeOAuthFlow, resolveOAuthCallback } = require("../src/server/auth/oauth-state");
+  // 최초 인증 결과는 선택 쿠키에만 보관하고 추가 인증에는 대상과 부모 키만 넣는다.
+  const parent = { ...signup, stage: "link-choice", identity: {
+    provider: "google", providerUserId: "unlinked", email: "same@example.com", nickname: null, image: null,
+  } };
+  delete parent.nonce;
+  delete parent.verifier;
+  const child = { ...signup, state: second, consent: [], linkAttempt: { parent: first, targetId: "existing" } };
+  // 실제 암호화 규칙을 적용해 부모와 자식을 각각 확인한다.
+  const signed = (flow) => encode({ token: { flow }, secret, salt: oauthCookieName(flow.state), maxAge: 60 });
+  assert.deepEqual(await decodeOAuthFlow(await signed(parent), secret, first), parent);
+  assert.deepEqual(await decodeOAuthFlow(await signed(child), secret, second), child);
+  assert.equal(await decodeOAuthFlow(await signed({ ...child, purpose: "login" }), secret, second), undefined);
+  assert.equal(await decodeOAuthFlow(await signed({ ...child, linkAttempt: { parent: second, targetId: "existing" } }), secret, second), undefined);
+  const callback = (input) => resolveOAuthCallback(child, "google", new URLSearchParams({ state: second, ...input }));
+  assert.equal(callback({ error: "access_denied" }).location, "/auth/link-account?flow=" + first + "&notice=cancelled");
+  assert.equal(callback({ error: "server_error" }).location, "/auth/link-account?flow=" + first + "&notice=failed");
+  assert.deepEqual(callback({ code: "proof-code" }).flow.linkAttempt, child.linkAttempt);
+  assert.equal(callback({ error: "access_denied" }).flow.linkAttempt, undefined);
+  assert.equal(resolveOAuthCallback(parent, "google", new URLSearchParams({ state: first, code: "proof-code" })).flow, undefined);
+});
+
 /** 같은 쿠키 저장 공간에서 탭별 콜백과 중복 요청이 다른 흐름에 영향을 주지 않는지 확인한다. */
 test("탭별 콜백이 독립적으로 진행되며 이미 받은 콜백은 완료 상태를 바꾸지 않는다", async () => {
   const { oauthCookieName, decodeOAuthFlow, resolveOAuthCallback } = require("../src/server/auth/oauth-state");

@@ -4,9 +4,12 @@ import { randomBytes } from "node:crypto";
 import { redirect } from "next/navigation";
 import { getG2bDatabase } from "@/server/g2b/repository";
 import { verifyCurrentUser } from "@/server/auth/current-user";
-import { activeConsentPolicies, resolveEnrollment, startEnrollmentSession, validateSignupConsent } from "@/server/auth/enrollment";
+import { activeConsentPolicies, linkEnrollment, resolveEnrollment, startEnrollmentSession, validateSignupConsent, type EnrollmentResult, type OAuthIdentity } from "@/server/auth/enrollment";
+import { evaluateConsentRenewal } from "@/server/auth/consent-renewal";
+import { listLinkChoices, readLinkChoice } from "@/server/auth/link-choice";
 import { oauthAdapters } from "@/server/auth/oauth-providers";
-import { OAUTH_FLOW_MAX_AGE } from "@/server/auth/oauth-state";
+import { OAUTH_FLOW_MAX_AGE, oauthLinkLocation, toOAuthDraft, type OAuthFlow } from "@/server/auth/oauth-state";
+import { openAuthRepository } from "@/server/auth/repository";
 import { isOAuthProvider } from "@/shared/config/oauth-providers";
 import { clearOAuthFlow, readOAuthFlow, restoreOAuthDraft, writeOAuthFlow } from "@/server/auth/oauth-flow";
 import { issueSession } from "@/server/auth/session";
@@ -28,15 +31,127 @@ function redirectWithNotice(path: "/login" | "/signup", notice: AuthNotice, stat
 /**
  * 서버 액션에서 최신 세션과 사용자 상태를 검증하고 비로그인 요청만 계속한다.
  * @param path 인증 장애 안내를 표시할 페이지.
+ * @param linkState 추가 인증 장애를 계정 선택 화면에 표시할 최초 흐름 키.
  * @throws 로그인 상태이거나 인증 검증에 장애가 있으면 Next.js 이동 신호를 보낸다.
  */
-async function verifyGuest(path: "/login" | "/signup") {
+async function verifyGuest(path: "/login" | "/signup", linkState?: string) {
   // Layout 방문 여부와 무관하게 직접 호출된 요청을 검증한다.
   const auth = await verifyCurrentUser();
   // 유효한 로그인 상태라면 인증 절차를 다시 시작하지 않는다.
   if (auth.status === "authenticated") redirect(AUTH_SUCCESS_PATH);
   // 인증 상태를 확인할 수 없으면 가입·로그인을 중단하고 장애를 안내한다.
-  if (auth.status === "error") redirectWithNotice(path, "unavailable");
+  if (auth.status === "error") {
+    if (linkState) redirect(oauthLinkLocation(linkState, "unavailable"));
+    redirectWithNotice(path, "unavailable");
+  }
+}
+
+/**
+ * 확정된 사용자에게 세션을 발급하고 인증 성공 또는 재로그인 경로로 이동한다.
+ * @param result 저장소가 확정한 신규 또는 기존 회원 프로필.
+ * @param state 처리한 OAuth 흐름의 키.
+ * @throws 완료나 실패를 표시할 내부 페이지로 Next.js 이동 신호를 보낸다.
+ */
+async function finishSession(result: EnrollmentResult, state: string): Promise<never> {
+  // 쿠키 발급 전에 이미 사용한 인가 흐름을 제거한다.
+  await clearOAuthFlow(state);
+  const repository = openAuthRepository(getG2bDatabase());
+  /**
+   * 로그인 직전에만 현재 동의 정책을 최신 기록과 대조한다.
+   * @param id 세션을 발급할 내부 사용자 ID.
+   * @returns 세션에 저장할 갱신과 기한 상태.
+   * @throws 동의 이력 조회 오류가 있는 경우.
+   */
+  const status = await startEnrollmentSession(result, issueSession,
+    (id) => evaluateConsentRenewal(CONSENT_POLICIES, (item) => repository.findLatestConsent(id, item)));
+  if (status !== "authenticated") redirectWithNotice("/login", status);
+  redirect(AUTH_SUCCESS_PATH);
+}
+
+/**
+ * 쿠키에 묶인 공급자의 일회성 코드를 교환하고 반환된 공급자 식별자를 대조한다.
+ * @param flow 콜백 검증을 통과한 교환 대기 상태.
+ * @returns 계정 조회와 가입에 사용할 검증된 OAuth 식별자와 프로필.
+ * @throws 공급자 교환 또는 식별자 확인에 실패한 경우.
+ */
+async function exchangeOAuth(flow: Extract<OAuthFlow, { stage: "ready" }>): Promise<OAuthIdentity> {
+  const identity = await oauthAdapters[flow.provider].complete(flow.code, flow);
+  if (identity.provider !== flow.provider) throw new Error("OAuth 공급자가 일치하지 않습니다.");
+  return identity;
+}
+
+/**
+ * 별도 가입을 선택하거나 기존 후보에 대한 별도 OAuth 인증을 시작한다.
+ * @param form 최초 인증 흐름과 후보 화면의 선택을 담은 폼 데이터.
+ * @throws 폼 결과에 따라 선택 화면, 가입 화면, 공급자 또는 세션 완료 경로로 이동한다.
+ */
+export async function chooseOAuthAccount(form: FormData): Promise<void> {
+  // 폼의 이메일이나 계정 ID 대신 브라우저의 확인된 선택 쿠키를 읽는다.
+  const flow = await readLinkChoice(form.get("flow"));
+  if (!flow) redirectWithNotice("/signup", "failed");
+  await verifyGuest("/signup", flow.state);
+  const choice = form.get("choice");
+  if (choice === "separate") {
+    // 별도 가입에서만 현재 법적 동의를 확인하고 새 계정의 이력을 저장한다.
+    if (!validateSignupConsent(activeConsentPolicies(CONSENT_POLICIES), flow.consent)) {
+      await restoreOAuthDraft(flow);
+      redirectWithNotice("/signup", "consent", flow.state);
+    }
+    let result: EnrollmentResult;
+    try {
+      result = await resolveEnrollment(getG2bDatabase(), "signup", flow.identity, flow.consent, { allowSeparateAccount: true });
+    } catch (error) {
+      console.error("[별도 OAuth 가입]", error instanceof Error ? error.name : "UnknownError");
+      redirect(oauthLinkLocation(flow.state, "failed"));
+    }
+    if (!("user" in result)) redirect(oauthLinkLocation(flow.state, result.status));
+    await finishSession(result, flow.state);
+  }
+
+  // 후보 선택의 고유값을 다시 조회하고 추가 인증용 상태는 최초 흐름과 분리한다.
+  let authorizationUrl: string;
+  try {
+    const selected = (await listLinkChoices(flow)).find(({ selection }) => selection === choice);
+    if (!selected) throw new Error("등록된 OAuth 연결 후보가 없습니다.");
+    const state = randomBytes(32).toString("base64url");
+    const { url, nonce, verifier } = await oauthAdapters[flow.provider].start(state);
+    await writeOAuthFlow({
+      ...toOAuthDraft(flow), stage: "pending", state, nonce, verifier, consent: [],
+      linkAttempt: { parent: flow.state, targetId: selected.id },
+    });
+    authorizationUrl = url;
+  } catch (error) {
+    console.error("[OAuth 추가 인증 요청]", error instanceof Error ? error.name : "UnknownError");
+    redirect(oauthLinkLocation(flow.state, "failed"));
+  }
+  redirect(authorizationUrl);
+}
+
+/**
+ * 두 번째 OAuth 인증으로 선택한 기존 계정을 확인하고 연결 행만 추가한다.
+ * @param flow 추가 인증 콜백에서 읽은 코드 교환 대기 상태.
+ * @param attempt 최초 선택 흐름과 대상 계정을 묶은 확인 자료.
+ * @throws 실패하면 선택 화면으로, 성공하면 공통 세션 완료 경로로 이동한다.
+ */
+async function finishLinkOAuth(
+  flow: Extract<OAuthFlow, { stage: "ready" }>,
+  attempt: NonNullable<OAuthFlow["linkAttempt"]>,
+): Promise<never> {
+  // 추가 인증 전에 확인한 신규 계정 상태와 선택 대상이 아직 유효해야 한다.
+  const source = await readLinkChoice(attempt.parent);
+  if (!source) redirectWithNotice("/signup", "failed");
+  await verifyGuest("/signup", source.state);
+  await clearOAuthFlow(flow.state);
+  let result: Awaited<ReturnType<typeof linkEnrollment>>;
+  try {
+    const proof = await exchangeOAuth(flow);
+    result = await linkEnrollment(getG2bDatabase(), source.identity, attempt.targetId, proof);
+  } catch (error) {
+    console.error("[OAuth 추가 인증 완료]", error instanceof Error ? error.name : "UnknownError");
+    redirect(oauthLinkLocation(source.state, "failed"));
+  }
+  if (!("user" in result)) redirect(oauthLinkLocation(source.state, result.status));
+  return finishSession(result, source.state);
 }
 
 /**
@@ -105,6 +220,8 @@ export async function finishOAuth(form: FormData): Promise<void> {
   const flow = await readOAuthFlow(form.get("flow"));
   // 정상 콜백 없이 완료 액션만 호출한 경우 인증을 시작하지 않는다.
   if (!flow || flow.stage !== "ready") redirectWithNotice("/login", "failed");
+  // 추가 인증은 최초 가입 완료와 달리 선택한 내부 계정의 연결만 처리한다.
+  if (flow.linkAttempt) return finishLinkOAuth(flow, flow.linkAttempt);
   // 가입과 로그인 URL 중 실패를 표시할 원래 화면을 선택한다.
   const path = flow.purpose === "signup" ? "/signup" : "/login";
   // 코드 교환과 DB 처리에 앞서 비로그인 상태를 다시 검증한다.
@@ -119,11 +236,11 @@ export async function finishOAuth(form: FormData): Promise<void> {
 
   // 공급자 검증 뒤 저장소에서 결정할 업무 결과를 보관한다.
   let result: Awaited<ReturnType<typeof resolveEnrollment>>;
+  let identity: OAuthIdentity;
   // 코드 교환 또는 저장 실패를 사용자에게 노출할 안전한 메시지로 변환한다.
   try {
     // 폼 입력 대신 쿠키에 묶인 공급자가 코드를 교환한다.
-    const identity = await oauthAdapters[flow.provider].complete(flow.code, flow);
-    if (identity.provider !== flow.provider) throw new Error("OAuth 공급자가 일치하지 않습니다.");
+    identity = await exchangeOAuth(flow);
     // 공급자 고유 키로 기존 회원을 확인하거나 가입 트랜잭션을 완료한다.
     result = await resolveEnrollment(getG2bDatabase(), flow.purpose, identity, flow.consent);
   } catch (error) {
@@ -131,6 +248,11 @@ export async function finishOAuth(form: FormData): Promise<void> {
     console.error("[OAuth 인증 완료]", error instanceof Error ? error.name : "UnknownError");
     // 현재 인증 목적의 화면으로 복귀해서 새 인증을 시작할 수 있게 한다.
     redirectWithNotice(path, "failed", flow.state);
+  }
+  // 계정 선택 화면은 최초 OAuth 결과만 보존하고 추가 인증에서 새 코드를 요구한다.
+  if (result.status === "link-required" && identity.email) {
+    await writeOAuthFlow({ ...toOAuthDraft(flow), stage: "link-choice", identity: { ...identity, email: identity.email } });
+    redirect(oauthLinkLocation(flow.state, "link-required"));
   }
   // 미가입 사용자의 로그인 요청에는 새 가입을 안내한다.
   if (result.status === "signup-required") {
@@ -141,12 +263,6 @@ export async function finishOAuth(form: FormData): Promise<void> {
   }
   // 연결 대기 또는 프로필 누락은 저장된 사용자 없이 안내만 표시한다.
   if (!("user" in result)) redirectWithNotice(path, result.status, flow.state);
-  // 내부 사용자가 확정되면 더 이상 필요 없는 OAuth 쿠키를 제거한다.
-  await clearOAuthFlow(flow.state);
-  // 가입 트랜잭션이 끝난 사용자에 한해 공통 세션 발급을 한 번 수행한다.
-  const status = await startEnrollmentSession(result, issueSession);
-  // 실패 시 자동으로 다시 발급하지 않고 로그인으로 이동한다.
-  if (status !== "authenticated") redirectWithNotice("/login", status);
-  // 성공한 신규·기존 회원은 공통 도착 경로로 이동한다.
-  redirect(AUTH_SUCCESS_PATH);
+  // 신규 또는 기존 회원이 확정된 후에만 공통 세션을 발급한다.
+  return finishSession(result, flow.state);
 }

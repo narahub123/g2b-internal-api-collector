@@ -1,6 +1,6 @@
 import { decode } from "next-auth/jwt";
 import { isOAuthProvider, type OAuthProviderId } from "@/shared/config/oauth-providers";
-import type { SignupConsent } from "./enrollment";
+import type { OAuthIdentity, SignupConsent } from "./enrollment";
 import type { OAuthVerification } from "./oauth-providers";
 
 /** 최초 인증 화면과 복귀 화면을 연결하는 인증 목적. */
@@ -18,6 +18,8 @@ type FlowContext = {
   state: string;
   /** 단계가 바뀌어도 유지하는 요청 만료 시각의 Unix 초. */
   expiresAt: number;
+  /** 추가 인증에서만 사용하는 가입 선택 요청과 대상 내부 계정. */
+  linkAttempt?: { parent: string; targetId: string };
 };
 
 /** 암호화 쿠키에 보관하는 초안, 콜백 대기, 교환 대기 상태. */
@@ -28,7 +30,12 @@ export type OAuthFlow = FlowContext & (
   | ({ stage: "pending" } & OAuthVerification)
   // 교환 대기에는 검증된 콜백에서 받은 일회성 코드를 추가한다.
   | ({ stage: "ready"; code: string } & OAuthVerification)
+  // 동일 이메일 후보를 선택하는 동안 최초 검증 결과를 서버 전용 쿠키에 보관한다.
+  | { stage: "link-choice"; identity: OAuthIdentity & { email: string } }
 );
+
+/** Google 인증을 마치고 동일 이메일 계정 선택을 기다리는 가입 상태. */
+export type OAuthLinkChoice = Extract<OAuthFlow, { stage: "link-choice" }>;
 
 /** 공급자 요청·취소·완료를 같은 수명 안에 처리하는 최대 시간(초). */
 export const OAUTH_FLOW_MAX_AGE = 10 * 60;
@@ -75,6 +82,19 @@ function isConsent(value: unknown): value is SignupConsent {
 }
 
 /**
+ * 동일 이메일 후보 선택에 사용할 OAuth 응답의 구조가 유효한지 확인한다.
+ * @param value 선택 쿠키에 포함된 최초 인증의 결과.
+ * @param provider 최초 흐름에 연결된 공급자 식별자.
+ * @returns 공급자 고유 키와 검증된 이메일, 선택 프로필의 형태가 유효하면 true.
+ */
+function isLinkIdentity(value: unknown, provider: OAuthProviderId): boolean {
+  return isRecord(value) && value.provider === provider && typeof value.providerUserId === "string" && !!value.providerUserId
+    && typeof value.email === "string" && !!value.email
+    && (value.nickname === null || typeof value.nickname === "string")
+    && (value.image === null || typeof value.image === "string");
+}
+
+/**
  * 암호화한 쿠키가 요청 식별자와 일치하고 현재 단계에 필요한 자료를 포함하는지 확인한다.
  * @param token 해당 흐름 키로 조회한 암호화 쿠키 값.
  * @param secret 복호화에 사용할 서버 비밀값.
@@ -97,8 +117,21 @@ export async function decodeOAuthFlow(token: string | undefined, secret: string,
       || !Array.isArray(flow.consent) || !flow.consent.every(isConsent)
       || (flow.purpose === "login" && flow.consent.length > 0)) return undefined;
 
-    // 초안은 기존 검증값이나 인가 코드를 보관하지 않는다.
-    if (flow.stage === "draft" && !("nonce" in flow) && !("verifier" in flow) && !("code" in flow)) return flow as OAuthFlow;
+    // 추가 인증은 별도 키와 대상이 있는 가입 대기 흐름에서만 허용한다.
+    if ("linkAttempt" in flow) {
+      const link = flow.linkAttempt;
+      if (flow.purpose !== "signup" || (flow.stage !== "pending" && flow.stage !== "ready")
+        || !isRecord(link) || !isOAuthFlowId(link.parent) || link.parent === state
+        || typeof link.targetId !== "string" || !link.targetId || link.targetId.length > 128) return undefined;
+    }
+    // 초안과 후보 선택 단계는 기존 인가 코드 및 공급자 확인 값을 보관하지 않는다.
+    if (flow.stage === "draft" || flow.stage === "link-choice") {
+      if ("nonce" in flow || "verifier" in flow || "code" in flow) return undefined;
+      if (flow.stage === "draft") return "identity" in flow ? undefined : flow as OAuthFlow;
+      return flow.purpose === "signup" && isLinkIdentity(flow.identity, flow.provider) ? flow as OAuthFlow : undefined;
+    }
+    // 검증된 최초 프로필은 후보 선택 토큰에만 저장한다.
+    if ("identity" in flow) return undefined;
     // 대기 상태에서만 최초 토큰과 코드 교환을 검증할 난수를 사용한다.
     if (!isOAuthFlowId(flow.nonce) || !isOAuthFlowId(flow.verifier)) return undefined;
     // 최초 콜백 전에는 아직 코드가 없어야 한다.
@@ -110,6 +143,18 @@ export async function decodeOAuthFlow(token: string | undefined, secret: string,
   } catch {
     // 암호 검증이 실패한 경우 대기 중인 요청으로 인정하지 않는다.
   }
+}
+
+/**
+ * 최초 가입 요청으로 연결된 계정 선택 화면의 내부 경로를 만든다.
+ * @param state 암호화된 선택 쿠키의 검증된 요청 키.
+ * @param notice 추가 인증 취소 또는 실패 등 선택 화면에서 표시할 안내 코드.
+ * @returns 계정 선택 화면의 이동 경로.
+ */
+export function oauthLinkLocation(state: string, notice?: string): string {
+  const query = new URLSearchParams({ flow: state });
+  if (notice) query.set("notice", notice);
+  return `/auth/link-account?${query}`;
 }
 
 /**
@@ -134,7 +179,9 @@ export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: stri
   flow?: OAuthFlow;
 } {
   // 선택한 공급자와 콜백 경로가 다르거나 재시도 초안이면 코드가 있어도 처리하지 않는다.
-  if (!flow || flow.stage === "draft" || flow.provider !== provider) return { location: "/login?notice=failed" };
+  if (!flow || flow.stage === "draft" || flow.stage === "link-choice" || flow.provider !== provider) {
+    return { location: "/login?notice=failed" };
+  }
   // 실패 시 이동할 화면은 최초 인증 목적에서 결정한다.
   const path = flow.purpose === "signup" ? "/signup" : "/login";
   // 유일한 state가 정확히 일치할 때만 쿠키를 변경할 수 있다.
@@ -150,7 +197,10 @@ export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: stri
   if (params.has("error") || codes.length !== 1 || !codes[0] || codes[0].length > 1000) {
     // 공급자 응답의 원문 대신 공개용 취소 또는 실패 코드만 전달한다.
     const notice = params.get("error") === "access_denied" ? "cancelled" : "failed";
-    return { location: `${path}?notice=${notice}&flow=${flow.state}`, flow: toOAuthDraft(flow) };
+    return {
+      location: flow.linkAttempt ? oauthLinkLocation(flow.linkAttempt.parent, notice) : `${path}?notice=${notice}&flow=${flow.state}`,
+      flow: toOAuthDraft(flow),
+    };
   }
   // 완료 액션에서 해당 요청의 코드만 서버에서 교환하도록 대기 상태로 변경한다.
   return { location: completion, flow: { ...flow, stage: "ready", code: codes[0] } };
