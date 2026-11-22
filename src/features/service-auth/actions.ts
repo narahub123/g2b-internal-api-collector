@@ -14,6 +14,7 @@ import { isOAuthProvider } from "@/shared/config/oauth-providers";
 import { clearOAuthFlow, readOAuthFlow, restoreOAuthDraft, writeOAuthFlow } from "@/server/auth/oauth-flow";
 import { issueSession } from "@/server/auth/session";
 import { AUTH_SUCCESS_PATH, CONSENT_POLICIES } from "@/shared/config/auth";
+import { AUTH_ERROR_PATH } from "@/shared/config/page-access";
 import type { AuthNotice } from "./model";
 
 /**
@@ -30,20 +31,15 @@ function redirectWithNotice(path: "/login" | "/signup", notice: AuthNotice, stat
 
 /**
  * 서버 액션에서 최신 세션과 사용자 상태를 검증하고 비로그인 요청만 계속한다.
- * @param path 인증 장애 안내를 표시할 페이지.
- * @param linkState 추가 인증 장애를 계정 선택 화면에 표시할 최초 흐름 키.
  * @throws 로그인 상태이거나 인증 검증에 장애가 있으면 Next.js 이동 신호를 보낸다.
  */
-async function verifyGuest(path: "/login" | "/signup", linkState?: string) {
+async function verifyGuest() {
   // Layout 방문 여부와 무관하게 직접 호출된 요청을 검증한다.
   const auth = await verifyCurrentUser();
   // 유효한 로그인 상태라면 인증 절차를 다시 시작하지 않는다.
   if (auth.status === "authenticated") redirect(AUTH_SUCCESS_PATH);
   // 인증 상태를 확인할 수 없으면 가입·로그인을 중단하고 장애를 안내한다.
-  if (auth.status === "error") {
-    if (linkState) redirect(oauthLinkLocation(linkState, "unavailable"));
-    redirectWithNotice(path, "unavailable");
-  }
+  if (auth.status === "error") redirect(AUTH_ERROR_PATH);
 }
 
 /**
@@ -89,7 +85,7 @@ export async function chooseOAuthAccount(form: FormData): Promise<void> {
   // 폼의 이메일이나 계정 ID 대신 브라우저의 확인된 선택 쿠키를 읽는다.
   const flow = await readLinkChoice(form.get("flow"));
   if (!flow) redirectWithNotice("/signup", "failed");
-  await verifyGuest("/signup", flow.state);
+  await verifyGuest();
   const choice = form.get("choice");
   if (choice === "separate") {
     // 별도 가입에서만 현재 법적 동의를 확인하고 새 계정의 이력을 저장한다.
@@ -140,7 +136,7 @@ async function finishLinkOAuth(
   // 추가 인증 전에 확인한 신규 계정 상태와 선택 대상이 아직 유효해야 한다.
   const source = await readLinkChoice(attempt.parent);
   if (!source) redirectWithNotice("/signup", "failed");
-  await verifyGuest("/signup", source.state);
+  await verifyGuest();
   await clearOAuthFlow(flow.state);
   let result: Awaited<ReturnType<typeof linkEnrollment>>;
   try {
@@ -170,7 +166,7 @@ export async function beginOAuth(form: FormData): Promise<void> {
   const provider = form.get("provider");
   if (!isOAuthProvider(provider)) redirectWithNotice(path, "failed");
   // 공급자 요청 전에 직접 호출자의 로그인 상태를 확인한다.
-  await verifyGuest(path);
+  await verifyGuest();
   // 현재 시행 중인 정책만 제출 데이터와 대조한다.
   const policies = activeConsentPolicies(CONSENT_POLICIES);
   // 가입에서만 항목별 버전과 체크 여부를 읽고 로그인에는 동의를 요구하지 않는다.
@@ -225,7 +221,7 @@ export async function finishOAuth(form: FormData): Promise<void> {
   // 가입과 로그인 URL 중 실패를 표시할 원래 화면을 선택한다.
   const path = flow.purpose === "signup" ? "/signup" : "/login";
   // 코드 교환과 DB 처리에 앞서 비로그인 상태를 다시 검증한다.
-  await verifyGuest(path);
+  await verifyGuest();
   // 후속 실패에서 동의는 복원하되 교환할 코드를 다음 요청에 남기지 않는다.
   await restoreOAuthDraft(flow);
   // OAuth가 진행되는 동안 정책이 바뀌었는지 확인하고 다르면 동의를 다시 받는다.

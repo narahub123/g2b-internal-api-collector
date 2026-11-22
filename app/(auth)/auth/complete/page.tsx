@@ -1,8 +1,7 @@
 import { redirect } from "next/navigation";
 import { OAuthCompletion } from "@/features/service-auth/OAuthCompletion";
 import { readOAuthFlow } from "@/server/auth/oauth-flow";
-import { verifyCurrentUser } from "@/server/auth/current-user";
-import { AUTH_SUCCESS_PATH } from "@/shared/config/auth";
+import { requirePageAccess } from "@/server/auth/page-guard";
 
 /**
  * 브라우저에 검증된 콜백 상태가 있을 때만 가입·로그인 완료 요청을 표시한다.
@@ -14,9 +13,7 @@ export default async function OAuthCompletePage({ searchParams }: {
   searchParams: Promise<{ flow?: string | string[] }>;
 }) {
   // 직접 주소 접근에서도 현재 로그인 상태를 확인한다.
-  const auth = await verifyCurrentUser();
-  // 이미 로그인한 사용자는 인가 코드 교환 없이 마이페이지로 이동한다.
-  if (auth.status === "authenticated") redirect(AUTH_SUCCESS_PATH);
+  await requirePageAccess("/auth/complete");
   // 브라우저의 검증된 OAuth 흐름을 조회한다.
   const flow = await readOAuthFlow((await searchParams).flow);
   // 교환 대기 상태가 없으면 완료 폼을 표시하지 않는다.

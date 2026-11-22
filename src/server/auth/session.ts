@@ -1,9 +1,9 @@
 import NextAuth, { type NextAuthConfig } from "next-auth";
-import { getToken } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import { headers } from "next/headers";
 import { AUTH_SUCCESS_PATH, SESSION_MAX_AGE } from "@/shared/config/auth";
 import type { AuthSessionUser, AuthUserState } from "./types";
+import { readSessionCookie, secureSessionCookie, sessionCookieName } from "./session-cookie";
 
 /** 쿠키 검증 실패와 저장소/인증 시스템 장애를 구분하는 보호 요청의 결과. */
 export type AuthVerification =
@@ -11,18 +11,15 @@ export type AuthVerification =
   | { status: "unauthenticated" }
   | { status: "error" };
 
-const secure = process.env.NODE_ENV === "production";
-const cookieName = secure ? "__Secure-authjs.session-token" : "authjs.session-token";
-
 const config = {
   providers: [],
-  useSecureCookies: secure,
+  useSecureCookies: secureSessionCookie,
   session: { strategy: "jwt", maxAge: SESSION_MAX_AGE },
   jwt: { maxAge: SESSION_MAX_AGE },
   cookies: {
     sessionToken: {
-      name: cookieName,
-      options: { path: "/", httpOnly: true, sameSite: "lax", secure },
+      name: sessionCookieName,
+      options: { path: "/", httpOnly: true, sameSite: "lax", secure: secureSessionCookie },
     },
   },
   // 인증 오류 객체에는 콜백 입력과 사용자 정보가 포함될 수 있다.
@@ -34,25 +31,13 @@ const auth = NextAuth(config);
 /**
  * 요청의 세션 쿠키에서 서비스 사용자 정보를 읽는다. 쿠키가 없거나 검증되지 않으면
  * null을 반환한다. DB를 조회하거나 응답 쿠키를 변경하지 않는다.
+ * @param requestHeaders 현재 요청 헤더를 직접 제공하는 경우 사용한다.
+ * @returns 검증된 세션 프로필 또는 미인증인 경우 null.
  * @throws 세션 쿠키가 있는데 AUTH_SECRET 설정이 누락된 경우.
  */
 export async function readSession(requestHeaders?: Headers): Promise<AuthSessionUser | null> {
-  const cookie = (requestHeaders ?? await headers()).get("cookie");
-  // 서비스 세션의 입력은 쿠키로 제한하고 Auth.js의 Bearer 대체 경로는 사용하지 않는다.
-  const cookieHeaders = new Headers(cookie ? { cookie } : undefined);
-  const raw = await getToken({ req: { headers: cookieHeaders }, cookieName, raw: true });
-  if (!raw) return null;
-  const secret = process.env.AUTH_SECRET;
-  if (!secret?.trim()) throw new Error("AUTH_SECRET 환경변수가 필요합니다.");
-  const token = await getToken({ req: { headers: cookieHeaders }, cookieName, secret });
-  if (!token || typeof token.exp !== "number" || token.exp <= Date.now() / 1000) return null;
-  const user = token.serviceUser as AuthSessionUser | undefined;
-  if (!user || typeof user.id !== "string" || !user.id || typeof user.email !== "string"
-    || typeof user.nickname !== "string" || (user.image !== null && typeof user.image !== "string")
-    || typeof user.consentRenewal?.required !== "boolean" || typeof user.consentRenewal?.overdue !== "boolean") {
-    return null;
-  }
-  return user;
+  // Proxy와 서버가 동일한 쿠키 판독기를 사용한다.
+  return readSessionCookie(requestHeaders ?? await headers());
 }
 
 /**

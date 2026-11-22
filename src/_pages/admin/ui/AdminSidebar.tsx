@@ -4,6 +4,7 @@ import { PanelLeftIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { isPageBranch } from "@/shared/config/page-access";
 import { Button } from "@/shared/ui/button";
 import {
   Sheet,
@@ -62,7 +63,8 @@ export function AdminSidebar() {
                     </SidebarMenuButton>
                     <SidebarMenuSub>
                       {g2b.sections.map(({ href, label }) => {
-                        const isActive = pathname === href || pathname.startsWith(`${href}/`);
+                        // 접근 정책과 같은 경로 경계로 업무 상세의 활성 메뉴를 판단한다.
+                        const isActive = isPageBranch(pathname, href);
                         return (
                           <SidebarMenuSubItem key={href}>
                             <SidebarMenuSubButton asChild isActive={isActive}>

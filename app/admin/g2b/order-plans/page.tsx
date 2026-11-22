@@ -1,7 +1,11 @@
+import { withPageAccess } from "@/server/auth/page-guard";
 import { CollectionListPage } from "@/_pages/admin/g2b/ui/CollectionListPage";
 import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 
 /** 발주계획의 수집 현황과 URL 조회 조건이 적용된 목록을 표시한다. */
-export default function Page({ searchParams }: { searchParams: Promise<CollectionSearchParams> }) {
+function Page({ searchParams }: { searchParams: Promise<CollectionSearchParams> }) {
   return <CollectionListPage section="order-plans" searchParams={searchParams} />;
 }
+
+// 업무 화면이 조회를 시작하기 전에 관리자 접근을 검증한다.
+export default withPageAccess("/admin", Page);

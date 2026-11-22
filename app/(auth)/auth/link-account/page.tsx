@@ -2,9 +2,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { LinkAccountForm } from "@/features/service-auth/LinkAccountForm";
 import { authNoticeMessage } from "@/features/service-auth/model";
-import { verifyCurrentUser } from "@/server/auth/current-user";
+import { AuthErrorToast } from "@/features/service-auth/PageActivity";
+import { requirePageAccess } from "@/server/auth/page-guard";
 import { listLinkChoices, readLinkChoice } from "@/server/auth/link-choice";
-import { AUTH_SUCCESS_PATH } from "@/shared/config/auth";
 
 /**
  * 최초 OAuth를 검증한 브라우저에만 동일 이메일 후보 선택과 별도 가입을 제공한다.
@@ -16,9 +16,7 @@ export default async function LinkAccountPage({ searchParams }: {
   searchParams: Promise<{ flow?: string | string[]; notice?: string | string[] }>;
 }) {
   // 레이아웃의 실행 순서와 무관하게 사용자 상태를 확인한 뒤 후보 정보를 조회한다.
-  const auth = await verifyCurrentUser();
-  if (auth.status === "authenticated") redirect(AUTH_SUCCESS_PATH);
-  if (auth.status === "error") return <p role="alert">{authNoticeMessage("unavailable")}</p>;
+  await requirePageAccess("/auth/link-account");
   const params = await searchParams;
   const flow = await readLinkChoice(params.flow);
   if (!flow) redirect("/signup?notice=failed");
@@ -39,6 +37,6 @@ export default async function LinkAccountPage({ searchParams }: {
   } catch (error) {
     // 이메일과 후보 ID 등 개인정보 없이 저장소 오류의 유형만 기록한다.
     console.error("[OAuth 연결 후보 조회]", error instanceof Error ? error.name : "UnknownError");
-    return <p role="alert">{authNoticeMessage("unavailable")}</p>;
+    return <><AuthErrorToast /><p role="alert">{authNoticeMessage("unavailable")}</p></>;
   }
 }
