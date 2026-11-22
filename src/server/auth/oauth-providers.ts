@@ -14,8 +14,14 @@ export type OAuthVerification = {
 type OAuthAdapter = {
   /** 서비스가 생성한 state로 인가 URL과 확인 자료를 준비한다. */
   start: (state: string) => Promise<OAuthVerification & { url: string }>;
-  /** 일회성 코드를 검증·교환해 서비스 공통 프로필을 반환한다. */
-  complete: (code: string, flow: OAuthVerification & { state: string }) => Promise<OAuthIdentity>;
+  /**
+   * 공급자 정책에 따라 콜백을 검증하고 일회성 코드를 교환한다.
+   * @param code 콜백에서 받은 일회성 인가 코드.
+   * @param flow 최초 요청의 state와 교환 검증값, 콜백이 제공한 경우의 발급자 원본.
+   * @returns 검증된 서비스 공통 프로필.
+   * @throws 콜백 발급자 검증이나 코드 교환 등 공급자 처리가 실패한 경우.
+   */
+  complete: (code: string, flow: OAuthVerification & { state: string; responseIssuer?: string }) => Promise<OAuthIdentity>;
 };
 
 /** 공급자별 구현은 서버 레지스트리에서만 연결한다. */

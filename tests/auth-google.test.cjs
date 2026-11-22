@@ -60,9 +60,10 @@ test("Google OIDC 교환은 콜백 주소, PKCE, nonce 및 ID 토큰 서명을 �
     // 요청 경로를 기준으로 필요한 공급자 응답을 선택한다.
     switch (new URL(url).pathname) {
       case "/.well-known/openid-configuration":
-        // 지정된 발급자 및 인가·토큰·키 엔드포인트를 검색 결과로 반환한다.
+        // Google과 같은 발급자 응답 요구 조건과 인가·토큰·키 주소를 제공한다.
         return Response.json({
-          issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token",
+          issuer, authorization_response_iss_parameter_supported: true,
+          authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token",
           jwks_uri: issuer + "/certs",
         });
       // 토큰 요청은 브라우저의 일회성 인가 코드를 교환하는 경로다.
@@ -96,8 +97,8 @@ test("Google OIDC 교환은 콜백 주소, PKCE, nonce 및 ID 토큰 서명을 �
       default: throw new Error("unexpected OIDC endpoint");
     }
   });
-  // 리다이렉트 URL과 초기 요청 검증값을 생성한다.
-  flow = await startGoogleOAuth();
+  // 리다이렉트 URL과 초기 요청 검증값을 생성하고 Google 콜백의 발급자 값을 붙인다.
+  flow = { ...await startGoogleOAuth(), responseIssuer: issuer };
   // 구성한 인가 URL의 쿼리를 비교할 수 있게 분리한다.
   const url = new URL(flow.url);
   // Google 인가 요청에 등록한 콜백이 포함되는지 확인한다.
@@ -112,6 +113,10 @@ test("Google OIDC 교환은 콜백 주소, PKCE, nonce 및 ID 토큰 서명을 �
   assert.notEqual(url.searchParams.get("code_challenge"), flow.verifier);
   // 정상 응답을 검증하도록 최초 요청의 nonce를 사용한다.
   nonce = flow.nonce;
+  // 발급자가 필수인 공급자에서 값이 누락되면 코드 교환 전에 거절해야 한다.
+  await assert.rejects(completeGoogleOAuth("one-time-code", { ...flow, responseIssuer: undefined }), /issuer.*missing/);
+  // 다른 공급자를 사칭한 콜백은 실제 코드 교환 전에 거절한다.
+  await assert.rejects(completeGoogleOAuth("one-time-code", { ...flow, responseIssuer: "https://other.example" }), /issuer.*value/);
   // 정상 서명 응답에서 계정 키와 프로필만 반환하는지 확인한다.
   assert.deepEqual(await completeGoogleOAuth("one-time-code", flow), {
     provider: "google", providerUserId: "google-user", email: "test@example.com", nickname: "Test", image: null,

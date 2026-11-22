@@ -28,8 +28,8 @@ export type OAuthFlow = FlowContext & (
   | { stage: "draft" }
   // 콜백 대기에서는 요청을 공급자 응답과 대조할 확인 자료를 보관한다.
   | ({ stage: "pending" } & OAuthVerification)
-  // 교환 대기에는 검증된 콜백에서 받은 일회성 코드를 추가한다.
-  | ({ stage: "ready"; code: string } & OAuthVerification)
+  // 교환 대기에는 콜백의 일회성 코드와 공급자가 보낸 경우의 발급자 원본을 보관한다.
+  | ({ stage: "ready"; code: string; responseIssuer?: string } & OAuthVerification)
   // 동일 이메일 후보를 선택하는 동안 최초 검증 결과를 서버 전용 쿠키에 보관한다.
   | { stage: "link-choice"; identity: OAuthIdentity & { email: string } }
 );
@@ -124,9 +124,9 @@ export async function decodeOAuthFlow(token: string | undefined, secret: string,
         || !isRecord(link) || !isOAuthFlowId(link.parent) || link.parent === state
         || typeof link.targetId !== "string" || !link.targetId || link.targetId.length > 128) return undefined;
     }
-    // 초안과 후보 선택 단계는 기존 인가 코드 및 공급자 확인 값을 보관하지 않는다.
+    // 초안과 후보 선택에는 이전 인가 코드, 발급자, 요청 검증값이 남아 있으면 안 된다.
     if (flow.stage === "draft" || flow.stage === "link-choice") {
-      if ("nonce" in flow || "verifier" in flow || "code" in flow) return undefined;
+      if ("nonce" in flow || "verifier" in flow || "code" in flow || "responseIssuer" in flow) return undefined;
       if (flow.stage === "draft") return "identity" in flow ? undefined : flow as OAuthFlow;
       return flow.purpose === "signup" && isLinkIdentity(flow.identity, flow.provider) ? flow as OAuthFlow : undefined;
     }
@@ -134,15 +134,26 @@ export async function decodeOAuthFlow(token: string | undefined, secret: string,
     if ("identity" in flow) return undefined;
     // 대기 상태에서만 최초 토큰과 코드 교환을 검증할 난수를 사용한다.
     if (!isOAuthFlowId(flow.nonce) || !isOAuthFlowId(flow.verifier)) return undefined;
-    // 최초 콜백 전에는 아직 코드가 없어야 한다.
-    if (flow.stage === "pending" && !("code" in flow)) return flow as OAuthFlow;
-    // 교환 대기 상태에서는 비어 있지 않은 제한 길이의 코드만 인정한다.
-    if (flow.stage === "ready" && typeof flow.code === "string" && flow.code.length > 0 && flow.code.length <= 1000) {
+    // 최초 콜백 전에는 응답에서 생기는 인가 코드와 발급자 값이 없어야 한다.
+    if (flow.stage === "pending" && !("code" in flow) && !("responseIssuer" in flow)) return flow as OAuthFlow;
+    // 교환 대기에서는 코드 길이를 확인하고, 발급자가 있으면 문자열 형식도 검증한다.
+    if (flow.stage === "ready" && typeof flow.code === "string" && flow.code.length > 0 && flow.code.length <= 1000
+      && (!("responseIssuer" in flow) || isResponseIssuer(flow.responseIssuer))) {
       return flow as OAuthFlow;
     }
   } catch {
     // 암호 검증이 실패한 경우 대기 중인 요청으로 인정하지 않는다.
   }
+}
+
+/**
+ * 공급자 응답의 발급자 값을 쿠키에 보관할 수 있는지 확인한다.
+ * @param value 콜백에서 읽은 발급자 값.
+ * @returns 비어 있지 않은 512자 이하 문자열이면 true. 발급자 일치 여부는 공급자 어댑터가 별도로 확인한다.
+ */
+function isResponseIssuer(value: unknown): value is string {
+  // 빈 값이나 과도하게 긴 입력은 암호화 쿠키에 보관하지 않는다.
+  return typeof value === "string" && value.length > 0 && value.length <= 512;
 }
 
 /**
@@ -171,7 +182,7 @@ export function toOAuthDraft({ provider, purpose, consent, state, expiresAt }: O
  * 콜백을 최초 요청과 대조하고 브라우저가 이동할 내부 경로를 결정한다.
  * @param flow 콜백 state로 조회한 단기 쿠키 상태.
  * @param provider 콜백 경로의 공급자 식별자.
- * @param params 공급자가 보내는 state, 인가 코드 또는 인증 오류.
+ * @param params 공급자가 보내는 state, 인가 코드, 선택적 발급자 또는 인증 오류.
  * @returns 응답의 이동 경로와 쿠키 변경이 필요한 경우의 새 상태.
  */
 export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: string, params: URLSearchParams): {
@@ -192,9 +203,13 @@ export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: stri
   const completion = `/auth/complete?flow=${flow.state}`;
   if (flow.stage === "ready") return { location: completion };
 
-  // 유효한 일회성 코드가 없는 경우 해당 탭의 동의만 남긴다.
+  // 인가 코드가 한 번만 전달됐는지 검사할 수 있도록 전체 값을 읽는다.
   const codes = params.getAll("code");
-  if (params.has("error") || codes.length !== 1 || !codes[0] || codes[0].length > 1000) {
+  // 최종 검증에 사용할 콜백 발급자를 읽는다. 공급자에 따라 이 값이 없을 수 있다.
+  const issuers = params.getAll("iss");
+  // 공급자 오류나 잘못된 코드·발급자 입력에서는 교환을 중단하고 해당 탭의 동의만 보존한다.
+  if (params.has("error") || codes.length !== 1 || !codes[0] || codes[0].length > 1000
+    || issuers.length > 1 || (issuers.length === 1 && !isResponseIssuer(issuers[0]))) {
     // 공급자 응답의 원문 대신 공개용 취소 또는 실패 코드만 전달한다.
     const notice = params.get("error") === "access_denied" ? "cancelled" : "failed";
     return {
@@ -202,6 +217,9 @@ export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: stri
       flow: toOAuthDraft(flow),
     };
   }
-  // 완료 액션에서 해당 요청의 코드만 서버에서 교환하도록 대기 상태로 변경한다.
-  return { location: completion, flow: { ...flow, stage: "ready", code: codes[0] } };
+  // 완료 액션이 해당 요청의 코드를 교환하고 발급자를 대조할 수 있도록 원본을 보존한다.
+  return {
+    location: completion,
+    flow: { ...flow, stage: "ready", code: codes[0], ...(issuers.length ? { responseIssuer: issuers[0] } : {}) },
+  };
 }

@@ -71,8 +71,11 @@ async function finishSession(result: EnrollmentResult, state: string): Promise<n
  * @throws 공급자 교환 또는 식별자 확인에 실패한 경우.
  */
 async function exchangeOAuth(flow: Extract<OAuthFlow, { stage: "ready" }>): Promise<OAuthIdentity> {
+  // 콜백의 발급자 값을 포함한 교환 대기 상태를 같은 공급자에 전달하고 검증된 프로필을 받는다.
   const identity = await oauthAdapters[flow.provider].complete(flow.code, flow);
+  // 프로필을 반환한 공급자가 최초 요청과 다르면 계정 연결에 사용하지 않는다.
   if (identity.provider !== flow.provider) throw new Error("OAuth 공급자가 일치하지 않습니다.");
+  // 검증된 프로필을 호출자에게 넘겨 기존 계정 조회나 가입을 진행할 수 있게 한다.
   return identity;
 }
 

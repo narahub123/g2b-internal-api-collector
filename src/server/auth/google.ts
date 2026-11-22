@@ -69,21 +69,25 @@ export async function startGoogleOAuth(state = oauth.generateRandomState()) {
 }
 
 /**
- * 콜백 코드를 PKCE로 교환하고 ID 토큰의 발급자, 대상, 기간, nonce와 서명을 검증한다.
+ * 콜백의 발급자와 state를 검증한 뒤 코드를 PKCE로 교환한다. 이어 ID 토큰의 발급자, 대상, 기간, nonce와 서명을 확인한다.
  * Google 토큰은 저장하지 않고 식별자와 Google이 검증한 이메일만 사용자 등록 자료로 반환한다.
  * @throws 콜백 위조, 코드 재사용, 토큰 검증 실패 또는 공급자 요청 실패 시.
  * @param code state를 확인한 콜백의 일회성 인가 코드.
- * @param flow 최초 요청의 state, nonce와 PKCE 원본.
+ * @param flow 최초 요청의 state, nonce, PKCE 원본과 콜백이 전달한 발급자.
  * @returns 계정 확인용 OAuth 식별자와 신규 등록에 사용할 검증 프로필.
  */
 export async function completeGoogleOAuth(
-  code: string, flow: { state: string; nonce: string; verifier: string },
+  code: string, flow: { state: string; nonce: string; verifier: string; responseIssuer?: string },
 ): Promise<OAuthIdentity> {
   // 코드 교환에 사용할 Google 설정을 확인한다.
   const { server, client, clientSecret } = await configuration();
-  // 검증된 콜백 코드를 라이브러리가 처리할 인가 응답으로 구성한다.
+  // 라이브러리에서 검증할 인가 응답을 콜백의 코드와 최초 요청의 state로 구성한다.
+  const callback = new URLSearchParams({ code, state: flow.state });
+  // Google이 보낸 발급자 값만 전달한다. 값이 누락되면 보충하지 않고 검증 단계에서 거절하게 한다.
+  if (flow.responseIssuer) callback.set("iss", flow.responseIssuer);
+  // 콜백 발급자를 Google 검색 문서와 대조하고, 일치한 응답만 토큰 교환에 사용한다.
   const parameters = oauth.validateAuthResponse(server, client,
-    new URLSearchParams({ code, state: flow.state }), flow.state);
+    callback, flow.state);
   // 등록 콜백 주소, 클라이언트 자격과 PKCE 원본으로 코드를 교환한다.
   const response = await oauth.authorizationCodeGrantRequest(
     server, client, oauth.ClientSecretPost(clientSecret), parameters,

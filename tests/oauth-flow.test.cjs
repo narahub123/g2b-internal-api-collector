@@ -53,6 +53,15 @@ test("추가 인증 콜백은 검증된 대상과 별도 흐름 키를 유지한
   assert.equal(callback({ error: "access_denied" }).location, "/auth/link-account?flow=" + first + "&notice=cancelled");
   assert.equal(callback({ error: "server_error" }).location, "/auth/link-account?flow=" + first + "&notice=failed");
   assert.deepEqual(callback({ code: "proof-code" }).flow.linkAttempt, child.linkAttempt);
+  // 발급자가 포함된 콜백을 코드 교환 대기 상태로 전환한다.
+  const withIssuer = callback({ code: "proof-code", iss: "https://accounts.google.com" }).flow;
+  // 상태를 암호화했다가 읽어도 공급자가 보낸 발급자 원본이 유지돼야 한다.
+  assert.equal((await decodeOAuthFlow(await signed(withIssuer), secret, second)).responseIssuer, "https://accounts.google.com");
+  // 정상 발급자에 다른 값을 추가해 발급자가 중복된 콜백을 구성한다.
+  const duplicateIssuer = new URLSearchParams({ state: second, code: "proof-code", iss: "https://accounts.google.com" });
+  duplicateIssuer.append("iss", "https://other.example");
+  // 발급자 중복 시 코드 교환을 막고 재시도용 초안만 반환해야 한다.
+  assert.equal(resolveOAuthCallback(child, "google", duplicateIssuer).flow.stage, "draft");
   assert.equal(callback({ error: "access_denied" }).flow.linkAttempt, undefined);
   assert.equal(resolveOAuthCallback(parent, "google", new URLSearchParams({ state: first, code: "proof-code" })).flow, undefined);
 });
