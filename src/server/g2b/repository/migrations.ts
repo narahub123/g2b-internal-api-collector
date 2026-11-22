@@ -505,6 +505,40 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (18);
       `);
     }
+    const authUsers = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 19");
+    if (!authUsers.rows.length) {
+      // OAuth 계정의 고유성과 내부 사용자 권한을 분리하고, 동의 이력은 항목별로 보존한다.
+      await transaction.executeMultiple(`
+        CREATE TABLE auth_users (
+          id TEXT PRIMARY KEY NOT NULL,
+          email TEXT NOT NULL CHECK (length(trim(email)) > 0),
+          nickname TEXT NOT NULL CHECK (length(trim(nickname)) > 0),
+          image TEXT,
+          role TEXT NOT NULL DEFAULT 'USER' CHECK (role IN ('USER', 'ADMIN'))
+        );
+        CREATE INDEX auth_users_email ON auth_users (email COLLATE NOCASE, id);
+        CREATE TABLE auth_oauth_accounts (
+          provider TEXT NOT NULL,
+          provider_user_id TEXT NOT NULL,
+          user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+          PRIMARY KEY (provider, provider_user_id)
+        );
+        CREATE INDEX auth_oauth_accounts_user ON auth_oauth_accounts (user_id);
+        CREATE TABLE auth_consent_records (
+          id INTEGER PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+          item_id TEXT NOT NULL,
+          version TEXT NOT NULL,
+          agreed INTEGER NOT NULL CHECK (agreed IN (0, 1)),
+          agreed_at INTEGER,
+          created_at INTEGER NOT NULL,
+          CHECK ((agreed = 1 AND agreed_at IS NOT NULL) OR (agreed = 0 AND agreed_at IS NULL))
+        );
+        CREATE INDEX auth_consent_latest
+          ON auth_consent_records (user_id, item_id, created_at DESC, id DESC);
+        INSERT INTO g2b_schema_migrations (version) VALUES (19);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();
