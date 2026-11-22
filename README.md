@@ -30,6 +30,12 @@
 
 Node.js 24 이상과 npm으로 실행합니다. Turso Cloud의 SQLite(libSQL) DB를 생성하고 DB URL과 읽기·쓰기 토큰을 `.env.local`의 `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`에 설정합니다. 최초 실행 전에 `npm run db:migrate`를 실행합니다. Next.js 서버에서 `selectItemAnncMngV.do`를 HTTP POST로 호출해 물품 공고 상세를 수집합니다.
 
+### Google 회원가입·로그인 개발 검증
+
+검증용 DB에 마이그레이션 19를 적용하고 `.env.local`에 `AUTH_SECRET`, `AUTH_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`을 설정합니다. `AUTH_URL`은 브라우저에서 여는 서비스 origin입니다. Google Cloud의 웹 애플리케이션 OAuth 클라이언트에 `AUTH_URL`과 `/auth/google/callback`을 결합한 콜백 URL을 등록합니다. 로컬 예시는 `http://127.0.0.1:3000/auth/google/callback`입니다.
+
+`/signup`의 초기 동의 문구는 개발 검증용입니다. 공개 가입을 열기 전에 정식 문서와 버전을 연결합니다.
+
 ### 첨부 처리 워커
 
 1. 웹과 공고 워커를 새 버전으로 전환하기 전에 같은 DB에 `npm run db:migrate`를 적용합니다.

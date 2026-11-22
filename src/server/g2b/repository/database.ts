@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Client, InValue, Transaction, Value } from "@libsql/client";
+import type { Client, InStatement, InValue, Transaction, Value } from "@libsql/client";
 
 export type SQLInputValue = InValue;
 
@@ -38,20 +38,55 @@ export class G2bDatabase {
     return result;
   }
 
-  /** 바인딩된 쿼리를 실행한다. 워커의 쓰기는 실행권을 검사한 트랜잭션에서 처리한다. */
+  /**
+   * 이미 열린 트랜잭션 안에서는 같은 연결에서 실행하고, 파일 DB의 독립 쿼리는 순서대로 처리한다.
+   * @throws 연결 또는 SQL 실행에 실패하면 저장소 오류를 전달한다.
+   * @param statement SQL과 바인딩할 값을 담은 libSQL 실행 입력.
+   * @returns 쿼리 결과 행 또는 처리한 변경 내역.
+   */
+  execute(statement: InStatement) {
+    // 현재 비동기 작업이 열어 둔 트랜잭션을 조회한다.
+    const transaction = this.scope.getStore();
+    // 트랜잭션이 있으면 같은 연결을 사용하고 독립 실행은 파일 DB 직렬화에 맡긴다.
+    return transaction
+      ? transaction.execute(statement)
+      : this.schedule(() => this.client.execute(statement));
+  }
+
+  /**
+   * 바인딩된 쿼리를 실행한다. 워커의 쓰기는 실행권을 검사한 트랜잭션에서 처리한다.
+   * @param sql 인자를 바인딩해 실행할 SQL 문장.
+   * @returns 첫 행 조회, 전체 행 조회, 실행 결과를 제공하는 함수 모음.
+   */
   prepare(sql: string) {
-    const execute = (args: InValue[]) => {
-      const transaction = this.scope.getStore();
-      return transaction
-        ? transaction.execute({ sql, args })
-        : this.schedule(() => this.client.execute({ sql, args }));
-    };
+    /**
+     * 준비된 SQL에 인자를 묶어 공통 실행기로 전달한다.
+     * @param args SQL 자리표시자의 순서에 맞춘 값.
+     * @returns 실행한 SQL의 결과 또는 실행 실패를 나타내는 거부된 Promise.
+     */
+    const execute = (args: InValue[]) => this.execute({ sql, args });
+    // 동일 SQL의 실행 결과를 호출자가 필요한 형태로 읽을 수 있게 한다.
     return {
-      /** 조회 결과의 첫 행을 반환하며 일치하는 행이 없으면 undefined를 반환한다. */
+      /**
+       * 조회 결과의 첫 행을 반환하며 일치하는 행이 없으면 undefined를 반환한다.
+       * @param args SQL 자리표시자에 바인딩할 값.
+       * @returns 조회 첫 행 또는 행이 없으면 undefined.
+       * @throws 연결 또는 SQL 실행에 실패한 경우.
+       */
       get: async (...args: InValue[]): Promise<Record<string, Value> | undefined> => (await execute(args)).rows[0],
-      /** 바인딩 조건에 맞는 모든 조회 행을 반환한다. */
+      /**
+       * 바인딩 조건에 맞는 모든 조회 행을 반환한다.
+       * @param args SQL 자리표시자에 바인딩할 값.
+       * @returns 바인딩 조건에 따라 조회한 전체 행.
+       * @throws 연결 또는 SQL 실행에 실패한 경우.
+       */
       all: async (...args: InValue[]): Promise<Record<string, Value>[]> => (await execute(args)).rows,
-      /** 변경 결과와 새 행 ID를 반환한다. 실행권이 만료된 워커의 쓰기는 거부한다. */
+      /**
+       * 변경 결과와 새 행 ID를 반환한다. 실행권이 만료된 워커의 쓰기는 거부한다.
+       * @param args SQL 자리표시자에 바인딩할 값.
+       * @returns SQL 변경 결과와 새 행 ID를 포함한 실행 결과.
+       * @throws SQL 실행 또는 워커의 실행권 확인에 실패한 경우.
+       */
       run: (...args: InValue[]) => this.scope.getStore() || !workerToken.getStore()
         ? execute(args)
         : this.transaction(() => execute(args)),
