@@ -5,6 +5,7 @@ import { useFormStatus } from "react-dom";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import type { ConsentPolicy } from "@/shared/config/auth";
+import { OAUTH_PROVIDERS } from "@/shared/config/oauth-providers";
 import { beginOAuth } from "./actions";
 
 // 체크 UI에 필요한 항목 ID, 문서 버전과 내용, 필수 속성만 폼에 전달한다.
@@ -16,18 +17,22 @@ type Purpose = "login" | "signup";
  * 가입과 로그인에서 같은 공급자 버튼을 사용하며 제출 중 재요청을 막는다.
  * @param props 버튼의 목적, 제공자 표시와 비활성 조건.
  * @param props.purpose 가입과 로그인 중 버튼 문구를 정하는 목적.
- * @param props.provider 버튼에 표시할 OAuth 제공자 명칭.
+ * @param props.provider 서버에 전달할 OAuth 공급자 ID와 화면 이름.
  * @param props.disabled 필수 동의 누락 등으로 버튼을 비활성화할지 여부.
  * @returns 상태에 맞는 안내와 비활성 조건을 포함한 OAuth 버튼.
  */
-function OAuthButton({ purpose, provider, disabled }: { purpose: Purpose; provider: string; disabled: boolean }) {
+function OAuthButton({ purpose, provider, disabled }: {
+  purpose: Purpose;
+  provider: (typeof OAUTH_PROVIDERS)[number];
+  disabled: boolean;
+}) {
   // 상위 폼의 서버 액션 제출 상태를 읽는다.
   const { pending } = useFormStatus();
   // 동의가 충족되지 않거나 공급자로 이동 중일 때 추가 제출을 막는다.
   return (
-    <Button type="submit" disabled={disabled || pending} className="w-full">
+    <Button type="submit" name="provider" value={provider.id} disabled={disabled || pending} className="w-full">
       {/* 제출 중에는 진행 안내를 표시하고 평소에는 제공자와 인증 목적을 표시한다. */}
-      {pending ? "Google 인증 화면으로 이동 중…" : `${provider}로 ${purpose === "signup" ? "가입" : "로그인"}`}
+      {pending ? "인증 화면으로 이동 중…" : `${provider.label}로 ${purpose === "signup" ? "가입" : "로그인"}`}
     </Button>
   );
 }
@@ -152,7 +157,10 @@ export function AuthForm({ purpose, items = [], initialChecked = [], allConsents
         </fieldset>
       )}
       {/* 미체크 필수 항목이 남아 있으면 공급자 버튼을 비활성화한다. */}
-      <OAuthButton purpose={purpose} provider="Google" disabled={items.some(({ id, required }) => required && !checked.has(id))} />
+      {OAUTH_PROVIDERS.map((provider) => (
+        <OAuthButton key={provider.id} purpose={purpose} provider={provider}
+          disabled={items.some(({ id, required }) => required && !checked.has(id))} />
+      ))}
     </form>
   );
 }

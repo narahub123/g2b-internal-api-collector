@@ -18,9 +18,10 @@ function CompletionButton() {
 
 /**
  * 콜백을 한 번 제출하고 자동 제출 전에도 키보드로 완료할 수 있게 한다.
+ * @param props.state 이 폼이 완료할 OAuth 요청 식별자.
  * @returns 자동 시작과 수동 제출을 공유하는 완료 폼.
  */
-export function OAuthCompletion() {
+export function OAuthCompletion({ state }: { state: string }) {
   // 완료 액션을 자동으로 제출할 폼 요소를 참조한다.
   const form = useRef<HTMLFormElement>(null);
   // 자동 또는 수동으로 해당 폼을 제출했는지 렌더링 간에 기억한다.
@@ -47,6 +48,8 @@ export function OAuthCompletion() {
       // 첫 요청 이후 들어오는 제출을 막도록 상태를 기록한다.
       submitted.current = true;
     }}>
+      {/* 같은 브라우저에서 시작한 다른 탭의 인증과 구분한다. */}
+      <input type="hidden" name="flow" value={state} />
       {/* 자동 제출 전에도 사용자가 직접 완료 요청을 보낼 수 있게 한다. */}
       <CompletionButton />
     </form>

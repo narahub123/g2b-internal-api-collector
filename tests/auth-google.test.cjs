@@ -47,6 +47,8 @@ test("Google OIDC 교환은 콜백 주소, PKCE, nonce 및 ID 토큰 서명을 �
   let nonce;
   // 토큰 클레임은 유지한 채 검증할 서명만 깨뜨리는 조건.
   let wrongSignature = false;
+  // Google이 한 번 교환한 인가 코드를 다시 받지 않는 동작을 모의한다.
+  const redeemedCodes = new Set();
   /**
    * 실제 네트워크 접근 없이 메타데이터, 토큰, 공개 키 응답을 모의한다.
    * @param url 공급자 요청 주소.
@@ -72,7 +74,10 @@ test("Google OIDC 교환은 콜백 주소, PKCE, nonce 및 ID 토큰 서명을 �
         // 토큰 교환에서 최초 요청과 동일한 콜백을 사용해야 한다.
         assert.equal(body.get("redirect_uri"), callback);
         // 검증한 인가 코드만 교환 요청의 입력으로 보내야 한다.
-        assert.equal(body.get("code"), "one-time-code");
+        const code = body.get("code");
+        assert.ok(["one-time-code", "wrong-nonce", "wrong-signature", "replay-code"].includes(code));
+        if (redeemedCodes.has(code)) return Response.json({ error: "invalid_grant" }, { status: 400 });
+        redeemedCodes.add(code);
         // 유효기간 검증을 통과할 기준 시각을 초 단위로 계산한다.
         const now = Math.floor(Date.now() / 1000);
         // 실제 검증에 필요한 클레임과 테스트용 프로필로 JWT 서명 입력을 구성한다.
@@ -114,11 +119,18 @@ test("Google OIDC 교환은 콜백 주소, PKCE, nonce 및 ID 토큰 서명을 �
   // 같은 요청을 가장하는 응답에 잘못된 nonce를 설정한다.
   nonce = "incorrect";
   // 서명이 유효해도 최초 요청과 관계없는 토큰은 거절해야 한다.
-  await assert.rejects(completeGoogleOAuth("one-time-code", flow), /nonce/);
+  await assert.rejects(completeGoogleOAuth("wrong-nonce", flow), /nonce/);
   // 서명만 검증하기 위해 nonce를 원래 값으로 되돌린다.
   nonce = flow.nonce;
   // 내용이 정상이어도 서명이 무효한 응답을 준비한다.
   wrongSignature = true;
   // 서명이 유효하지 않으면 사용자 프로필을 반환하지 않아야 한다.
-  await assert.rejects(completeGoogleOAuth("one-time-code", flow), /signature/);
+  await assert.rejects(completeGoogleOAuth("wrong-signature", flow), /signature/);
+  // 동일한 콜백을 두 탭에서 동시에 완료해도 한 요청만 검증된 프로필을 얻는다.
+  wrongSignature = false;
+  const replay = await Promise.allSettled([
+    completeGoogleOAuth("replay-code", flow),
+    completeGoogleOAuth("replay-code", flow),
+  ]);
+  assert.deepEqual(replay.map(({ status }) => status).sort(), ["fulfilled", "rejected"]);
 });

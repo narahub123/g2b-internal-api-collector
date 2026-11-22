@@ -8,13 +8,16 @@ import { CONSENT_POLICIES, SIGNUP_ALL_CONSENTS_ENABLED } from "@/shared/config/a
 /**
  * 현재 정책으로 가입 동의 화면을 만들며 OAuth 재시도에서도 같은 버전의 선택을 복원한다.
  * @param props 회원가입 페이지에 전달되는 요청 속성.
- * @param props.searchParams OAuth 복귀 안내 코드를 담은 쿼리.
+ * @param props.searchParams OAuth 복귀 안내 코드와 동의를 복원할 흐름 키를 담은 쿼리.
  * @returns 현재 법적 동의 정책과 복원된 체크 상태를 포함한 가입 화면.
  * @throws OAuth 쿠키를 읽는 데 필요한 서버 설정에 문제가 있는 경우.
  */
-export default async function SignupPage({ searchParams }: { searchParams: Promise<{ notice?: string | string[] }> }) {
-  // OAuth 복귀 코드와 기존 동의 선택을 함께 읽는다.
-  const [params, flow] = await Promise.all([searchParams, readOAuthFlow()]);
+export default async function SignupPage({ searchParams }: {
+  searchParams: Promise<{ notice?: string | string[]; flow?: string | string[] }>;
+}) {
+  // 돌아온 탭을 쿼리로 식별해 해당 OAuth 요청의 동의 선택을 복원한다.
+  const params = await searchParams;
+  const flow = await readOAuthFlow(params.flow);
   // 알려진 복귀 코드만 사용자 안내로 변환한다.
   const notice = authNoticeMessage(params.notice);
   // 현재 시행 중인 항목만 표시하고 제출을 요구한다.

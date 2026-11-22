@@ -43,15 +43,14 @@ export function authOrigin(): string {
 }
 
 /**
- * 일회성 state, nonce, PKCE를 생성하고 Google 리다이렉트 주소를 구성한다.
+ * 최초 요청의 state와 새 nonce·PKCE 검증값으로 Google 리다이렉트 주소를 구성한다.
+ * @param state 공통 흐름의 식별자. 독립적으로 호출하면 새 state를 생성한다.
  * @throws 공급자 설정 조회 또는 인증 요청 생성이 실패한 경우.
  * @returns Google 인가 URL과 쿠키에 보관할 일회성 검증값.
  */
-export async function startGoogleOAuth() {
+export async function startGoogleOAuth(state = oauth.generateRandomState()) {
   // 검증된 인가 주소와 클라이언트 ID를 가져온다.
   const { server, client } = await configuration();
-  // 브라우저의 시작 요청과 콜백을 연결할 state를 만든다.
-  const state = oauth.generateRandomState();
   // ID 토큰을 시작 요청에 연결할 nonce를 만든다.
   const nonce = oauth.generateRandomNonce();
   // 인가 코드 교환에서 제시할 PKCE 원본을 만든다.
