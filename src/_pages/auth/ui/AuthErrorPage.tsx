@@ -8,9 +8,9 @@ import { AuthErrorToast } from "@/features/service-auth/PageActivity";
 export default function AuthErrorPage() {
   return (
     <main className="mx-auto grid min-h-svh max-w-lg content-center gap-4 px-6">
-      <h1 className="text-xl font-semibold">인증 서비스를 확인할 수 없습니다</h1>
+      <h1 className="text-xl font-semibold text-destructive">인증 서비스를 확인할 수 없습니다</h1>
       <AuthErrorToast />
-      <Link href="/" className="text-sm underline">홈으로 이동</Link>
+      <Link href="/" className="text-sm underline flex justify-end">홈으로 이동</Link>
     </main>
   );
 }
