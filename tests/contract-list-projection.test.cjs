@@ -31,7 +31,15 @@ test("계약현황 목록의 복합 키, 최신 이력, 집계와 선택지를 �
     assert.deepEqual((await client.execute(countSql)).rows, [{ total: 3, collected: 1 }]);
     assert.deepEqual((await list.page(query)).rows.map(({ number, openingRevision, id }) => [number, openingRevision, id]),
       [["A", "", 2], ["A", "001", 3], ["B", "", 4]]);
-    assert.deepEqual(await list.businesses(), [{ value: "01", label: "물품" }]);
+    // 실제 저장소에서 업무구분 선택지를 읽는다.
+    const businessOptions = await list.businesses();
+    // 화면에 표시할 값과 순서를 검증한다.
+    assert.deepEqual(businessOptions, [{ value: "01", label: "물품" }]);
+    // 각 선택지가 React에 전달할 속성만 갖는지 확인한다.
+    for (const option of businessOptions) {
+      // libSQL의 숫자 인덱스와 길이 속성이 남아 있으면 실패한다.
+      assert.deepEqual(Object.getOwnPropertyNames(option).sort(), ["label", "value"]);
+    }
     assert.equal((await list.page({ ...query, search: { field: "number", query: "REQ-1" } })).counts.total, 1);
 
     // 기본 상태별 페이지가 공통 건수 한 행과 계약일자 인덱스를 사용하는지 확인한다.
