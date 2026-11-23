@@ -9,7 +9,9 @@ import { requirePageAccess } from "@/server/auth/page-guard";
  * @returns 코드 교환을 요청하는 완료 화면.
  * @throws 이미 로그인했거나 완료 상태가 없으면 Next.js 이동 신호를 보낸다. 쿠키 설정 장애는 호출자에게 전달한다.
  */
-export default async function OAuthCompletePage({ searchParams }: {
+export default async function OAuthCompletePage({
+  searchParams,
+}: {
   searchParams: Promise<{ flow?: string | string[] }>;
 }) {
   // 직접 주소 접근에서도 현재 로그인 상태를 확인한다.
@@ -22,9 +24,11 @@ export default async function OAuthCompletePage({ searchParams }: {
   return (
     <>
       {/* 공급자 인증에서 서비스 처리로 넘어왔음을 알린다. */}
-      <h1 className="text-2xl font-semibold">인증 완료</h1>
       {/* 검증된 단기 쿠키를 사용해 가입 또는 로그인을 완료한다. */}
-      <OAuthCompletion state={flow.state} />
+      <div className="flex min-h-[calc(100dvh-116px)] items-center justify-center">
+        {/* gif 이미지를 추가해서 시작적인 재미를 줄 수 있을지도 */}
+        <OAuthCompletion state={flow.state} />
+      </div>
     </>
   );
 }
