@@ -37,11 +37,11 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
   const condition = criteria.length ? criteria.join(" AND ") : "TRUE";
   const status = query.status === "collected" ? "collected_at IS NOT NULL"
     : query.status === "uncollected" ? "collected_at IS NULL" : "TRUE";
-  // 기본 목록은 원본 변경과 함께 갱신된 집계 한 행을 사용한다.
+  // 기본 목록은 업무와 노출 범위로 공통 집계 한 행을 읽고, 검색·필터는 일치하는 목록 행을 센다.
+  const scope = excludeMockNotices ? "exclude_mock" : "all";
   const totals = where.length
     ? `SELECT COUNT(*) AS total, COUNT(collected_at) AS collected FROM g2b_notice_list WHERE ${condition}`
-    : `SELECT ${excludeMockNotices ? "public_total" : "total"} AS total,
-        ${excludeMockNotices ? "public_collected" : "collected"} AS collected FROM g2b_notice_list_counts WHERE id = 1`;
+    : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'notices' AND scope = ?";
   // 선택 상태의 건수로 요청 페이지가 범위를 벗어났는지 계산한다.
   const selected = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
   // 페이지 키를 먼저 확정한 뒤 기본 키로 공고와 최신 수집 시도의 상세 정보를 가져온다.
@@ -65,8 +65,8 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
     LEFT JOIN notices saved ON paged.collected_at IS NOT NULL AND saved.number = paged.number AND saved.revision = paged.revision
     LEFT JOIN g2b_collection_attempts attempt ON attempt.id = paged.latest_id
     ORDER BY paged.sortValue ${direction}, paged.number, paged.revision, paged.opening_revision`;
-  // 검색·필터가 있는 경우 집계와 페이지 양쪽에 동일한 인자를 바인딩한다.
-  const rows = await db.prepare(sql).all(...(where.length ? values : []), ...values, query.page) as
+  // 집계에는 검색·필터의 인자 또는 기본 노출 범위를 전달하고 페이지에는 검색·필터 인자를 전달한다.
+  const rows = await db.prepare(sql).all(...(where.length ? values : [scope]), ...values, query.page) as
     (CollectionListRow & { total: number; collected: number; selectedCount: number })[];
   // 빈 페이지에도 집계가 한 행 남으므로 첫 행에서 페이지 범위를 계산한다.
   const { total, collected, selectedCount } = rows[0];

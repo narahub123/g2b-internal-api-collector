@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client";
+import { collectionListCountsSchema } from "./collection-list-counts-schema";
 import { noticeListSchema } from "./notice-list-schema";
 import { priorSpecUnavailableStatus } from "@/shared/config/g2b-prior-spec";
 import {
@@ -545,6 +546,14 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
     if (!noticeList.rows.length) {
       await transaction.executeMultiple(`${noticeListSchema}
         INSERT INTO g2b_schema_migrations (version) VALUES (20);
+      `);
+    }
+    // 공통 집계 초기화와 호환 뷰 전환을 트리거 교체와 함께 커밋한다.
+    const collectionListCounts = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 21");
+    if (!collectionListCounts.rows.length) {
+      // 현재 목록을 기준으로 초기화한 뒤 완료 버전을 같은 트랜잭션에 기록한다.
+      await transaction.executeMultiple(`${collectionListCountsSchema}
+        INSERT INTO g2b_schema_migrations (version) VALUES (21);
       `);
     }
     await transaction.commit();
