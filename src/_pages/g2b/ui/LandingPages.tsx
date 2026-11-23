@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AccountNavigation } from "@/features/service-auth/AccountNavigation";
+import { ServiceHeader } from "@/features/service-auth/ServiceHeader";
 import { AuthErrorToast, ClearPageHistory, PageActivity } from "@/features/service-auth/PageActivity";
 import type { AuthSessionUser } from "@/server/auth/types";
 import { canAccessPage } from "@/shared/config/page-access";
@@ -40,7 +40,7 @@ export function GuestLanding({ error = false }: { error?: boolean }) {
 type LandingProps = { profile: AuthSessionUser; searchParams: Promise<CollectionSearchParams> };
 
 /**
- * USER에게 계정 메뉴와 기존 나라장터 조회 목록을 표시한다.
+ * 일반 회원에게 공통 헤더와 기존 나라장터 조회 목록을 표시한다.
  * @param props.profile 서버에서 확인한 서비스 세션 프로필.
  * @param props.searchParams 목록의 업무 탭, 검색과 페이지 조건.
  * @returns 일반 회원용 랜딩.
@@ -48,9 +48,8 @@ type LandingProps = { profile: AuthSessionUser; searchParams: Promise<Collection
 export function UserLanding({ profile, searchParams }: LandingProps) {
   return (
     <>
-      <header className="mx-auto max-w-6xl px-4 pt-5 sm:px-6">
-        <AccountNavigation role="USER" profile={profile} />
-      </header>
+      {/* 공통 헤더에 검증된 역할과 계정 프로필을 전달한다. */}
+      <ServiceHeader role="USER" profile={profile} />
       <PageActivity />
       <G2bHomePage searchParams={searchParams} />
     </>
@@ -58,7 +57,7 @@ export function UserLanding({ profile, searchParams }: LandingProps) {
 }
 
 /**
- * ADMIN에게 관리 메뉴와 기존 나라장터 조회 목록을 표시한다.
+ * 관리자에게 공통 헤더와 기존 나라장터 조회 목록을 표시한다.
  * @param props.profile 서버에서 확인한 서비스 세션 프로필.
  * @param props.searchParams 목록의 업무 탭, 검색과 페이지 조건.
  * @returns 관리자용 랜딩.
@@ -66,9 +65,8 @@ export function UserLanding({ profile, searchParams }: LandingProps) {
 export function AdminLanding({ profile, searchParams }: LandingProps) {
   return (
     <>
-      <header className="mx-auto max-w-6xl px-4 pt-5 sm:px-6">
-        <AccountNavigation role="ADMIN" profile={profile} />
-      </header>
+      {/* 공통 헤더에 검증된 역할과 계정 프로필을 전달한다. */}
+      <ServiceHeader role="ADMIN" profile={profile} />
       <PageActivity />
       <G2bHomePage searchParams={searchParams} />
     </>
