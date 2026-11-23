@@ -13,6 +13,12 @@ const availableSections = [
 type AvailableSection = (typeof availableSections)[number];
 const availableSectionKeys = new Set<string>(availableSections);
 
+/** 사용자 영역의 사이드바 메뉴. 새 사용자 페이지는 여기에 추가한다. */
+export const USER_NAVIGATION = [
+  { href: "/", label: "사용자 페이지" },
+  { href: "/mypage", label: "마이페이지" },
+];
+
 export const ADMIN_NAVIGATION = {
   dashboard: { href: ADMIN_HOME_PATH, label: "대시보드" },
   g2b: {
@@ -20,7 +26,9 @@ export const ADMIN_NAVIGATION = {
     label: G2B_LABEL,
     noticeQueue: { href: NOTICE_QUEUE_PATH, label: "공고 수집 큐" },
     sections: (Object.keys(G2B_SECTIONS) as (keyof typeof G2B_SECTIONS)[])
-      .filter((section): section is AvailableSection => availableSectionKeys.has(section))
+      .filter((section): section is AvailableSection =>
+        availableSectionKeys.has(section),
+      )
       .map((section) => ({
         section,
         href: `${ADMIN_G2B_PATH}/${section}`,

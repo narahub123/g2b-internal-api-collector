@@ -3,6 +3,7 @@ import { ServiceHeader } from "@/features/service-auth/ServiceHeader";
 import { PageActivity } from "@/features/service-auth/PageActivity";
 import { requirePageAccess } from "@/server/auth/page-guard";
 import { AUTH_SUCCESS_PATH } from "@/shared/config/auth";
+import { AdminSidebar } from "@/_pages/admin/ui/AdminSidebar";
 
 /**
  * 회원 접근을 확인한 뒤 공통 헤더를 배치하고 각 탐색의 서비스 세션을 갱신한다.
@@ -17,7 +18,7 @@ export default async function ProtectedLayout({ children }: { children: ReactNod
   return (
     <>
       {/* 공통 헤더에 검증된 역할과 계정 프로필을 전달한다. */}
-      <ServiceHeader role={auth.state.role} profile={auth.user} />
+      <ServiceHeader role={auth.state.role} profile={auth.user} navigation={auth.state.role === "ADMIN" ? <AdminSidebar /> : undefined} />
       <PageActivity />
       {children}
     </>
