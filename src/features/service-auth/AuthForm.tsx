@@ -156,6 +156,9 @@ export function AuthForm({ purpose, items = [], initialChecked = [], allConsents
           ))}
         </fieldset>
       )}
+      {purpose === "login" && (
+        <p className="text-sm font-medium text-muted-foreground">소셜 계정으로 간편하게 로그인하세요.</p>
+      )}
       {/* 미체크 필수 항목이 남아 있으면 공급자 버튼을 비활성화한다. */}
       {OAUTH_PROVIDERS.map((provider) => (
         <OAuthButton key={provider.id} purpose={purpose} provider={provider}

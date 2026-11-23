@@ -6,6 +6,9 @@ import type { AuthSessionUser } from "@/server/auth/types";
 import { canAccessPage } from "@/shared/config/page-access";
 import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 import { G2bHomePage } from "./G2bHomePage";
+import { ThemeSelector } from "@/shared/ui/theme-selector";
+import { ServiceMain } from "@/shared/ui/ServiceMain";
+import { Button } from "@/shared/ui/button";
 
 /** 로그인 또는 가입을 시작할 공개 랜딩 메뉴. */
 const guestLinks = [
@@ -20,20 +23,50 @@ const guestLinks = [
  */
 export function GuestLanding({ error = false }: { error?: boolean }) {
   return (
-    <main className="mx-auto grid min-h-svh max-w-lg content-center gap-4 px-6">
-      <h1 className="text-2xl font-semibold">나라장터 수집 자료</h1>
-      {error ? <AuthErrorToast /> : (
-        <>
-          <ClearPageHistory />
-          <p className="text-sm text-muted-foreground">저장된 나라장터 자료를 열려면 로그인해 주세요.</p>
-          <nav aria-label="인증 메뉴" className="flex gap-4 text-sm">
-            {guestLinks.filter(({ href }) => canAccessPage(href, null)).map(({ href, label }) => (
-              <Link key={href} href={href} className="underline underline-offset-4">{label}</Link>
-            ))}
-          </nav>
-        </>
-      )}
-    </main>
+    <>
+      <ClearPageHistory />
+
+      {/* 인증 페이지와 동일한 헤더 */}
+      <header className="px-4 py-2">
+        <div className="mx-auto flex w-full min-w-0 max-w-5xl items-center justify-end">
+          <ThemeSelector />
+        </div>
+      </header>
+
+      {/* 인증 페이지와 동일한 본문 */}
+      <ServiceMain>
+        <div className="grid gap-6">
+          <h1 className="text-2xl font-semibold">나라장터 수집 자료</h1>
+
+          {error ? (
+            <AuthErrorToast />
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">
+                저장된 나라장터 자료를 열려면 로그인해 주세요.
+              </p>
+
+              <nav
+                aria-label="인증 메뉴"
+                className="flex flex-wrap justify-end gap-2"
+              >
+                {guestLinks
+                  .filter(({ href }) => canAccessPage(href, null))
+                  .map(({ href, label }) => (
+                    <Button
+                      key={href}
+                      asChild
+                      variant={href === "/login" ? "default" : "outline"}
+                    >
+                      <Link href={href}>{label}</Link>
+                    </Button>
+                  ))}
+              </nav>
+            </>
+          )}
+        </div>
+      </ServiceMain>
+    </>
   );
 }
 
