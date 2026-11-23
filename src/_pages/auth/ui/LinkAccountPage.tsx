@@ -31,12 +31,19 @@ export default async function LinkAccountPage({ searchParams }: {
         {/* 추가 인증에서 복귀했을 때 취소나 실패의 원인을 표시한다. */}
         {notice && <p role="status" className="text-sm">{notice}</p>}
         <LinkAccountForm state={flow.state} candidates={candidates} />
-        <Link href="/login" className="text-sm underline underline-offset-4">로그인으로 돌아가기</Link>
+        <Link href="/login" className="flex justify-end text-sm underline underline-offset-4">로그인으로 돌아가기</Link>
       </>
     );
   } catch (error) {
     // 이메일과 후보 ID 등 개인정보 없이 저장소 오류의 유형만 기록한다.
     console.error("[OAuth 연결 후보 조회]", error instanceof Error ? error.name : "UnknownError");
-    return <><AuthErrorToast /><p role="alert">{authNoticeMessage("unavailable")}</p></>;
+    return (
+      <p>
+        <AuthErrorToast />
+        <div className="flex min-h-[calc(100dvh-116px)] items-center justify-center">
+          <p role="alert" className="text-destructive">{authNoticeMessage("unavailable")}</p>
+        </div>
+      </p>
+    );
   }
 }
