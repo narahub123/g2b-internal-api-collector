@@ -1,4 +1,3 @@
-import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { formatCollectionIdentifier } from "@/shared/model/g2b/collection-list-query";
 import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
@@ -13,7 +12,6 @@ import type {
 } from "@/server/g2b/repository/collection-attempts";
 import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 import { cn } from "@/shared/lib/utils";
-import { Button } from "@/shared/ui/button";
 import { G2bSectionNav } from "@/shared/ui/g2b/G2bSectionNav";
 import { ADMIN_NAVIGATION } from "../../config/navigation";
 import { ADMIN_G2B_PATH, collectionDetailPaths } from "../../config/routes";
@@ -26,6 +24,7 @@ import {
 import { CollectionListItem } from "@/shared/ui/g2b/CollectionListItem";
 import { CollectionListLabel } from "@/shared/ui/g2b/CollectionListLabel";
 import { CollectionFailureDetails } from "./CollectionFailureDetails";
+import { AdminPageHeading } from "./AdminPageHeading";
 
 const dateFormat = new Intl.DateTimeFormat("ko-KR", {
   dateStyle: "medium",
@@ -91,15 +90,11 @@ export async function CollectionListPage({
 
   return (
     <section className="grid min-w-0 gap-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">{G2B_SECTIONS[section]}</h1>
-        <Button asChild variant="outline">
-          <Link href={ADMIN_G2B_PATH}>
-            <ArrowLeft aria-hidden="true" />
-            나라장터로 돌아가기
-          </Link>
-        </Button>
-      </header>
+      <AdminPageHeading
+        title={G2B_SECTIONS[section]}
+        backHref={ADMIN_G2B_PATH}
+        backLabel="나라장터로 돌아가기"
+      />
       <G2bSectionNav
         items={ADMIN_NAVIGATION.g2b.sections}
         activeSection={section}

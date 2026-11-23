@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
-import { AccountNavigation } from "@/features/service-auth/AccountNavigation";
+import { ServiceHeader } from "@/features/service-auth/ServiceHeader";
 import { PageActivity } from "@/features/service-auth/PageActivity";
 import { requirePageAccess } from "@/server/auth/page-guard";
 import { AUTH_SUCCESS_PATH } from "@/shared/config/auth";
 
 /**
- * 회원 페이지에 공통 계정 메뉴를 배치하고 각 탐색의 서비스 세션을 갱신한다.
+ * 회원 접근을 확인한 뒤 공통 헤더를 배치하고 각 탐색의 서비스 세션을 갱신한다.
  * @param props.children 보호된 회원 화면.
  * @returns 최신 역할로 확인한 회원의 공통 화면.
  * @throws 요청에서 회원 접근이 거절되면 공통 인증 경로로 이동한다.
@@ -16,11 +16,8 @@ export default async function ProtectedLayout({ children }: { children: ReactNod
   if (auth?.status !== "authenticated") return null;
   return (
     <>
-      <header className="border-b px-4 py-3">
-        <div className="mx-auto max-w-6xl">
-          <AccountNavigation role={auth.state.role} profile={auth.user} />
-        </div>
-      </header>
+      {/* 공통 헤더에 검증된 역할과 계정 프로필을 전달한다. */}
+      <ServiceHeader role={auth.state.role} profile={auth.user} />
       <PageActivity />
       {children}
     </>

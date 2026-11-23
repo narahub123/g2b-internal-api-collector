@@ -1,12 +1,12 @@
-import Link from "next/link";
 import type { CollectionSection } from "@/server/g2b/repository/collection-attempts";
 import { loadCollectionList } from "@/server/g2b/repository/load-collection-list";
-import { G2B_LABEL, G2B_SECTIONS } from "@/shared/config/g2b-sections";
+import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 import { formatCollectionIdentifier, type CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 import { CollectionListItem } from "@/shared/ui/g2b/CollectionListItem";
 import { CollectionListLabel } from "@/shared/ui/g2b/CollectionListLabel";
 import { CollectionQueryView } from "@/shared/ui/g2b/CollectionQueryView";
 import { G2bSectionNav } from "@/shared/ui/g2b/G2bSectionNav";
+import { ServiceMain } from "@/shared/ui/ServiceMain";
 import { userDetailPath } from "../config/routes";
 
 // 저장 건수와 무관하게 목록 조회가 구현된 단계만 공통 업무 순서대로 노출한다.
@@ -45,12 +45,14 @@ export async function G2bHomePage({ searchParams }: { searchParams: Promise<Coll
   from.set("section", section);
   const detailQuery = new URLSearchParams({ from: `/?${from}` });
 
+  // 관리자 목록과 같은 본문 폭과 간격으로 업무 제목, 탭, 검색과 결과를 배치한다.
   return (
-    <main className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold">{G2B_LABEL}</h1>
-      <G2bSectionNav items={sectionItems} activeSection={section} />
-      <section aria-labelledby="g2b-list-heading" className="grid min-w-0 gap-4">
-        <h2 id="g2b-list-heading" className="text-xl font-semibold">{G2B_SECTIONS[section]}</h2>
+    <ServiceMain>
+      <section aria-labelledby="g2b-list-heading" className="grid min-w-0 gap-6">
+        {/* 현재 업무 이름을 목록 제목으로 한 번 표시한다. */}
+        <h1 id="g2b-list-heading" className="text-2xl font-semibold">{G2B_SECTIONS[section]}</h1>
+        {/* 선택한 업무를 강조하고 다른 업무 목록으로 이동할 수 있게 한다. */}
+        <G2bSectionNav items={sectionItems} activeSection={section} />
         <CollectionQueryView
           key={section}
           path="/"
@@ -81,6 +83,6 @@ export async function G2bHomePage({ searchParams }: { searchParams: Promise<Coll
           ) : <p className="text-sm text-muted-foreground">해당하는 자료가 없습니다.</p>}
         </CollectionQueryView>
       </section>
-    </main>
+    </ServiceMain>
   );
 }
