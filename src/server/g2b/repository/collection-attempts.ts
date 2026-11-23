@@ -374,7 +374,8 @@ export function openCollectionAttempts(db: G2bDatabase) {
     orderPlanList: openOrderPlanList(db, summaries.get("order-plans")!.targets),
     // 계약요청 화면의 페이지 및 선택지는 원본과 동기화된 전용 목록에서 조회한다.
     contractRequestList: openContractRequestList(db),
-    priorSpecList: openPriorSpecList(db, summaries.get("prior-specs")!.targets),
+    // 사전규격 목록과 선택지는 원본 변경과 함께 유지되는 전용 테이블에서 읽는다.
+    priorSpecList: openPriorSpecList(db),
     openingResultList: openOpeningResultList(db, summaries.get("opening-results")!.targets),
     // 계약현황 화면의 페이지와 필터 선택지는 전용 테이블에서 읽는다.
     contractList: openContractList(db),
