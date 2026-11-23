@@ -10,6 +10,7 @@ import { openOrderPlanList } from "./order-plan-list";
 import { openContractRequestList } from "./contract-request-list";
 import { openPriorSpecList } from "./prior-spec-list";
 import { openOpeningResultList } from "./opening-result-list";
+import { openingResultDisplayColumns } from "./opening-result-list-sql";
 import { openContractList } from "./contract-list";
 import type { CollectionDiagnostic } from "@/shared/api/g2b/collection-diagnostic";
 
@@ -132,21 +133,7 @@ const savedQueries: Record<CollectionSection, string> = {
     FROM contracts`,
   "opening-results": `
     SELECT result.number, result.revision, result.opening_revision, result.collected_at,
-      COALESCE(NULLIF(TRIM(json_extract(notice.data, '$.title')), ''),
-        NULLIF(TRIM(json_extract(result.data, '$.price.pbancInfo.bidPbancNm')), ''),
-        (SELECT COALESCE(
-          NULLIF(TRIM(json_extract(entry.value, '$.detail.bidPbancNm')), ''),
-          NULLIF(TRIM(json_extract(entry.value, '$.detail.bidPrgrs.bidPbancNm')), ''),
-          NULLIF(TRIM(json_extract(entry.value, '$.detail.bidInfo.bidPbancNm')), '')
-        ) AS name FROM json_each(result.data, '$.results') AS entry
-        WHERE name IS NOT NULL LIMIT 1)
-      ) AS title,
-      COALESCE(NULLIF(TRIM(json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeCd')), ''),
-        (SELECT CASE WHEN COUNT(DISTINCT json_extract(entry.value, '$.query.businessCode')) = 1
-          THEN MIN(json_extract(entry.value, '$.query.businessCode')) END
-          FROM json_each(result.data, '$.results') AS entry)
-      ) AS businessCode,
-      json_extract(notice.data, '$.payload.dmItemMap.prcmBsneSeNm') AS businessLabel,
+      ${openingResultDisplayColumns},
       result.data, result.query_data,
       COALESCE(json_extract(notice.query_data, '$.openingSearchTitle'), json_extract(result.query_data, '$.searchTitle')) AS searchTitle,
       json_extract(notice.query_data, '$.linkedAgency') AS linkedAgency,
@@ -376,7 +363,8 @@ export function openCollectionAttempts(db: G2bDatabase) {
     contractRequestList: openContractRequestList(db),
     // 사전규격 목록과 선택지는 원본 변경과 함께 유지되는 전용 테이블에서 읽는다.
     priorSpecList: openPriorSpecList(db),
-    openingResultList: openOpeningResultList(db, summaries.get("opening-results")!.targets),
+    // 개찰결과 목록은 연결 공고의 검색값까지 동기화한 전용 테이블에서 읽는다.
+    openingResultList: openOpeningResultList(db),
     // 계약현황 화면의 페이지와 필터 선택지는 전용 테이블에서 읽는다.
     contractList: openContractList(db),
     /**
