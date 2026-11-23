@@ -18,6 +18,8 @@ import {
 import { cn } from "@/shared/lib/utils";
 import { NoticePeriodCollection } from "./NoticePeriodCollection";
 import { NoticeAutomaticSettings } from "./NoticeAutomaticSettings";
+import { AdminPageHeading } from "./AdminPageHeading";
+import { ADMIN_HOME_PATH } from "../../config/routes";
 
 // 카드의 업무 아이콘은 메뉴의 여섯 업무와 일치한다.
 const sectionIcons = {
@@ -39,7 +41,11 @@ export async function G2bDashboardPage() {
 
   return (
     <section className="space-y-6">
-      <h1 className="text-2xl font-semibold">{ADMIN_NAVIGATION.g2b.label}</h1>
+      <AdminPageHeading
+        title={ADMIN_NAVIGATION.g2b.label}
+        backHref={ADMIN_HOME_PATH}
+        backLabel="관리자로 돌아가기"
+      />
       <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {ADMIN_NAVIGATION.g2b.sections.map(async ({ section, href, label }) => {
           const Icon = sectionIcons[section];
