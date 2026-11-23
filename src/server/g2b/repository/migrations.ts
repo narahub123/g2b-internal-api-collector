@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client";
+import { contractRequestListSchema } from "./contract-request-list-schema";
 import { contractListSchema } from "./contract-list-schema";
 import { collectionListCountsSchema } from "./collection-list-counts-schema";
 import { noticeListSchema } from "./notice-list-schema";
@@ -563,6 +564,14 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       // 초기화와 원본 동기화 트리거 설치가 모두 성공하면 완료 버전을 남긴다.
       await transaction.executeMultiple(`${contractListSchema}
         INSERT INTO g2b_schema_migrations (version) VALUES (22);
+      `);
+    }
+    // 기존 계약요청의 목록, 기본 건수와 선택지를 초기화한 뒤 원본 변경과 동기화한다.
+    const contractRequestList = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 23");
+    if (!contractRequestList.rows.length) {
+      // 초기화와 트리거 설치가 모두 성공하면 완료 버전을 같은 트랜잭션에 기록한다.
+      await transaction.executeMultiple(`${contractRequestListSchema}
+        INSERT INTO g2b_schema_migrations (version) VALUES (23);
       `);
     }
     await transaction.commit();
