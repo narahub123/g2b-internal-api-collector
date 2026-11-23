@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ServiceHeader } from "@/features/service-auth/ServiceHeader";
+import { AdminSidebar } from "@/_pages/admin/ui/AdminSidebar";
 import { AuthErrorToast, ClearPageHistory, PageActivity } from "@/features/service-auth/PageActivity";
 import type { AuthSessionUser } from "@/server/auth/types";
 import { canAccessPage } from "@/shared/config/page-access";
@@ -66,7 +67,7 @@ export function AdminLanding({ profile, searchParams }: LandingProps) {
   return (
     <>
       {/* 공통 헤더에 검증된 역할과 계정 프로필을 전달한다. */}
-      <ServiceHeader role="ADMIN" profile={profile} />
+      <ServiceHeader role="ADMIN" profile={profile} navigation={<AdminSidebar />} />
       <PageActivity />
       <G2bHomePage searchParams={searchParams} />
     </>
