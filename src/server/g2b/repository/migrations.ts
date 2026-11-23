@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client";
+import { orderPlanListSchema } from "./order-plan-list-schema";
 import { openingResultListSchema } from "./opening-result-list-schema";
 import { priorSpecListSchema } from "./prior-spec-list-schema";
 import { contractRequestListSchema } from "./contract-request-list-schema";
@@ -590,6 +591,14 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       // 기존 연결 공고를 초기 목록에 반영한 뒤 완료 버전을 기록한다.
       await transaction.executeMultiple(`${openingResultListSchema}
         INSERT INTO g2b_schema_migrations (version) VALUES (25);
+      `);
+    }
+    // 발주계획 연결과 목록·선택지·공통 건수를 한 스냅샷에서 초기화한다.
+    const orderPlanList = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 26");
+    if (!orderPlanList.rows.length) {
+      // 초기화와 동기화 트리거 설치 후 같은 트랜잭션에서 완료 버전을 기록한다.
+      await transaction.executeMultiple(`${orderPlanListSchema}
+        INSERT INTO g2b_schema_migrations (version) VALUES (26);
       `);
     }
     await transaction.commit();

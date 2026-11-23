@@ -166,13 +166,14 @@ export function openCollectionAttempts(db: G2bDatabase) {
     ) AS latestId
     FROM g2b_collection_attempts attempt WHERE attempt.id = ?
   `);
+  // 시도 한 건을 목록 번호로 해석하고 같은 차수의 최신 ID만 읽는다.
   const retryOrderPlan = db.prepare(`
-    WITH ${orderPlanAttemptKeys}
-    SELECT target.number, MAX(latest.id) AS latestId
-    FROM order_plan_attempt_keys target
-    JOIN order_plan_attempt_keys latest USING (number, revision, opening_revision)
-    WHERE target.id = ?
-    GROUP BY target.number
+    SELECT list.number, list.latest_id AS latestId
+    FROM g2b_collection_attempts attempt
+    LEFT JOIN g2b_order_plan_aliases alias ON alias.lookup_number = attempt.number
+    JOIN g2b_order_plan_list list ON list.number = COALESCE(alias.plan_number, attempt.number)
+      AND list.revision = attempt.revision AND list.opening_revision = attempt.opening_revision
+    WHERE attempt.id = ? AND attempt.section = 'order-plans'
   `);
   // 조회 불가 판정은 연결을 적용한 시도 키에만 적용한다. 저장된 계획은 항상 포함한다.
   const unavailableOrderPlans = `(
@@ -358,7 +359,8 @@ export function openCollectionAttempts(db: G2bDatabase) {
 
   return {
     noticeList: openNoticeList(db),
-    orderPlanList: openOrderPlanList(db, summaries.get("order-plans")!.targets),
+    // 발주계획 페이지는 원본 변경과 동시에 갱신한 전용 키와 공통 건수를 읽는다.
+    orderPlanList: openOrderPlanList(db),
     // 계약요청 화면의 페이지 및 선택지는 원본과 동기화된 전용 목록에서 조회한다.
     contractRequestList: openContractRequestList(db),
     // 사전규격 목록과 선택지는 원본 변경과 함께 유지되는 전용 테이블에서 읽는다.

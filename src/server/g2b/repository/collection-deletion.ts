@@ -1,5 +1,6 @@
 import type { G2bDatabase } from "./database";
-import { orderPlanAttemptKeys, type CollectionSection } from "./collection-attempts";
+import type { CollectionSection } from "./collection-attempts";
+import { orderPlanSourceNumbersSql } from "./order-plan-list-links";
 
 // 사용하지 않는 차수는 시도 이력의 키와 동일하게 빈 문자열로 표현한다.
 export type CollectionDeletionKey = {
@@ -37,9 +38,13 @@ export function openCollectionDeletion(db: G2bDatabase) {
     const { table, columns } = storage[section];
     const savedWhere = columns.map((column) => `${column} = ?`).join(" AND ");
     const attemptWhere = "number = ? AND revision = ? AND opening_revision = ?";
+    // 발주계획은 대상 번호의 원래 요청 번호만 찾고 각 차수의 이력 인덱스를 탐색한다.
     const matchingAttempts = section === "order-plans"
-      ? `WITH ${orderPlanAttemptKeys}
-         SELECT id FROM order_plan_attempt_keys WHERE ${attemptWhere}`
+      ? `WITH target(number, revision, opening_revision) AS (VALUES (?, ?, ?)),
+          sources AS (${orderPlanSourceNumbersSql("target.number", "FROM target")})
+         SELECT attempt.id FROM sources CROSS JOIN target
+         CROSS JOIN g2b_collection_attempts attempt ON attempt.section = 'order-plans' AND attempt.number = sources.source_number
+           AND attempt.revision = target.revision AND attempt.opening_revision = target.opening_revision`
       : `SELECT id FROM g2b_collection_attempts WHERE section = ? AND ${attemptWhere}`;
     return {
       keyLength: columns.length,
