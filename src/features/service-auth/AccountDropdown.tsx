@@ -21,6 +21,7 @@ import {
   AlertDialogTitle,
 } from "@/shared/ui/alert-dialog";
 import { LogoutForm } from "./LogoutForm";
+import { ThemeSelector } from "@/shared/ui/theme-selector";
 
 type AccountLink = {
   href: string;
@@ -99,6 +100,13 @@ export function AccountDropdown({ profile, links }: AccountDropdownProps) {
               </DropdownMenuItem>
             );
           })}
+
+          <DropdownMenuSeparator />
+
+          {/* 계정 메뉴 내에서 테마를 변경한다. */}
+          <div className="px-2 py-2">
+            <ThemeSelector showLabel />
+          </div>
 
           <DropdownMenuSeparator />
 

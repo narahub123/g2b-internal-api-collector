@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { ClearPageHistory } from "@/features/service-auth/PageActivity";
 import { requirePageAccess } from "@/server/auth/page-guard";
-import { ThemeMenu } from "@/shared/ui/theme-menu";
+import { ThemeSelector } from "@/shared/ui/theme-selector";
 
 // 쿠키 검증 결과를 요청마다 확인하므로 인증 화면을 정적으로 만들지 않는다.
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ export default async function AuthLayout({ children }: { children: ReactNode }) 
       <ClearPageHistory />
       {/* 인증 절차를 시작하기 전에도 본문 위에서 테마를 설정할 수 있다. */}
       <div className="justify-self-end">
-        <ThemeMenu />
+        <ThemeSelector />
       </div>
       {children}
     </main>
