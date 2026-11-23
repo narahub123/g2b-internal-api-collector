@@ -32,11 +32,22 @@ export function openContractList(db: G2bDatabase) {
   return {
     /**
      * 저장 계약에 기록된 업무구분 선택지를 표시 순으로 읽는다.
-     * @returns 값과 라벨을 담은 선택지 목록.
+     * 조회 행에서 값과 라벨만 복사해 React에 전달할 선택지를 구성한다.
+     * @returns 조회 순서대로 값과 라벨을 담은 일반 객체 목록.
      * @throws Turso에서 선택지 조회가 실패한 경우.
      */
     async businesses() {
-      return await options.all() as { value: string; label: string }[];
+      // 집계에 남아 있는 업무구분을 정렬된 순서로 읽는다.
+      const rows = await options.all() as { value: string; label: string }[];
+      // libSQL이 열 접근에 사용하는 숨은 속성을 제외하고 화면용 선택지를 반환한다.
+      return rows.map(
+        /**
+         * 조회 행의 업무 코드와 라벨을 일반 객체에 담는다.
+         * @param row 업무구분의 값과 라벨이 들어 있는 조회 행.
+         * @returns 화면에 전달할 값과 라벨만 담은 선택지.
+         */
+        ({ value, label }) => ({ value, label }),
+      );
     },
 
     /**

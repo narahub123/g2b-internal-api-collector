@@ -25,7 +25,15 @@ test("개찰결과 업무구분은 수집된 진행차수만 한 번씩 센다",
       // 사용 건수는 조합별로 읽고 화면 선택지는 기존 반환형으로 비교한다.
       const { rows } = await db.execute("SELECT pair, uses FROM g2b_opening_result_list_businesses ORDER BY pair");
       assert.deepEqual(rows.map(({ pair, uses }) => [...JSON.parse(pair), uses]), expected);
-      assert.deepEqual(await list.businesses(), expected.map(([value, label]) => ({ value, label })));
+      // 실제 저장소에서 업무구분 선택지를 읽는다.
+      const businessOptions = await list.businesses();
+      // 화면에 표시할 값과 순서를 검증한다.
+      assert.deepEqual(businessOptions, expected.map(([value, label]) => ({ value, label })));
+      // 각 선택지가 React에 전달할 속성만 갖는지 확인한다.
+      for (const option of businessOptions) {
+        // libSQL의 숫자 인덱스와 길이 속성이 남아 있으면 실패한다.
+        assert.deepEqual(Object.getOwnPropertyNames(option).sort(), ["label", "value"]);
+      }
     }
 
     // 두 미수집 키가 동일한 업무구분을 가지고 있어도 기여하지 않는다.

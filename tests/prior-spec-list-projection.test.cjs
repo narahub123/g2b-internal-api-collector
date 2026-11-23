@@ -37,7 +37,15 @@ test("사전규격 목록이 조회 불가 연결을 해당 미수집 키에만 
       await db.execute("DELETE FROM g2b_collection_attempts WHERE id = 2");
       assert.equal((await list.page(query)).rows[0].id, 1);
       assert.deepEqual((await db.execute(countsSql)).rows, [{ total: 2, collected: 1 }]);
-      assert.deepEqual(await list.businesses(), [{ value: "01", label: "물품" }]);
+      // 실제 저장소에서 업무구분 선택지를 읽는다.
+      const businessOptions = await list.businesses();
+      // 화면에 표시할 값과 순서를 검증한다.
+      assert.deepEqual(businessOptions, [{ value: "01", label: "물품" }]);
+      // 각 선택지가 React에 전달할 속성만 갖는지 확인한다.
+      for (const option of businessOptions) {
+        // libSQL의 숫자 인덱스와 길이 속성이 남아 있으면 실패한다.
+        assert.deepEqual(Object.getOwnPropertyNames(option).sort(), ["label", "value"]);
+      }
       // 저장본 삭제는 A 키를 다시 숨기고 마지막 업무구분 사용처를 없앤다.
       await db.execute("DELETE FROM prior_specs WHERE number = 'A'");
       assert.deepEqual(await list.businesses(), []);
