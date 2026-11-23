@@ -18,8 +18,9 @@ export async function AttachmentJobsSection({ owner }: { owner: AttachmentOwner 
     const jobs = await loadAttachmentJobs(owner.section, owner.number, owner.revision);
     if (!jobs.length) return null;
     const manualEnabled = Boolean(process.env.ATTACHMENT_MANUAL_TOKEN?.trim());
+    // 첨부 처리 패널은 현재 테마의 카드 배경을 사용한다.
     return (
-        <Accordion type="single" collapsible className="bg-white border shadow rounded-md">
+        <Accordion type="single" collapsible className="bg-card border shadow rounded-md">
           <DetailAccordionSection title="첨부 처리">
             <ul className="space-y-3">
               {jobs.map(({ file, pdfs, status }) => (

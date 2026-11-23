@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { AuthSessionUser } from "@/server/auth/types";
 import type { PageRole } from "@/shared/config/page-access";
+import { ThemeMenu } from "@/shared/ui/theme-menu";
 import { AccountNavigation } from "./AccountNavigation";
 
 /** 인증된 화면이 공통 헤더에 전달하는 계정 정보와 선택 메뉴. */
@@ -14,7 +15,7 @@ type ServiceHeaderProps = {
 };
 
 /**
- * 관리자 헤더의 폭과 여백을 적용하고 탐색 메뉴와 계정 메뉴를 양쪽에 배치한다.
+ * 회원 화면의 공통 폭과 여백을 적용하고 탐색 메뉴와 계정·테마 메뉴를 양쪽에 배치한다.
  * @param props 검증된 역할과 계정 프로필 및 화면에서 제공하는 선택 탐색 메뉴.
  * @returns 공통 회원 화면 헤더.
  */
@@ -27,6 +28,8 @@ export function ServiceHeader({ role, profile, navigation }: ServiceHeaderProps)
         {navigation}
         {/* 탐색 메뉴가 없는 화면에서도 계정 메뉴는 오른쪽에 배치한다. */}
         <AccountNavigation role={role} profile={profile} />
+        {/* 관리자와 일반 회원이 계정 메뉴 옆에서 테마를 설정한다. */}
+        <ThemeMenu />
       </div>
     </header>
   );

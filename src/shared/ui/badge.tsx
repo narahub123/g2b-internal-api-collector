@@ -10,7 +10,8 @@ const badgeVariants = cva(
       variant: {
         default: "bg-primary text-primary-foreground",
         secondary: "bg-secondary text-secondary-foreground",
-        destructive: "bg-destructive text-white",
+        // 오류 배지는 위험 상태 배경과 대비되는 테마 글자색을 사용한다.
+        destructive: "bg-destructive text-destructive-foreground",
         outline: "border-border text-foreground",
       },
     },

@@ -172,8 +172,9 @@ export function NoticeAutomaticSettings() {
                 type="submit"
                 variant={current.enabled ? "outline" : "default"}
                 className={
+                  // 수집 중단에 마우스를 올리면 위험 배경과 대비되는 글자색을 표시한다.
                   current.enabled
-                    ? "w-full border-transparent text-destructive hover:border-destructive hover:bg-destructive hover:text-white sm:ml-auto sm:w-auto"
+                    ? "w-full border-transparent text-destructive hover:border-destructive hover:bg-destructive hover:text-destructive-foreground sm:ml-auto sm:w-auto"
                     : "w-full sm:ml-auto sm:w-auto"
                 }
                 disabled={update.isPending}

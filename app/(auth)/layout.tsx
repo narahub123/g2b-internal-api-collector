@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 import { ClearPageHistory } from "@/features/service-auth/PageActivity";
 import { requirePageAccess } from "@/server/auth/page-guard";
+import { ThemeMenu } from "@/shared/ui/theme-menu";
 
 // 쿠키 검증 결과를 요청마다 확인하므로 인증 화면을 정적으로 만들지 않는다.
 export const dynamic = "force-dynamic";
 
 /**
- * 로그인 상태를 최신 사용자 저장소로 확인한 뒤 비로그인 사용자에게만 인증 화면을 제공한다.
+ * 로그인 상태를 확인한 뒤 비로그인 사용자에게 테마 메뉴와 인증 화면을 제공한다.
  * @param props 인증 화면의 본문을 받는 레이아웃 속성.
  * @param props.children 로그인·가입·완료 페이지가 제공하는 본문.
  * @returns 공통 비로그인 인증 화면.
@@ -19,6 +20,10 @@ export default async function AuthLayout({ children }: { children: ReactNode }) 
   return (
     <main className="mx-auto grid min-h-svh w-full max-w-lg content-center gap-4 px-6 py-10">
       <ClearPageHistory />
+      {/* 인증 절차를 시작하기 전에도 본문 위에서 테마를 설정할 수 있다. */}
+      <div className="justify-self-end">
+        <ThemeMenu />
+      </div>
       {children}
     </main>
   );
