@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client";
+import { noticeListSchema } from "./notice-list-schema";
 import { priorSpecUnavailableStatus } from "@/shared/config/g2b-prior-spec";
 import {
   orderPlanLinkPredicate, orderPlanLookupSql, orderPlanNumberSql, orderPlanUnavailablePredicate,
@@ -537,6 +538,13 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         CREATE INDEX auth_consent_latest
           ON auth_consent_records (user_id, item_id, created_at DESC, id DESC);
         INSERT INTO g2b_schema_migrations (version) VALUES (19);
+      `);
+    }
+    // 조회 경로를 전환하기 전에 기존 공고와 이력으로 목록과 선택지를 초기화한다.
+    const noticeList = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 20");
+    if (!noticeList.rows.length) {
+      await transaction.executeMultiple(`${noticeListSchema}
+        INSERT INTO g2b_schema_migrations (version) VALUES (20);
       `);
     }
     await transaction.commit();

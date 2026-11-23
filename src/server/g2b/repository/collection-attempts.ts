@@ -370,7 +370,7 @@ export function openCollectionAttempts(db: G2bDatabase) {
   }));
 
   return {
-    noticeList: openNoticeList(db, summaries.get("notices")!.targets),
+    noticeList: openNoticeList(db),
     orderPlanList: openOrderPlanList(db, summaries.get("order-plans")!.targets),
     contractRequestList: openContractRequestList(db, summaries.get("contract-requests")!.targets),
     priorSpecList: openPriorSpecList(db, summaries.get("prior-specs")!.targets),

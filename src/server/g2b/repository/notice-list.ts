@@ -3,7 +3,8 @@ import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query"
 import { etcNoticeDetail, isMockNotice, noticeDetail } from "@/entities/notice/model/notice-detail";
 import type { Notice } from "@/entities/notice/model/types";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
-import { cleanText, searchText, queryCollectionPage, sortDate } from "./collection-list-query";
+import { cleanText, searchText, sortDate } from "./collection-list-query";
+import { queryNoticePage } from "./notice-list-page";
 
 // 사용자 입찰공고의 조회 결과, 집계, 선택지에 같은 노출 기준을 적용한다.
 type NoticeListOptions = { excludeMockNotices?: boolean };
@@ -86,23 +87,15 @@ export function noticeFields(raw: unknown) {
 
 /**
  * 저장 공고와 수집 이력을 합친 목록에서 입찰공고 조회를 준비한다.
- * @param targets 업무별 저장 대상과 최신 시도를 정의한 저장소 내부 SQL.
+ * @param db 입찰공고 전용 목록 및 선택지 집계를 조회하는 저장소 연결.
  * @throws Turso에서 함수 등록 또는 조회문 준비가 실패한 경우.
  */
-export function openNoticeList(db: G2bDatabase, targets: string) {
-  const regions = db.prepare(`
-    SELECT DISTINCT region.value AS label
-    FROM notices, json_each(query_data, '$.regionOptions') region
-    WHERE CASE WHEN json_valid(data) THEN json_extract(data, '$.payload.dmItemMap.rgnLmtYn') = 'Y' END
-      AND CASE WHEN ? AND json_valid(data) THEN json_extract(query_data, '$.mock') = 0 ELSE TRUE END
-    ORDER BY label
-  `);
-  const businesses = db.prepare(`
-    SELECT DISTINCT COALESCE(json_extract(data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),
-      json_extract(data, '$.payload.dmItemMap.prcmBsneSeCd')) AS code,
-      json_extract(data, '$.payload.dmItemMap.prcmBsneSeNm') AS label
-    FROM notices WHERE json_valid(data)
-      AND CASE WHEN ? AND json_valid(data) THEN json_extract(query_data, '$.mock') = 0 ELSE TRUE END
+export function openNoticeList(db: G2bDatabase) {
+  // 화면별로 한 건 이상 사용 중인 선택지의 원래 값을 조회한다.
+  const choices = db.prepare(`
+    SELECT value FROM g2b_notice_list_options
+    WHERE kind = ? AND (CASE WHEN ? THEN visible ELSE total END) > 0
+    ORDER BY json_extract(value, '$')
   `);
 
   return {
@@ -113,7 +106,9 @@ export function openNoticeList(db: G2bDatabase, targets: string) {
      */
     async businesses({ excludeMockNotices = false }: NoticeListOptions = {}) {
       const options = new Map<string, string>();
-      for (const { code, label } of await businesses.all(Number(excludeMockNotices))) {
+      // 원본 코드와 명칭을 복원해 기존 업무구분 정규화 규칙을 적용한다.
+      for (const { value } of await choices.all("business", Number(excludeMockNotices))) {
+        const [code, label] = JSON.parse(String(value));
         const business = resolveG2bBusiness(code, label);
         if (business) options.set(business.code ?? business.label, business.label);
       }
@@ -126,7 +121,8 @@ export function openNoticeList(db: G2bDatabase, targets: string) {
      * @throws Turso에서 공고 자료를 읽지 못한 경우.
      */
     async regions({ excludeMockNotices = false }: NoticeListOptions = {}): Promise<string[]> {
-      return (await regions.all(Number(excludeMockNotices)) as { label: string }[]).map(({ label }) => label);
+      // 원래 지역 이름을 복원하고 조회 순서대로 반환한다.
+      return (await choices.all("region", Number(excludeMockNotices))).map(({ value }) => JSON.parse(String(value)));
     },
 
     /**
@@ -136,7 +132,8 @@ export function openNoticeList(db: G2bDatabase, targets: string) {
      * @throws Turso에서 검색 또는 집계에 실패한 경우.
      */
     page(query: NoticeListQuery, { excludeMockNotices = false }: NoticeListOptions = {}) {
-      const where = excludeMockNotices ? ["isMockNotice = 0"] : [];
+      // 사용자 노출 범위와 별개로 검색 및 필터의 조건과 바인딩 값을 모은다.
+      const where: string[] = [];
       const values: SQLInputValue[] = [];
       // 상세 화면의 하이픈과 목록의 슬래시 모두 같은 공고번호·차수로 검색한다.
       const search =
@@ -156,8 +153,9 @@ export function openNoticeList(db: G2bDatabase, targets: string) {
       for (const column of ["posted", "submission", "budget"]) {
         const range = query.filters[column];
         if (!range || !("from" in range || "to" in range)) continue;
-        const expression =
-          column === "budget" ? column : `substr(${column}, 1, 10)`;
+        // 기존 날짜 비교는 시각을 제외하고 예산은 숫자 범위를 적용한다.
+        const expression = column === "budget" ? "json_extract(fields, '$.budget')"
+          : column === "posted" ? "substr(posted, 1, 10)" : "substr(json_extract(fields, '$.submission'), 1, 10)";
         if (range.from !== undefined) {
           where.push(`${expression} >= ?`);
           values.push(range.from);
@@ -181,20 +179,9 @@ export function openNoticeList(db: G2bDatabase, targets: string) {
       }
       const [field, direction] = query.sort.split("-");
       const order = sortColumns.get(field) ?? "posted";
-      return queryCollectionPage(db, targets, {
-        section: "notices",
-        projection: excludeMockNotices
-          ? "json_extract(saved.query_data, '$.fields') AS fields, COALESCE(json_extract(saved.query_data, '$.mock'), 0) AS isMockNotice"
-          : "json_extract(saved.query_data, '$.fields') AS fields",
-        columns: `json_extract(fields, '$.posted') AS posted, json_extract(fields, '$.submission') AS submission,
-            json_extract(fields, '$.deadline') AS deadline, json_extract(fields, '$.sortTitle') AS sortTitle,
-            json_extract(fields, '$.budget') AS budget`,
-        where,
-        values,
-        order,
-        ascending: direction === "asc",
-        status: query.status,
-        page: query.page,
+      // 상태별 건수와 선택 페이지를 동일한 스냅샷에서 조회한다.
+      return queryNoticePage(db, query, {
+        where, values, order, ascending: direction === "asc", excludeMockNotices,
       });
     },
   };
