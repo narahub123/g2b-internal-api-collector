@@ -375,7 +375,8 @@ export function openCollectionAttempts(db: G2bDatabase) {
     contractRequestList: openContractRequestList(db, summaries.get("contract-requests")!.targets),
     priorSpecList: openPriorSpecList(db, summaries.get("prior-specs")!.targets),
     openingResultList: openOpeningResultList(db, summaries.get("opening-results")!.targets),
-    contractList: openContractList(db, summaries.get("contracts")!.targets),
+    // 계약현황 화면의 페이지와 필터 선택지는 전용 테이블에서 읽는다.
+    contractList: openContractList(db),
     /**
      * 외부 조회 직전에 입력과 시작 시각을 기록한다.
      * @param jobId 공고 워커가 시작한 경우 연결할 영속 작업 ID.

@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client";
+import { contractListSchema } from "./contract-list-schema";
 import { collectionListCountsSchema } from "./collection-list-counts-schema";
 import { noticeListSchema } from "./notice-list-schema";
 import { priorSpecUnavailableStatus } from "@/shared/config/g2b-prior-spec";
@@ -554,6 +555,14 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       // 현재 목록을 기준으로 초기화한 뒤 완료 버전을 같은 트랜잭션에 기록한다.
       await transaction.executeMultiple(`${collectionListCountsSchema}
         INSERT INTO g2b_schema_migrations (version) VALUES (21);
+      `);
+    }
+    // 계약현황 조회 전환에 필요한 목록, 공통 건수, 선택지를 원본과 같은 스냅샷에서 초기화한다.
+    const contractList = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 22");
+    if (!contractList.rows.length) {
+      // 초기화와 원본 동기화 트리거 설치가 모두 성공하면 완료 버전을 남긴다.
+      await transaction.executeMultiple(`${contractListSchema}
+        INSERT INTO g2b_schema_migrations (version) VALUES (22);
       `);
     }
     await transaction.commit();

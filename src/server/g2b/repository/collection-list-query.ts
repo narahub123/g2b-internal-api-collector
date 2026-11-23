@@ -102,7 +102,8 @@ export async function queryCollectionPage(db: G2bDatabase, targets: string, opti
   };
 }
 
-const businessKey = "COALESCE(json_extract(b.value, '$.code'), json_extract(b.value, '$.label'))";
+// 공통 업무구분의 값은 코드가 있을 때 코드를 우선 사용한다.
+export const collectionBusinessKeySql = "COALESCE(json_extract(b.value, '$.code'), json_extract(b.value, '$.label'))";
 
 /**
  * 업무가 전달한 조회 필드로 검색·필터와 페이지 조회를 연결한다.
@@ -118,7 +119,7 @@ export function openCollectionList(
   extraCondition?: (range: (id: string, expression: string) => string) => string,
 ) {
   const businessOptions = db.prepare(`${targets}
-    SELECT DISTINCT ${businessKey} AS value, json_extract(b.value, '$.label') AS label
+    SELECT DISTINCT ${collectionBusinessKeySql} AS value, json_extract(b.value, '$.label') AS label
     FROM saved, json_each(${projection}, '$.businesses') b
     ORDER BY label
   `);
@@ -138,60 +139,88 @@ export function openCollectionList(
      * @throws Turso에서 조회문 준비나 실행이 실패한 경우.
      */
     page(query: CollectionListQuery) {
-      const where: string[] = [];
-      const values: SQLInputValue[] = [];
-      const { field, query: keyword } = query.search;
-      if (keyword) {
-        if (field === "number") {
-          where.push("(instr(lower(number || revision), ?) > 0 OR instr(json_extract(fields, '$.receipt'), ?) > 0)");
-          values.push(searchText(keyword.replace(/[\s/-]+/g, "") || keyword), searchText(keyword));
-        } else if (field === "agency") {
-          where.push("EXISTS (SELECT 1 FROM json_each(fields, '$.agencies') WHERE instr(value, ?) > 0)");
-          values.push(searchText(keyword));
-        } else {
-          where.push("instr(sortTitle, ?) > 0");
-          values.push(searchText(keyword));
-        }
-      }
-
-      const selected = query.filters.business;
-      if (Array.isArray(selected) && selected.length) {
-        where.push(`EXISTS (SELECT 1 FROM json_each(fields, '$.businesses') b WHERE ${businessKey} IN (SELECT value FROM json_each(?)))`);
-        values.push(JSON.stringify(selected));
-      }
-
-      function rangeCondition(id: string, expression: string) {
-        const range = query.filters[id];
-        if (!range || !("from" in range || "to" in range)) return "";
-        const conditions = [];
-        if (range.from !== undefined) {
-          conditions.push(`${expression} >= ?`);
-          values.push(range.from);
-        }
-        if (range.to !== undefined) {
-          conditions.push(`${expression} <= ?`);
-          values.push(range.to);
-        }
-        return conditions.join(" AND ");
-      }
-
-      const date = rangeCondition("date", "substr(sortDate, 1, 10)");
-      if (date) where.push(date);
-      const extra = extraCondition?.(rangeCondition);
-      if (extra) where.push(extra);
-
-      const [sort, direction] = query.sort.split("-");
+      // 업무별 조회 경로에서 동일한 검색과 필터 규칙을 사용한다.
+      const criteria = collectionListCriteria(query, extraCondition);
       return queryCollectionPage(db, targets, {
         section,
         projection: `${projection} AS fields, NULLIF(saved.searchTitle, '') AS sortTitle`,
         columns: "json_extract(fields, '$.date') AS sortDate",
-        where,
-        values,
-        order: sort === "title" ? "sortTitle" : "sortDate",
-        ascending: direction === "asc",
+        ...criteria,
         status: query.status,
         page: query.page,
       });
     },
   };
+}/**
+ * 기존 목록의 검색·업무구분·날짜 조건을 SQL과 바인딩으로 변환한다.
+ * @param query URL에서 검증한 목록 조건.
+ * @param extraCondition 업무 전용 범위 조건을 같은 바인딩 순서에 추가하는 함수.
+ * @returns 목록 SQL에서 사용할 조건, 인자 및 정렬.
+ */
+export function collectionListCriteria(
+  query: CollectionListQuery,
+  extraCondition?: (range: (id: string, expression: string) => string) => string,
+) {
+  // 활성 검색과 필터를 적용할 SQL 조건을 모은다.
+  const where: string[] = [];
+  // 각 조건이 사용하는 값을 SQL 자리표시자 순서대로 모은다.
+  const values: SQLInputValue[] = [];
+  // 검색 대상을 구분하고 입력한 검색어가 있을 때만 조건을 추가한다.
+  const { field, query: keyword } = query.search;
+  if (keyword) {
+    // 번호 검색은 구분자를 제외한 번호·차수와 원래 형식의 접수번호를 함께 비교한다.
+    if (field === "number") {
+      where.push("(instr(lower(number || revision), ?) > 0 OR instr(json_extract(fields, '$.receipt'), ?) > 0)");
+      values.push(searchText(keyword.replace(/[\s/-]+/g, "") || keyword), searchText(keyword));
+    // 기관 검색은 정규화한 기관 배열 중 일치하는 항목을 찾는다.
+    } else if (field === "agency") {
+      where.push("EXISTS (SELECT 1 FROM json_each(fields, '$.agencies') WHERE instr(value, ?) > 0)");
+      values.push(searchText(keyword));
+    // 기본 검색은 정렬에도 쓰는 정규화 제목을 비교한다.
+    } else {
+      where.push("instr(sortTitle, ?) > 0");
+      values.push(searchText(keyword));
+    }
+  }
+
+  // 업무구분을 선택한 경우에만 해당 값으로 목록 범위를 좁힌다.
+  const selected = query.filters.business;
+  if (Array.isArray(selected) && selected.length) {
+    where.push(`EXISTS (SELECT 1 FROM json_each(fields, '$.businesses') b WHERE ${collectionBusinessKeySql} IN (SELECT value FROM json_each(?)))`);
+    values.push(JSON.stringify(selected));
+  }
+
+  /**
+   * 화면에서 실제로 지정한 날짜 경계만 바인딩 순서에 추가한다.
+   * @param id 검증된 필터의 식별자.
+   * @param expression 저장소가 제공하는 비교 대상 SQL 표현식.
+   * @returns 활성 경계의 조건 또는 비활성 상태를 나타내는 빈 문자열.
+   */
+  function rangeCondition(id: string, expression: string) {
+    // 경계값이 없는 필터는 비교식에 포함하지 않는다.
+    const range = query.filters[id];
+    if (!range || !("from" in range || "to" in range)) return "";
+    // 시작일과 종료일이 각각 있는 경우에만 해당 경계를 포함한다.
+    const conditions = [];
+    if (range.from !== undefined) {
+      conditions.push(`${expression} >= ?`);
+      values.push(range.from);
+    }
+    if (range.to !== undefined) {
+      conditions.push(`${expression} <= ?`);
+      values.push(range.to);
+    }
+    // 두 경계가 있으면 모두 만족하는 범위로 제한한다.
+    return conditions.join(" AND ");
+  }
+
+  // 계약일 등 업무 날짜의 날짜 부분을 비교하고 업무가 제공한 추가 범위 조건도 합친다.
+  const date = rangeCondition("date", "substr(sortDate, 1, 10)");
+  if (date) where.push(date);
+  const extra = extraCondition?.(rangeCondition);
+  if (extra) where.push(extra);
+
+  // 기존 정렬 키와 방향을 조건과 함께 반환한다.
+  const [sort, direction] = query.sort.split("-");
+  return { where, values, order: sort === "title" ? "sortTitle" : "sortDate", ascending: direction === "asc" };
 }
