@@ -16,8 +16,8 @@ test("희소한 번호 조각은 같은 스냅샷에서 공고 목록 후보를 
   try {
     // 검색 후보 한도가 두 건이 되도록 일반 공고와 하나뿐인 모의공고를 저장한다.
     await migrateG2bDatabase(client);
-    await client.execute(`WITH RECURSIVE keys(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM keys WHERE i<160)
-      INSERT INTO notices SELECT printf('COMMON%04d', i), '000', '2026-01-01', '{}', '{}' FROM keys`);
+    await client.execute(`WITH RECURSIVE keys(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM keys WHERE i<200)
+      INSERT INTO notices SELECT printf('COMMON%04d', i), '000', '2026-01-01', '{}', '{"fields":{"regions":["일반"]}}' FROM keys`);
     await client.execute("INSERT INTO notices VALUES ('SPECIALXYZ','070','2026-01-01','{}','{\"mock\":1}')");
     // 조각 탐색 이후 실제 페이지 SQL을 확인할 수 있도록 마지막 호출을 기록한다.
     const db = new G2bDatabase(client);
@@ -64,6 +64,33 @@ test("희소한 번호 조각은 같은 스냅샷에서 공고 목록 후보를 
     const publicPage = await list.page(request, { excludeMockNotices: true });
     assert.deepEqual(publicPage.counts, { total: 0, collected: 0, uncollected: 0 });
     assert.deepEqual(publicPage.rows, []);
+    // 중복 지역을 가진 공고와 명시적으로 제한 없는 공고를 각각 한 건만 반환한다.
+    await client.executeMultiple(`
+      UPDATE notices SET query_data = json_set(query_data,'$.fields.regions',json_array('서울','서울','경기')) WHERE number = 'SPECIALXYZ';
+      UPDATE notices SET query_data = json_set(query_data,'$.fields.unrestrictedRegion',json('true')) WHERE number = 'COMMON0001';
+    `);
+    const region = { ...request, search: { field: "title", query: "" }, filters: { region: ["서울", "경기"] } };
+    const regional = await list.page(region);
+    assert.deepEqual(regional.rows.map(({ number }) => number), ["COMMON0001", "SPECIALXYZ"]);
+    assert.equal(regional.counts.total, 2);
+    // 작은 후보 집합을 기존 건수와 페이지에서 공유해야 한다.
+    assert.match(statement.sql, /regional_keys AS MATERIALIZED/);
+    // 흔한 지역은 제한된 탐색을 마친 뒤 기존 페이지 조회로 돌아간다.
+    const broad = await list.page({ ...region, filters: { region: ["일반"] } });
+    assert.equal(broad.counts.total, 200);
+    assert.doesNotMatch(statement.sql, /regional_keys AS MATERIALIZED/);
+    // 지역 갱신과 롤백이 원본과 함께 매핑에 반영되어야 한다.
+    await assert.rejects(db.transaction(async () => {
+      // 지역을 교체하면 기존 후보에서는 새 지역의 공고를 제외한다.
+      await db.execute(`UPDATE notices SET query_data = json_set(query_data,'$.fields.regions',json_array('부산'))
+        WHERE number = 'SPECIALXYZ'`);
+      assert.deepEqual((await list.page(region)).rows.map(({number}) => number), ["COMMON0001"]);
+      throw new Error("지역 변경 롤백");
+    }), /지역 변경 롤백/);
+    // 실패한 변경 뒤에는 지역 후보와 공개 범위가 모두 복원돼야 한다.
+    assert.deepEqual(await list.page(region), regional);
+    const visibleRegion = await list.page(region, { excludeMockNotices: true });
+    assert.deepEqual(visibleRegion.rows.map(({number}) => number), ["COMMON0001"]);
     // 목록 키와 조각을 바꾼 쓰기 트랜잭션이 실패하면 두 데이터가 함께 복원되어야 한다.
     await assert.rejects(db.transaction(async () => {
       // 트랜잭션 안에서는 새 목록 키로 검색할 수 있다.
@@ -111,7 +138,7 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     await client.executeMultiple(`
       INSERT INTO notices VALUES ('A', '000', '2026-01-01',
         '{"title":"공고","payload":{"dmItemMap":{"rgnLmtYn":"Y","prcmBsneSeNm":"기타"}}}',
-        '{"fields":{"posted":"2026-01-01","submission":"2026-01-31 23:59:59","searchTitle":"공고","budget":0},"regionOptions":["서울","서울"],"mock":1}');
+        '{"fields":{"posted":"2026-01-01","submission":"2026-01-31 23:59:59","searchTitle":"공고","budget":0,"regions":["서울"]},"regionOptions":["서울","서울"],"mock":1}');
       INSERT INTO g2b_collection_attempts (id, section, number, revision, opening_revision, input, started_at)
       VALUES (1,'notices','B','000','','{}','2026-01-01'), (2,'notices','B','000','','{}','2026-01-02');
     `);
@@ -226,6 +253,8 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     assert.deepEqual(await list.regions(), []);
     // 원본과 수집 이력이 사라진 키는 검색 인덱스에서도 제거돼야 한다.
     assert.deepEqual((await client.execute("SELECT gram FROM g2b_number_search_grams")).rows, []);
+    // 원본 삭제가 끝나면 해당 지역 매핑도 남지 않아야 한다.
+    assert.deepEqual((await client.execute("SELECT number FROM g2b_notice_region_keys")).rows, []);
   } finally {
     // 테스트 전용 연결을 닫는다.
     client.close();

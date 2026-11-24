@@ -2,6 +2,7 @@ import type { Client } from "@libsql/client";
 import { orderPlanListSchema } from "./order-plan-list-schema";
 import { nameSearchSections, numberSearchSections, type NumberSearchSection } from "./number-search-config";
 import { nameSearchSectionSql, numberSearchSchema, numberSearchSectionSql } from "./number-search-schema";
+import { noticeRegionBackfill, noticeRegionSchema } from "./notice-region-schema";
 import { openingResultListSchema } from "./opening-result-list-schema";
 import { priorSpecListSchema } from "./prior-spec-list-schema";
 import { contractRequestListSchema } from "./contract-request-list-schema";
@@ -708,6 +709,14 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       }
       // 작업을 반복해도 이름 조각을 중복 적재하지 않도록 완료 버전을 남긴다.
       await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (31)");
+    }
+    // 입찰공고의 지역 매핑이 아직 설치되지 않은 DB만 초기화한다.
+    const noticeRegions = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 32");
+    if (!noticeRegions.rows.length) {
+      // 테이블과 트리거를 설치하고 기존 공고를 채운 뒤 같은 트랜잭션에서 버전을 기록한다.
+      await transaction.executeMultiple(noticeRegionSchema);
+      await transaction.execute(noticeRegionBackfill);
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (32)");
     }
     await transaction.commit();
   } finally {

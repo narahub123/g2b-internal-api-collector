@@ -6,6 +6,7 @@ import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { appendCollectionDateRange, cleanText, searchText, sortDate } from "./collection-list-query";
 import { queryNoticePage } from "./notice-list-page";
 import { withListSearch } from "./number-search";
+import { withNoticeRegionKeys } from "./notice-region-search";
 
 // 사용자 입찰공고의 조회 결과, 집계, 선택지에 같은 노출 기준을 적용한다.
 type NoticeListOptions = { excludeMockNotices?: boolean };
@@ -187,9 +188,22 @@ export function openNoticeList(db: G2bDatabase) {
       const order = sortColumns.get(field) ?? "posted";
       // 지원하는 검색에만 공통 후보 탐색을 적용한다.
       const pageOptions = { where, values, order, ascending: direction === "asc", excludeMockNotices };
-      // 후보 확인부터 집계와 페이지 선택까지 동일한 스냅샷에서 수행한다.
-      return withListSearch(db, "notices", query.search, (grams) =>
-        queryNoticePage(db, query, { ...pageOptions, grams }));
+      // 날짜 범위가 활성화되면 기존 날짜 인덱스가 후보를 좁히도록 한다.
+      const dateFiltered = Boolean(query.filters.posted || query.filters.submission);
+      /**
+       * 기존 글자 조각이나 날짜로 후보를 줄이지 못한 지역 요청에만 매핑을 확인한다.
+       * @param grams 검색에서 이미 좁힌 조각.
+       * @returns 같은 스냅샷에서 계산한 집계와 페이지.
+       */
+      return withListSearch(db, "notices", query.search, (grams) => {
+        // 글자 조각이 없고 날짜 범위를 쓰지 않는 지역 요청만 제한된 매핑을 읽는다.
+        if (Array.isArray(selected) && selected.length && !dateFiltered && !grams.length) {
+          return withNoticeRegionKeys(db, selected, (regionalKeys) =>
+            queryNoticePage(db, query, { ...pageOptions, grams, regionalKeys }));
+        }
+        // 기존 인덱스 후보와 지역 필터의 결과를 집계와 페이지에서 함께 사용한다.
+        return queryNoticePage(db, query, { ...pageOptions, grams });
+      });
     },
   };
 }
