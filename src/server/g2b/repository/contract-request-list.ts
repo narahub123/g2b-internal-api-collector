@@ -3,7 +3,7 @@ import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collectio
 import type { G2bDatabase, SQLInputValue } from "./database";
 import { getContractRequestDisplay } from "@/entities/contract-request/model/contract-request-display";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
-import { cleanText, searchText, sortDate } from "./collection-list-query";
+import { appendCollectionDateRange, cleanText, searchText, sortDate } from "./collection-list-query";
 
 /** 수집 원본에서 목록 검색과 정렬에 필요한 파생값을 계산한다. */
 export function contractRequestFields(raw: unknown, includeItems: unknown) {
@@ -74,18 +74,8 @@ export function openContractRequestList(db: G2bDatabase) {
           values.push(searchText(keyword));
         }
       }
-      // 작성 시각을 제외한 날짜 범위와 검색용 업무구분 파생값으로 필터링한다.
-      const range = query.filters.written;
-      if (range && ("from" in range || "to" in range)) {
-        if (range.from !== undefined) {
-          where.push("substr(written, 1, 10) >= ?");
-          values.push(range.from);
-        }
-        if (range.to !== undefined) {
-          where.push("substr(written, 1, 10) <= ?");
-          values.push(range.to);
-        }
-      }
+      // 작성일의 전체 날짜 범위를 기존 작성일 인덱스로 탐색한다.
+      appendCollectionDateRange(where, values, "written", query.filters.written);
       const selected = query.filters.business;
       if (Array.isArray(selected) && selected.length) {
         where.push("json_extract(fields, '$.business') IN (SELECT value FROM json_each(?))");

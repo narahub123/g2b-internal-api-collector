@@ -622,6 +622,17 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (27);
       `);
     }
+    // 제출 시작일 범위에서 파생 일시를 인덱스로 조회할 수 있는지 적용 이력을 확인한다.
+    const noticeSubmissionRange = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 28");
+    // 아직 적용하지 않은 DB에서 인덱스를 생성하고 같은 트랜잭션에 버전을 기록한다.
+    if (!noticeSubmissionRange.rows.length) {
+      // 목록 조회가 사용하는 제출 시작일 추출식의 값을 기존 행부터 인덱싱한다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_list_submission
+          ON g2b_notice_list(json_extract(fields, '$.submission'));
+        INSERT INTO g2b_schema_migrations (version) VALUES (28);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

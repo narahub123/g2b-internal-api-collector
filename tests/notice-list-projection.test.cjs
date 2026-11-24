@@ -7,6 +7,30 @@ const { noticeListSchema } = require("../src/server/g2b/repository/notice-list-s
 const { collectionListCountsSchema } = require("../src/server/g2b/repository/collection-list-counts-schema");
 const { G2bDatabase } = require("../src/server/g2b/repository/database");
 const { openNoticeList } = require("../src/server/g2b/repository/notice-list");
+const { appendCollectionDateRange } = require("../src/server/g2b/repository/collection-list-query");
+
+/** 날짜 범위가 시각과 연도 경계에 관계없이 달력 날짜 전체를 포함하는지 확인한다. */
+test("날짜 필터가 UTC 달력에서 종료일 다음 날을 상한으로 사용한다", () => {
+  // 월말, 윤일, 연말과 지원하는 마지막 날짜의 다음 문자열 경계를 구성한다.
+  const boundaries = [
+    ["2024-02-28", "2024-02-29"],
+    ["2024-02-29", "2024-03-01"],
+    ["2026-01-31", "2026-02-01"],
+    ["2026-12-31", "2027-01-01"],
+    ["9999-12-31", "9999-12-32"],
+  ];
+  // 상한만 있는 필터는 종료일에 속한 일시만 포함할 수 있도록 배타적으로 비교한다.
+  for (const [to, next] of boundaries) {
+    // 다른 쿼리 조건과 인자 뒤에 날짜 상한이 붙는지 검증한다.
+    const where = ["is_mock = ?"];
+    const values = [0];
+    // 검증된 종료일로 실제 저장소가 사용하는 범위 조건을 구성한다.
+    appendCollectionDateRange(where, values, "posted", { to });
+    // 바인딩 순서를 유지하면서 일시 열에 직접 상한을 적용해야 한다.
+    assert.deepEqual(where, ["is_mock = ?", "posted < ?"]);
+    assert.deepEqual(values, [0, next]);
+  }
+});
 
 /** 기존 시도를 초기화하고 원본 변경에 따라 페이지와 선택지가 즉시 갱신되는지 검증한다. */
 test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 유지한다", async () => {
@@ -17,7 +41,7 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     await client.executeMultiple(`
       INSERT INTO notices VALUES ('A', '000', '2026-01-01',
         '{"title":"공고","payload":{"dmItemMap":{"rgnLmtYn":"Y","prcmBsneSeNm":"기타"}}}',
-        '{"fields":{"posted":"2026-01-01","searchTitle":"공고"},"regionOptions":["서울","서울"],"mock":1}');
+        '{"fields":{"posted":"2026-01-01","submission":"2026-01-31 23:59:59","searchTitle":"공고"},"regionOptions":["서울","서울"],"mock":1}');
       INSERT INTO g2b_collection_attempts (id, section, number, revision, opening_revision, input, started_at)
       VALUES (1,'notices','B','000','','{}','2026-01-01'), (2,'notices','B','000','','{}','2026-01-02');
     `);
@@ -72,6 +96,14 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     const candidatePlan = ascendingPlan.rows.filter(({ parent }) => parent === paged.id);
     assert.match(candidatePlan.map(({ detail }) => detail).join("\n"), /USING INDEX g2b_notice_list_posted_asc/);
     assert.doesNotMatch(candidatePlan.map(({ detail }) => detail).join("\n"), /TEMP B-TREE FOR ORDER BY/);
+    // 종료일 마지막 시각까지 포함하고 날짜가 없는 미수집 공고는 제외해야 한다.
+    const submissionRange = { from: "2026-01-31", to: "2026-01-31" };
+    const filtered = await list.page({ ...query, filters: { submission: submissionRange } });
+    assert.deepEqual(filtered.rows.map(({ number }) => number), ["A"]);
+    assert.deepEqual(filtered.counts, { total: 1, collected: 1, uncollected: 0 });
+    // 실제 조건이 제출 시작일 인덱스를 범위 조회에 사용해야 한다.
+    const submissionPlan = await client.execute({ ...lastStatement, sql: `EXPLAIN QUERY PLAN ${lastStatement.sql}` });
+    assert.ok(submissionPlan.rows.some(({ detail }) => /SEARCH .*g2b_notice_list_submission/.test(detail)));
     // 수집 여부와 모의공고 여부가 함께 바뀌는 양방향 전이를 같은 트랜잭션에서 검증한다.
     const transaction = await client.transaction("write");
     try {

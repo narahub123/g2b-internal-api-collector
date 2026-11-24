@@ -3,7 +3,7 @@ import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query"
 import { etcNoticeDetail, isMockNotice, noticeDetail } from "@/entities/notice/model/notice-detail";
 import type { Notice } from "@/entities/notice/model/types";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
-import { cleanText, searchText, sortDate } from "./collection-list-query";
+import { appendCollectionDateRange, cleanText, searchText, sortDate } from "./collection-list-query";
 import { queryNoticePage } from "./notice-list-page";
 
 // 사용자 입찰공고의 조회 결과, 집계, 선택지에 같은 노출 기준을 적용한다.
@@ -150,19 +150,21 @@ export function openNoticeList(db: G2bDatabase) {
         where.push(match);
         values.push(searchText(search));
       }
-      for (const column of ["posted", "submission", "budget"]) {
-        const range = query.filters[column];
-        if (!range || !("from" in range || "to" in range)) continue;
-        // 기존 날짜 비교는 시각을 제외하고 예산은 숫자 범위를 적용한다.
-        const expression = column === "budget" ? "json_extract(fields, '$.budget')"
-          : column === "posted" ? "substr(posted, 1, 10)" : "substr(json_extract(fields, '$.submission'), 1, 10)";
-        if (range.from !== undefined) {
-          where.push(`${expression} >= ?`);
-          values.push(range.from);
+      // 날짜 경계는 게시일 열과 제출 시작일 인덱스의 표현식에 직접 적용한다.
+      appendCollectionDateRange(where, values, "posted", query.filters.posted);
+      appendCollectionDateRange(where, values, "json_extract(fields, '$.submission')", query.filters.submission);
+      // 예산은 JSON에 저장한 숫자에 기존의 포함 범위를 적용한다.
+      const budget = query.filters.budget;
+      if (budget && ("from" in budget || "to" in budget)) {
+        // 최솟값이 지정된 경우 같거나 큰 예산을 선택한다.
+        if (budget.from !== undefined) {
+          where.push("json_extract(fields, '$.budget') >= ?");
+          values.push(budget.from);
         }
-        if (range.to !== undefined) {
-          where.push(`${expression} <= ?`);
-          values.push(range.to);
+        // 최댓값이 지정된 경우 같거나 작은 예산을 선택한다.
+        if (budget.to !== undefined) {
+          where.push("json_extract(fields, '$.budget') <= ?");
+          values.push(budget.to);
         }
       }
       const selected = query.filters.region;

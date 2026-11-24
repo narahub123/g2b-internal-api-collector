@@ -3,7 +3,7 @@ import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collectio
 import type { G2bDatabase, SQLInputValue } from "./database";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
-import { cleanText, searchText, sortDate } from "./collection-list-query";
+import { appendCollectionDateRange, cleanText, searchText, sortDate } from "./collection-list-query";
 
 /** 수집 원본에서 목록 검색과 정렬에 필요한 파생값을 계산한다. */
 export function orderPlanFields(data: unknown) {
@@ -66,17 +66,20 @@ export function openOrderPlanList(db: G2bDatabase) {
         where.push(`instr(${column}, ?) > 0`);
         values.push(searchText(query.search.query));
       }
-      for (const id of ["released", "budget"]) {
-        const range = query.filters[id];
-        if (!range || !("from" in range || "to" in range)) continue;
-        const column = id === "released" ? "substr(released, 1, 10)" : "budget";
-        if (range.from !== undefined) {
-          where.push(`${column} >= ?`);
-          values.push(range.from);
+      // 공개일 범위는 일시 열을 그대로 비교해 기존 인덱스로 탐색한다.
+      appendCollectionDateRange(where, values, "released", query.filters.released);
+      // 예산 범위는 지정한 경계만 포함 비교한다.
+      const budget = query.filters.budget;
+      if (budget && ("from" in budget || "to" in budget)) {
+        // 하한과 같거나 큰 예산을 선택한다.
+        if (budget.from !== undefined) {
+          where.push("budget >= ?");
+          values.push(budget.from);
         }
-        if (range.to !== undefined) {
-          where.push(`${column} <= ?`);
-          values.push(range.to);
+        // 상한과 같거나 작은 예산을 선택한다.
+        if (budget.to !== undefined) {
+          where.push("budget <= ?");
+          values.push(budget.to);
         }
       }
       const selected = query.filters.business;

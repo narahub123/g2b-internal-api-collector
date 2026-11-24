@@ -1,6 +1,7 @@
 import type { G2bDatabase, SQLInputValue } from "./database";
 import { decodeHTMLStrict } from "entities";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
+import type { ListFilterValues } from "@/shared/ui/list-controls/model";
 import { formatG2bDisplayDate, formatG2bDisplayDateTime } from "@/shared/lib/g2b/g2b-display-format";
 import type { CollectionListRow, CollectionSection } from "./collection-attempts";
 import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collection-list";
@@ -26,6 +27,36 @@ export function sortDate(value: unknown) {
   const day = date.replaceAll("/", "-");
   const time = /[ T](\d{2}:\d{2})(?::(\d{2}))?/.exec(formatted);
   return time ? `${day} ${time[1]}:${time[2] ?? "00"}` : day;
+}
+
+/**
+ * 검증된 날짜 범위를 저장 일시의 인덱스로 비교할 수 있도록 SQL 조건과 인자를 추가한다.
+ * @param where 기존 검색과 필터의 SQL 조건을 모으는 배열.
+ * @param values 조건과 같은 순서로 쿼리에 전달할 인자 배열.
+ * @param expression 정규화된 일시를 제공하는 저장소 내부의 고정 SQL 표현식.
+ * @param range 화면에서 검증된 시작일과 종료일을 담은 필터 값.
+ */
+export function appendCollectionDateRange(
+  where: string[],
+  values: SQLInputValue[],
+  expression: string,
+  range: ListFilterValues[string] | undefined,
+) {
+  // 적용할 날짜 경계가 없으면 기존 조건과 바인딩을 그대로 사용한다.
+  if (!range || !("from" in range || "to" in range)) return;
+  // 날짜만 저장된 값과 시작일의 모든 시각을 포함한다.
+  if (typeof range.from === "string") {
+    where.push(`${expression} >= ?`);
+    values.push(range.from);
+  }
+  // 종료일의 마지막 시각까지 포함하도록 그 다음 날짜를 배타적 상한으로 사용한다.
+  if (typeof range.to === "string") {
+    // 지원하는 최대 연도의 다음 날은 정렬 순서만 표현하는 문자열로 대신한다.
+    const nextDay = range.to === "9999-12-31" ? "9999-12-32" : new Date(Date.parse(range.to) + 86_400_000).toISOString().slice(0, 10);
+    // SQL에서 원본 일시를 변환하지 않아 날짜 인덱스로 범위를 탐색할 수 있다.
+    where.push(`${expression} < ?`);
+    values.push(nextDay);
+  }
 }
 
 type CollectionPageOptions = {
@@ -214,9 +245,8 @@ export function collectionListCriteria(
     return conditions.join(" AND ");
   }
 
-  // 계약일 등 업무 날짜의 날짜 부분을 비교하고 업무가 제공한 추가 범위 조건도 합친다.
-  const date = rangeCondition("date", "substr(sortDate, 1, 10)");
-  if (date) where.push(date);
+  // 정규화된 업무 일시를 인덱스로 비교한 뒤 업무별 추가 범위 조건을 합친다.
+  appendCollectionDateRange(where, values, "sortDate", query.filters.date);
   const extra = extraCondition?.(rangeCondition);
   if (extra) where.push(extra);
 
