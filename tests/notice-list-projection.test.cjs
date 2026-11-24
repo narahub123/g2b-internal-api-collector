@@ -41,7 +41,7 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     await client.executeMultiple(`
       INSERT INTO notices VALUES ('A', '000', '2026-01-01',
         '{"title":"공고","payload":{"dmItemMap":{"rgnLmtYn":"Y","prcmBsneSeNm":"기타"}}}',
-        '{"fields":{"posted":"2026-01-01","submission":"2026-01-31 23:59:59","searchTitle":"공고"},"regionOptions":["서울","서울"],"mock":1}');
+        '{"fields":{"posted":"2026-01-01","submission":"2026-01-31 23:59:59","searchTitle":"공고","budget":0},"regionOptions":["서울","서울"],"mock":1}');
       INSERT INTO g2b_collection_attempts (id, section, number, revision, opening_revision, input, started_at)
       VALUES (1,'notices','B','000','','{}','2026-01-01'), (2,'notices','B','000','','{}','2026-01-02');
     `);
@@ -104,6 +104,12 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     // 실제 조건이 제출 시작일 인덱스를 범위 조회에 사용해야 한다.
     const submissionPlan = await client.execute({ ...lastStatement, sql: `EXPLAIN QUERY PLAN ${lastStatement.sql}` });
     assert.ok(submissionPlan.rows.some(({ detail }) => /SEARCH .*g2b_notice_list_submission/.test(detail)));
+    // 0원 경계를 포함하고 예산이 없는 행을 제외한 뒤 두 조회 경로의 실행 계획을 확인한다.
+    const budget = await list.page({ ...query, filters: { budget: { from: 0, to: 0 } } });
+    assert.deepEqual(budget.rows.map(({ number }) => number), ["A"]);
+    const budgetPlan = await client.execute({ ...lastStatement, sql: `EXPLAIN QUERY PLAN ${lastStatement.sql}` });
+    assert.ok(budgetPlan.rows.some(({ detail }) => /SEARCH g2b_notice_list USING (?:COVERING )?INDEX g2b_notice_list_budget/.test(detail)));
+    assert.ok(budgetPlan.rows.some(({ detail }) => /USING INDEX g2b_notice_list_posted\b/.test(detail)));
     // 수집 여부와 모의공고 여부가 함께 바뀌는 양방향 전이를 같은 트랜잭션에서 검증한다.
     const transaction = await client.transaction("write");
     try {

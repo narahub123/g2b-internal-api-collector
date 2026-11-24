@@ -1,4 +1,5 @@
 import type { CollectionListRow } from "./collection-attempts";
+import { budgetPageSql } from "./budget-range-page";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
 import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collection-list";
 import type { G2bDatabase } from "./database";
@@ -40,7 +41,12 @@ function budgetConditions(range: (id: string, expression: string) => string) {
     range("budget", "json_extract(fields, '$.budget')"),
     range("budgetUsd", "json_extract(fields, '$.budgetUsd')"),
   ].filter(Boolean);
-  return conditions.length ? `(${conditions.map((value) => `(${value})`).join(" OR ")})` : "";
+  // 두 통화를 결합할 때 각 OR 분기에도 공개 조건을 넣어 통화별 부분 인덱스를 탐색한다.
+  if (conditions.length === 2) {
+    return `((visible = 1 AND ${conditions[0]}) OR (visible = 1 AND ${conditions[1]}))`;
+  }
+  // 단일 통화는 목록 최상위 조건의 공개 범위를 그대로 적용한다.
+  return conditions[0] ?? "";
 }
 
 /**
@@ -83,7 +89,11 @@ export function openPriorSpecList(db: G2bDatabase) {
     async page(query: CollectionListQuery) {
       // 공통 목록과 동일한 사전규격번호·접수번호 검색, 업무구분 및 날짜 비교 조건을 적용한다.
       const { where, values, order, ascending } = collectionListCriteria(query, budgetConditions);
-      const criteria = ["visible = 1", ...where].join(" AND ");
+      // 기본 날짜순 예산 단독 요청만 범위에 따라 페이지 조회 경로를 고른다.
+      const adaptiveBudget = order === "sortDate" && !ascending && where.length === 1 && where[0].includes("json_extract(fields, '$.budget");
+      // 결합 필터와 다른 정렬은 예산 인덱스 도입 전의 후보 탐색을 유지한다.
+      const filters = adaptiveBudget ? where : where.map((clause) => clause.replaceAll("json_extract(fields, '$.budget", "+json_extract(fields, '$.budget"));
+      const criteria = ["visible = 1", ...filters].join(" AND ");
       const direction = ascending ? "ASC NULLS LAST" : "DESC";
       // 기본 날짜 오름차순은 빈 날짜가 마지막에 오도록 인덱스와 같은 순서로 후보를 읽는다.
       const pageOrder = order === "sortDate" && ascending
@@ -97,15 +107,24 @@ export function openPriorSpecList(db: G2bDatabase) {
         : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'prior-specs' AND scope = 'all'";
       const selected = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
       // 정렬과 페이지 경계를 먼저 확정해 원본 사전규격과 최신 시도는 선택한 키에 한해서 조회한다.
-      const sql = `WITH totals AS MATERIALIZED (${totals}),
-        paged AS MATERIALIZED (
+      const defaultPage = `paged AS MATERIALIZED (
           SELECT number, revision, opening_revision, collected_at, latest_id, ${order} AS sortValue
           FROM g2b_prior_spec_list WHERE ${criteria} AND ${status}
           ORDER BY ${pageOrder}, number, revision, opening_revision
           LIMIT ${pageSize} OFFSET (
             SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
           )
-        )
+        )`;
+      // 좁은 예산은 예산 인덱스로 탐색하고 넓은 예산은 기존 날짜 인덱스 순서대로 읽는다.
+      const dateIndex = query.status === "collected" ? "collected"
+        : query.status === "uncollected" ? "uncollected" : "date";
+      // 넓은 범위에서도 수집 상태별 부분 인덱스로 관련 행만 읽는다.
+      const budgetPage = adaptiveBudget ? budgetPageSql(
+        "prior-specs", "g2b_prior_spec_list",
+        `g2b_prior_spec_list INDEXED BY g2b_prior_spec_list_${dateIndex}`, "sortDate", criteria, status, selected,
+      ) : "";
+      // 두 페이지 경로는 기존 표시 순서와 응답 조립을 공유한다.
+      const sql = `WITH totals AS MATERIALIZED (${totals}), ${adaptiveBudget ? budgetPage : defaultPage}
         SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
           paged.collected_at AS collectedAt, json_extract(saved.data, '$.payload.dlBfSpecM.bfSpecNm') AS title,
           CAST(json_extract(saved.data, '$.payload.dlBfSpecM.prcmBsneSeCd') AS TEXT) AS businessCode,
@@ -117,7 +136,8 @@ export function openPriorSpecList(db: G2bDatabase) {
         LEFT JOIN g2b_collection_attempts attempt ON attempt.id = paged.latest_id
         ORDER BY paged.sortValue ${direction}, paged.number, paged.revision, paged.opening_revision`;
       // 조건 인자를 집계와 페이지에 각각 전달한 뒤 빈 목록에서도 반환되는 집계 행을 사용한다.
-      const rows = await db.prepare(sql).all(...values, ...values, query.page) as
+      const args = adaptiveBudget ? [...values, query.page, "all", ...values, ...values] : [...values, ...values, query.page];
+      const rows = await db.prepare(sql).all(...args) as
         (CollectionListRow & { total: number; collected: number; selectedCount: number })[];
       const { total, collected, selectedCount } = rows[0];
       const totalPages = Math.ceil(selectedCount / pageSize);

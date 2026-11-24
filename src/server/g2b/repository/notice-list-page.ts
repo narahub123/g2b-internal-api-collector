@@ -1,3 +1,4 @@
+import { budgetPageSql } from "./budget-range-page";
 import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collection-list";
 import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query";
 import type { CollectionListRow } from "./collection-attempts";
@@ -28,6 +29,10 @@ type PageOptions = {
 export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, options: PageOptions) {
   // 기본 게시일순은 인덱스 열을 직접 사용하고 나머지 정렬은 저장된 파생값을 사용한다.
   const { where, values, order, ascending, excludeMockNotices } = options;
+  // 기존 게시일순이 보장되는 예산 단독 요청에서만 일치 건수로 조회 경로를 고른다.
+  const budgetExpression = "json_extract(fields, '$.budget')";
+  const adaptiveBudget = order === "posted" && !ascending && where.length > 0
+    && where.every((clause) => clause.startsWith(budgetExpression));
   const sortValue = order === "posted" ? "posted" : `json_extract(fields, '$.${order}')`;
   const direction = ascending ? "ASC NULLS LAST" : "DESC";
   // 게시일 오름차순에서는 빈 날짜를 마지막에 두는 순서까지 인덱스와 일치시킨다.
@@ -37,27 +42,43 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
   // 공고번호와 차수가 같으면 개찰차수로 페이지 경계의 순서를 고정한다.
   const tieBreak = "number, revision, opening_revision";
   // 검색 범위는 집계와 페이지에 적용하고 수집 상태는 페이지에만 적용한다.
-  const criteria = [...(excludeMockNotices ? ["is_mock = 0"] : []), ...where];
+  // 다른 조회의 예산 비교는 기존 결과를 유지하면서 새 인덱스의 탐색 대상에서 제외한다.
+  const filters = adaptiveBudget ? where : where.map((clause) =>
+    clause.startsWith(budgetExpression) ? "+" + clause : clause);
+  const criteria = [...(excludeMockNotices ? ["is_mock = 0"] : []), ...filters];
   const condition = criteria.length ? criteria.join(" AND ") : "TRUE";
   const status = query.status === "collected" ? "collected_at IS NOT NULL"
     : query.status === "uncollected" ? "collected_at IS NULL" : "TRUE";
   // 기본 목록은 업무와 노출 범위로 공통 집계 한 행을 읽고, 검색·필터는 일치하는 목록 행을 센다.
   const scope = excludeMockNotices ? "exclude_mock" : "all";
+  // 예산 정렬은 기존 정렬 경로를 유지해 범위 필터용 인덱스의 영향을 받지 않는다.
+  const candidateOrder = order === "budget" ? "+" + pageOrder : pageOrder;
+  // 예산 단독 집계는 수집 상태와 공개 범위가 포함된 커버링 인덱스를 읽는다.
+  const totalsSource = adaptiveBudget ? "g2b_notice_list INDEXED BY g2b_notice_list_budget" : "g2b_notice_list";
   const totals = where.length
-    ? `SELECT COUNT(*) AS total, COUNT(collected_at) AS collected FROM g2b_notice_list WHERE ${condition}`
+    ? `SELECT COUNT(*) AS total, COUNT(collected_at) AS collected FROM ${totalsSource} WHERE ${condition}`
     : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'notices' AND scope = ?";
   // 선택 상태의 건수로 요청 페이지가 범위를 벗어났는지 계산한다.
   const selected = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
+  // 상태와 모의공고 노출 조건에 맞는 기존 게시일 인덱스를 선택한다.
+  const postedIndex = query.status === "uncollected" ? "uncollected"
+    : query.status === "collected" ? (excludeMockNotices ? "public" : "collected") : "posted";
+  // 예산 단독 요청은 공고의 노출 범위와 상태에 맞는 분기 SQL을 사용한다.
+  const budgetPage = adaptiveBudget ? budgetPageSql(
+    "notices", "g2b_notice_list INDEXED BY g2b_notice_list_budget",
+    `g2b_notice_list INDEXED BY g2b_notice_list_${postedIndex}`, "posted", condition, status, selected,
+  ) : "";
   // 페이지 키를 먼저 확정한 뒤 기본 키로 공고와 최신 수집 시도의 상세 정보를 가져온다.
-  const sql = `WITH totals AS MATERIALIZED (${totals}),
-    paged AS MATERIALIZED (
+  const defaultPage = `paged AS MATERIALIZED (
       SELECT number, revision, opening_revision, collected_at, latest_id, ${sortValue} AS sortValue
       FROM g2b_notice_list WHERE ${condition} AND ${status}
-      ORDER BY ${pageOrder}, ${tieBreak}
+      ORDER BY ${candidateOrder}, ${tieBreak}
       LIMIT ${pageSize} OFFSET (
         SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
       )
-    )
+    )`;
+  // 기존 최종 표시 순서와 조회 결과 형태를 두 경로에서 공유한다.
+  const sql = `WITH totals AS MATERIALIZED (${totals}), ${adaptiveBudget ? budgetPage : defaultPage}
     SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
       paged.collected_at AS collectedAt, json_extract(saved.data, '$.title') AS title,
       CAST(COALESCE(json_extract(saved.data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),
@@ -70,7 +91,9 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
     LEFT JOIN g2b_collection_attempts attempt ON attempt.id = paged.latest_id
     ORDER BY paged.sortValue ${direction}, paged.number, paged.revision, paged.opening_revision`;
   // 집계에는 검색·필터의 인자 또는 기본 노출 범위를 전달하고 페이지에는 검색·필터 인자를 전달한다.
-  const rows = await db.prepare(sql).all(...(where.length ? values : [scope]), ...values, query.page) as
+  const args = adaptiveBudget ? [...values, query.page, scope, ...values, ...values]
+    : [...(where.length ? values : [scope]), ...values, query.page];
+  const rows = await db.prepare(sql).all(...args) as
     (CollectionListRow & { total: number; collected: number; selectedCount: number })[];
   // 빈 페이지에도 집계가 한 행 남으므로 첫 행에서 페이지 범위를 계산한다.
   const { total, collected, selectedCount } = rows[0];

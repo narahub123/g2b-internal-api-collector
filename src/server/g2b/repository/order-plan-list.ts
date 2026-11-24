@@ -1,4 +1,5 @@
 import type { CollectionListRow } from "./collection-attempts";
+import { budgetPageSql } from "./budget-range-page";
 import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collection-list";
 import type { G2bDatabase, SQLInputValue } from "./database";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
@@ -91,7 +92,11 @@ export function openOrderPlanList(db: G2bDatabase) {
       // 검증된 정렬 선택을 공개일시 또는 정규화 사업명으로 연결한다.
       const order = field === "title" ? "sortTitle" : "released";
       const ascending = direction === "asc";
-      const criteria = ["visible = 1", ...where].join(" AND ");
+      // 기본 날짜순 예산 단독 요청만 범위에 따라 페이지 조회 경로를 고른다.
+      const adaptiveBudget = order === "released" && !ascending && where.length > 0 && where.every((clause) => clause.startsWith("budget "));
+      // 결합 필터와 다른 정렬은 예산 인덱스 도입 전의 후보 탐색을 유지한다.
+      const filters = adaptiveBudget ? where : where.map((clause) => clause.startsWith("budget ") ? "+" + clause : clause);
+      const criteria = ["visible = 1", ...filters].join(" AND ");
       const sortDirection = ascending ? "ASC NULLS LAST" : "DESC";
       // 기본 날짜 오름차순은 빈 날짜가 마지막에 오도록 인덱스와 같은 순서로 후보를 읽는다.
       const pageOrder = order === "released" && ascending
@@ -105,15 +110,24 @@ export function openOrderPlanList(db: G2bDatabase) {
         : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'order-plans' AND scope = 'all'";
       const selectedCountSql = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
       // 정렬과 페이지 경계를 먼저 확정해 원본 발주계획과 최신 시도는 선택한 키에 한해서 조회한다.
-      const sql = `WITH totals AS MATERIALIZED (${totals}),
-        paged AS MATERIALIZED (
+      const defaultPage = `paged AS MATERIALIZED (
           SELECT number, revision, opening_revision, collected_at, latest_id, ${order} AS sortValue
           FROM g2b_order_plan_list WHERE ${criteria} AND ${status}
           ORDER BY ${pageOrder}, number, revision, opening_revision
           LIMIT ${pageSize} OFFSET (
             SELECT (max(1, min(?, ((${selectedCountSql}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
           )
-        )
+        )`;
+      // 좁은 예산은 예산 인덱스로 탐색하고 넓은 예산은 기존 날짜 인덱스 순서대로 읽는다.
+      const dateIndex = query.status === "collected" ? "collected"
+        : query.status === "uncollected" ? "uncollected" : "released";
+      // 넓은 범위에서도 수집 상태별 부분 인덱스로 관련 행만 읽는다.
+      const budgetPage = adaptiveBudget ? budgetPageSql(
+        "order-plans", "g2b_order_plan_list INDEXED BY g2b_order_plan_list_budget",
+        `g2b_order_plan_list INDEXED BY g2b_order_plan_list_${dateIndex}`, "released", criteria, status, selectedCountSql,
+      ) : "";
+      // 두 페이지 경로는 기존 표시 순서와 응답 조립을 공유한다.
+      const sql = `WITH totals AS MATERIALIZED (${totals}), ${adaptiveBudget ? budgetPage : defaultPage}
         SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
           paged.collected_at AS collectedAt, COALESCE(NULLIF(TRIM(json_extract(saved.data, '$.payload.dlOderPlanM.bizNm')), ''), json_extract(saved.data, '$.payload.dlOderPlanM.itemNm')) AS title,
           CAST(json_extract(saved.data, '$.payload.dlOderPlanM.prcmBsneSeCd') AS TEXT) AS businessCode,
@@ -125,7 +139,8 @@ export function openOrderPlanList(db: G2bDatabase) {
         LEFT JOIN g2b_collection_attempts attempt ON attempt.id = paged.latest_id
         ORDER BY paged.sortValue ${sortDirection}, paged.number, paged.revision, paged.opening_revision`;
       // 조건 인자를 집계와 페이지에 각각 전달한 뒤 빈 목록에서도 반환되는 집계 행을 사용한다.
-      const rows = await db.prepare(sql).all(...values, ...values, query.page) as
+      const args = adaptiveBudget ? [...values, query.page, "all", ...values, ...values] : [...values, ...values, query.page];
+      const rows = await db.prepare(sql).all(...args) as
         (CollectionListRow & { total: number; collected: number; selectedCount: number })[];
       const { total, collected, selectedCount } = rows[0];
       const totalPages = Math.ceil(selectedCount / pageSize);

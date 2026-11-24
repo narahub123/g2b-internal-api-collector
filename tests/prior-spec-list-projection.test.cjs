@@ -72,6 +72,16 @@ test("사전규격 목록이 조회 불가 연결을 해당 미수집 키에만 
       return execute(statement);
     };
     for (const status of ["total", "collected", "uncollected"]) await list.page({ ...query, status });
+    // 원화와 외자 범위를 함께 지정할 때 빈 예산은 제외하고 두 통화 인덱스를 각각 탐색한다.
+    const budgetPage = await list.page({ ...query, filters: { budget: { from: 0 }, budgetUsd: { to: 100 } } });
+    assert.deepEqual(budgetPage.rows, []);
+    // 원화와 외자에 모두 같은 인덱스를 사용하는 전체 스캔을 방지한다.
+    const budgetStatement = statements.at(-1);
+    const budgetPlan = await client.execute({ ...budgetStatement, sql: `EXPLAIN QUERY PLAN ${budgetStatement.sql}` });
+    const budgetDetails = budgetPlan.rows.map(({ detail }) => detail).join("\n");
+    assert.match(budgetDetails, /MULTI-INDEX OR/);
+    assert.match(budgetDetails, /SEARCH .*INDEX g2b_prior_spec_list_budget \(/);
+    assert.match(budgetDetails, /SEARCH .*INDEX g2b_prior_spec_list_budget_usd \(/);
     db.execute = execute;
     for (const [position, index] of ["date", "collected", "uncollected"].entries()) {
       const { sql, args } = statements[position];

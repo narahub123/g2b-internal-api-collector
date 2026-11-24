@@ -633,6 +633,23 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (28);
       `);
     }
+    // 예산과 수집 상태를 함께 저장하는 범위 집계 인덱스의 적용 여부를 확인한다.
+    const budgetRange = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 29");
+    // 인덱스 생성과 버전 기록을 같은 트랜잭션에서 마친다.
+    if (!budgetRange.rows.length) {
+      // 입찰공고는 모의공고 여부를 포함하고 발주계획과 사전규격은 노출 가능한 키만 인덱싱한다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_list_budget
+          ON g2b_notice_list(json_extract(fields, '$.budget'), collected_at, is_mock);
+        CREATE INDEX g2b_order_plan_list_budget
+          ON g2b_order_plan_list(budget, collected_at) WHERE visible = 1;
+        CREATE INDEX g2b_prior_spec_list_budget
+          ON g2b_prior_spec_list(json_extract(fields, '$.budget'), collected_at) WHERE visible = 1;
+        CREATE INDEX g2b_prior_spec_list_budget_usd
+          ON g2b_prior_spec_list(json_extract(fields, '$.budgetUsd'), collected_at) WHERE visible = 1;
+        INSERT INTO g2b_schema_migrations (version) VALUES (29);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();
