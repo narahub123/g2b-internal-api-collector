@@ -44,6 +44,22 @@ test("희소한 번호 조각은 같은 스냅샷에서 공고 목록 후보를 
     const details = plan.rows.map(({ detail }) => detail).join("\n");
     assert.match(details, /SEARCH g2b_number_search_grams USING PRIMARY KEY/);
     assert.match(details, /SEARCH listed USING PRIMARY KEY/);
+    // 목록에 저장한 기관명 조각은 배열의 항목별로 검색할 수 있어야 한다.
+    await client.execute(`UPDATE notices SET query_data = json_set(query_data,'$.fields.agencies',json_array('서울한빛교통센터','한빛교통본부')) WHERE number = 'SPECIALXYZ'`);
+    const agency = await list.page({ ...request, search: { field: "agency", query: "한빛교통" } });
+    assert.equal(agency.counts.total, 1);
+    const agencyPlan = await client.execute({ ...statement, sql: `EXPLAIN QUERY PLAN ${statement.sql}` });
+    assert.match(agencyPlan.rows.map(({detail}) => detail).join("\n"), /SEARCH g2b_number_search_grams USING PRIMARY KEY/);
+    // 제목 변경이 기관 조각을 삭제하지 않는지 삭제 감시 트리거와 실제 원본 갱신으로 확인한다.
+    await client.executeMultiple(`CREATE TRIGGER assert_agency_unchanged BEFORE DELETE ON g2b_number_search_grams
+      WHEN OLD.source = 4 BEGIN SELECT RAISE(ABORT, '기관 조각을 삭제함'); END;
+      UPDATE notices SET query_data = json_set(query_data,'$.fields.searchTitle','한빛설계용역') WHERE number = 'SPECIALXYZ';
+      DROP TRIGGER assert_agency_unchanged;`);
+    const titled = await list.page({ ...request, search: { field: "title", query: "설계용역" } });
+    assert.equal(titled.counts.total, 1);
+    // 두 기관명을 이어 붙여야만 일치하는 검색어는 기관 배열에서 찾을 수 없다.
+    const acrossAgencies = await list.page({ ...request, search: { field: "agency", query: "센터한빛" } });
+    assert.equal(acrossAgencies.counts.total, 0);
     // 같은 후보라도 사용자 목록의 모의공고 제외 조건은 적용되어야 한다.
     const publicPage = await list.page(request, { excludeMockNotices: true });
     assert.deepEqual(publicPage.counts, { total: 0, collected: 0, uncollected: 0 });

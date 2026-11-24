@@ -5,7 +5,7 @@ import type { Notice } from "@/entities/notice/model/types";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { appendCollectionDateRange, cleanText, searchText, sortDate } from "./collection-list-query";
 import { queryNoticePage } from "./notice-list-page";
-import { withNumberSearch } from "./number-search";
+import { withListSearch } from "./number-search";
 
 // 사용자 입찰공고의 조회 결과, 집계, 선택지에 같은 노출 기준을 적용한다.
 type NoticeListOptions = { excludeMockNotices?: boolean };
@@ -185,11 +185,10 @@ export function openNoticeList(db: G2bDatabase) {
       }
       const [field, direction] = query.sort.split("-");
       const order = sortColumns.get(field) ?? "posted";
-      // 번호 검색에서만 공통 후보 탐색을 적용한다.
-      const numberKeyword = query.search.field === "number" ? query.search.query : "";
+      // 지원하는 검색에만 공통 후보 탐색을 적용한다.
       const pageOptions = { where, values, order, ascending: direction === "asc", excludeMockNotices };
       // 후보 확인부터 집계와 페이지 선택까지 동일한 스냅샷에서 수행한다.
-      return withNumberSearch(db, "notices", numberKeyword, (grams) =>
+      return withListSearch(db, "notices", query.search, (grams) =>
         queryNoticePage(db, query, { ...pageOptions, grams }));
     },
   };

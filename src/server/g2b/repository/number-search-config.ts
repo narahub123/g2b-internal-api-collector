@@ -10,3 +10,21 @@ export const numberSearchSections = {
 
 // 목록 조회와 마이그레이션에서 사용할 수 있는 업무 이름을 제한한다.
 export type NumberSearchSection = keyof typeof numberSearchSections;
+
+// 이름 검색의 원본 표현식과 활성화할 트라이그램 출처를 함께 정의한다.
+export const nameSearchSections: Partial<Record<NumberSearchSection, {
+  // 제목 검색에 쓰는 기존 목록 값이다.
+  title?: string;
+  // 기관 검색에 쓰는 기존 단일 값 또는 JSON 배열이다.
+  agency?: { expression: string; array: boolean };
+}>> = {
+  notices: {
+    title: "json_extract(@.fields, '$.searchTitle')",
+    agency: { expression: "json_extract(@.fields, '$.agencies')", array: true },
+  },
+  "order-plans": { title: "@.sortTitle", agency: { expression: "@.agency", array: false } },
+  "prior-specs": { title: "@.sortTitle", agency: { expression: "json_extract(@.fields, '$.agencies')", array: true } },
+  "opening-results": { title: "@.sortTitle", agency: { expression: "json_extract(@.fields, '$.agencies')", array: true } },
+  "contract-requests": { title: "@.sortTitle", agency: { expression: "@.agency", array: false } },
+  contracts: { title: "@.sortTitle", agency: { expression: "json_extract(@.fields, '$.agencies')", array: true } },
+};

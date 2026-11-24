@@ -1,7 +1,7 @@
 import type { Client } from "@libsql/client";
 import { orderPlanListSchema } from "./order-plan-list-schema";
-import { numberSearchSections, type NumberSearchSection } from "./number-search-config";
-import { numberSearchSchema, numberSearchSectionSql } from "./number-search-schema";
+import { nameSearchSections, numberSearchSections, type NumberSearchSection } from "./number-search-config";
+import { nameSearchSectionSql, numberSearchSchema, numberSearchSectionSql } from "./number-search-schema";
 import { openingResultListSchema } from "./opening-result-list-schema";
 import { priorSpecListSchema } from "./prior-spec-list-schema";
 import { contractRequestListSchema } from "./contract-request-list-schema";
@@ -687,6 +687,27 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       }
       // 최초 적용은 버전 30을 기록하고 기존 버전 30은 이력을 유지한다.
       await transaction.execute("INSERT OR IGNORE INTO g2b_schema_migrations (version) VALUES (30)");
+    }
+    // 이름 출처를 추가한 DB만 검색값을 적재하고 이전 번호 트리거의 삭제 범위를 제한한다.
+    const nameGrams = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 31");
+    if (!nameGrams.rows.length) {
+      // 이름 검색이 활성화된 업무만 확장하고 기존 번호 조각은 다시 적재하지 않는다.
+      for (const section of Object.keys(nameSearchSections) as NumberSearchSection[]) {
+        const { table } = numberSearchSections[section];
+        await transaction.executeMultiple(`
+          DROP TRIGGER ${table}_number_grams_insert;
+          DROP TRIGGER ${table}_number_grams_delete;
+          DROP TRIGGER ${table}_number_grams_update;
+          ${numberSearchSectionSql(section).triggers}
+        `);
+        // 출처별 적재와 동기화 설치를 같은 트랜잭션에서 완료한다.
+        for (const { triggers, backfill } of nameSearchSectionSql(section)) {
+          await transaction.execute(backfill);
+          await transaction.executeMultiple(triggers);
+        }
+      }
+      // 작업을 반복해도 이름 조각을 중복 적재하지 않도록 완료 버전을 남긴다.
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (31)");
     }
     await transaction.commit();
   } finally {

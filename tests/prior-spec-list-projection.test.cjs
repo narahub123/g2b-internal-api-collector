@@ -18,7 +18,7 @@ test("사전규격 번호와 접수번호 조각을 같은 목록 키로 합친�
       INSERT INTO prior_specs SELECT printf('BASE%04d',i),'2026-01-01','{}','{}' FROM n;
       INSERT INTO prior_specs VALUES
         ('XYZ891','2026-01-01','{}','{"fields":{"receipt":"xyz891"}}'),
-        ('RECEIPT-ONLY','2026-01-01','{}','{"fields":{"receipt":"xyz891"}}');
+        ('RECEIPT-ONLY','2026-01-01','{}','{"searchTitle":"한빛설계용역","fields":{"receipt":"xyz891","agencies":["중앙한빛연구소"]}}');
       INSERT INTO notices VALUES ('XYZ891','','2026-01-01','{}','{}');
     `);
     // 번호와 접수번호가 모두 맞는 행 및 접수번호만 맞는 행을 한 번씩 반환해야 한다.
@@ -33,6 +33,11 @@ test("사전규격 번호와 접수번호 조각을 같은 목록 키로 합친�
       WHERE number = 'RECEIPT-ONLY'`);
     assert.deepEqual((await priorSpecList.page(query)).rows.map(({ number }) => number), ["XYZ891"]);
     assert.deepEqual((await priorSpecList.page({ ...query, search: { field: "number", query: "changed900" } })).rows.map(({ number }) => number), ["RECEIPT-ONLY"]);
+    // 번호·접수번호의 조각을 교체해도 제목과 기관의 기존 조각은 사용 가능해야 한다.
+    const title = await priorSpecList.page({ ...query, search: { field: "title", query: "설계용역" } });
+    const agencies = await priorSpecList.page({ ...query, search: { field: "agency", query: "한빛연구" } });
+    assert.deepEqual(title.rows.map(({ number }) => number), ["RECEIPT-ONLY"]);
+    assert.deepEqual(agencies.rows.map(({ number }) => number), ["RECEIPT-ONLY"]);
     assert.equal((await client.execute("SELECT COUNT(*) AS total FROM g2b_number_search_grams WHERE section = 1 AND gram = '891'")).rows[0].total, 1);
   } finally {
     // 계측에 사용한 DB 연결만 닫는다.

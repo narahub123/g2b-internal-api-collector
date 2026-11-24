@@ -1,4 +1,4 @@
-import { numberSearchSource, withNumberSearch } from "./number-search";
+import { numberSearchSource, withListSearch } from "./number-search";
 import type { CollectionListRow } from "./collection-attempts";
 import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collection-list";
 import type { G2bDatabase, SQLInputValue } from "./database";
@@ -94,14 +94,13 @@ export function openContractRequestList(db: G2bDatabase) {
         : `${order} ${sortDirection}`;
       const status = query.status === "collected" ? "collected_at IS NOT NULL"
         : query.status === "uncollected" ? "collected_at IS NULL" : "TRUE";
-      // 번호 검색만 후보를 좁히고 기존 필터를 통과한 행을 같은 스냅샷에서 조회한다.
-      const numberKeyword = query.search.field === "number" ? query.search.query : "";
+      // 지원되는 검색만 후보를 좁히고 기존 필터를 통과한 행을 같은 스냅샷에서 조회한다.
       /**
-       * 선택된 번호 조각으로 이 업무의 건수와 요청 페이지를 조회한다.
-       * @param grams 번호 검색의 출처별 조각. 비어 있으면 기존 목록을 읽는다.
+       * 선택된 검색 조각으로 이 업무의 건수와 요청 페이지를 조회한다.
+       * @param grams 검색 출처별 조각. 비어 있으면 기존 목록을 읽는다.
        * @returns 상태별 건수와 페이지 데이터.
        */
-      return withNumberSearch(db, "contract-requests", numberKeyword, async (grams) => {
+      return withListSearch(db, "contract-requests", query.search, async (grams) => {
         // 후보 제한이 가능하면 동일한 일치 집합을 집계와 페이지에 전달한다.
         const source = numberSearchSource("contract-requests", grams, criteria, values);
         // 기본 조회는 사전 집계 한 행을 사용하고 검색·필터 조회는 조건에 맞는 키를 센다.
