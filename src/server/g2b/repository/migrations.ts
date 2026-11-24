@@ -1,5 +1,6 @@
 import type { Client } from "@libsql/client";
 import { orderPlanListSchema } from "./order-plan-list-schema";
+import { noticeNumberGramsBackfill, noticeNumberGramsSchema } from "./notice-number-grams-schema";
 import { openingResultListSchema } from "./opening-result-list-schema";
 import { priorSpecListSchema } from "./prior-spec-list-schema";
 import { contractRequestListSchema } from "./contract-request-list-schema";
@@ -649,6 +650,15 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
           ON g2b_prior_spec_list(json_extract(fields, '$.budgetUsd'), collected_at) WHERE visible = 1;
         INSERT INTO g2b_schema_migrations (version) VALUES (29);
       `);
+    }
+    // 공고번호 검색용 조각이 아직 설치되지 않은 DB만 초기화한다.
+    const noticeNumberGrams = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 30");
+    if (!noticeNumberGrams.rows.length) {
+      // 조각 테이블과 동기화 트리거를 설치한다.
+      await transaction.executeMultiple(noticeNumberGramsSchema);
+      // 기존 키를 초기 적재한 다음 같은 트랜잭션에 완료 버전을 기록한다.
+      await transaction.execute(noticeNumberGramsBackfill);
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (30)");
     }
     await transaction.commit();
   } finally {

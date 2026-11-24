@@ -5,6 +5,7 @@ import type { Notice } from "@/entities/notice/model/types";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { appendCollectionDateRange, cleanText, searchText, sortDate } from "./collection-list-query";
 import { queryNoticePage } from "./notice-list-page";
+import { findSelectiveNoticeNumberGram, noticeNumberGrams } from "./notice-number-search";
 
 // 사용자 입찰공고의 조회 결과, 집계, 선택지에 같은 노출 기준을 적용한다.
 type NoticeListOptions = { excludeMockNotices?: boolean };
@@ -127,6 +128,7 @@ export function openNoticeList(db: G2bDatabase) {
 
     /**
      * 검색·필터에 일치하는 수집 상태별 건수와 선택된 상태의 현재 페이지를 함께 조회한다.
+     * @param query 정규화할 검색어, 필터, 정렬과 요청 페이지.
      * @param options 모의공고를 제외하면 검색 결과와 건수 및 페이지 수에 같은 조건을 적용한다.
      * @returns 범위를 벗어난 페이지는 마지막 페이지로 보정하며, 값 없는 행은 정렬 방향에 관계없이 뒤에 둔다.
      * @throws Turso에서 검색 또는 집계에 실패한 경우.
@@ -140,6 +142,8 @@ export function openNoticeList(db: G2bDatabase) {
         query.search.field === "number"
           ? query.search.query.replace(/[\s/-]+/g, "")
           : query.search.query;
+      // 최종 부분 일치에 전달하는 동일한 검색어로 후보 조각을 계산한다.
+      const keyword = search ? searchText(search) : "";
       if (search) {
         const match =
           query.search.field === "number"
@@ -148,7 +152,7 @@ export function openNoticeList(db: G2bDatabase) {
               ? "EXISTS (SELECT 1 FROM json_each(fields, '$.agencies') WHERE instr(value, ?) > 0)"
               : "instr(json_extract(fields, '$.searchTitle'), ?) > 0";
         where.push(match);
-        values.push(searchText(search));
+        values.push(keyword);
       }
       // 날짜 경계는 게시일 열과 제출 시작일 인덱스의 표현식에 직접 적용한다.
       appendCollectionDateRange(where, values, "posted", query.filters.posted);
@@ -181,10 +185,19 @@ export function openNoticeList(db: G2bDatabase) {
       }
       const [field, direction] = query.sort.split("-");
       const order = sortColumns.get(field) ?? "posted";
+      // 공고번호의 짧은 검색어와 다른 검색 유형은 기존 쿼리를 그대로 실행한다.
+      const grams = query.search.field === "number" ? noticeNumberGrams(keyword) : [];
+      const pageOptions = { where, values, order, ascending: direction === "asc", excludeMockNotices };
+      if (grams.length) {
+        // 후보 인덱스 탐색과 정확한 결과를 같은 읽기 트랜잭션에서 처리한다.
+        return db.transaction(async () => {
+          // 흔한 조각이면 numberGram이 비어 기존 목록 경로로 조회한다.
+          const numberGram = await findSelectiveNoticeNumberGram(db, grams);
+          return queryNoticePage(db, query, { ...pageOptions, numberGram });
+        }, false);
+      }
       // 상태별 건수와 선택 페이지를 동일한 스냅샷에서 조회한다.
-      return queryNoticePage(db, query, {
-        where, values, order, ascending: direction === "asc", excludeMockNotices,
-      });
+      return queryNoticePage(db, query, pageOptions);
     },
   };
 }
