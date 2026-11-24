@@ -601,6 +601,27 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (26);
       `);
     }
+    // 각 업무의 날짜 오름차순이 빈 날짜와 동일 날짜의 업무 키 순서까지 인덱스로 읽도록 한다.
+    const dateAscending = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 27");
+    // 아직 적용하지 않은 DB에서만 인덱스를 생성하고 같은 트랜잭션에 완료를 기록한다.
+    if (!dateAscending.rows.length) {
+      // 사전규격과 발주계획은 노출 가능한 키만 인덱싱한 뒤 완료 버전을 함께 기록한다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_list_posted_asc
+          ON g2b_notice_list((posted IS NULL), posted, number, revision, opening_revision);
+        CREATE INDEX g2b_contract_list_date_asc
+          ON g2b_contract_list((sortDate IS NULL), sortDate, number, revision, opening_revision);
+        CREATE INDEX g2b_contract_request_list_written_asc
+          ON g2b_contract_request_list((written IS NULL), written, number, revision, opening_revision);
+        CREATE INDEX g2b_prior_spec_list_date_asc
+          ON g2b_prior_spec_list((sortDate IS NULL), sortDate, number, revision, opening_revision) WHERE visible = 1;
+        CREATE INDEX g2b_opening_result_list_date_asc
+          ON g2b_opening_result_list((sortDate IS NULL), sortDate, number, revision, opening_revision);
+        CREATE INDEX g2b_order_plan_list_released_asc
+          ON g2b_order_plan_list((released IS NULL), released, number, revision, opening_revision) WHERE visible = 1;
+        INSERT INTO g2b_schema_migrations (version) VALUES (27);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

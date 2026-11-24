@@ -30,6 +30,10 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
   const { where, values, order, ascending, excludeMockNotices } = options;
   const sortValue = order === "posted" ? "posted" : `json_extract(fields, '$.${order}')`;
   const direction = ascending ? "ASC NULLS LAST" : "DESC";
+  // 게시일 오름차순에서는 빈 날짜를 마지막에 두는 순서까지 인덱스와 일치시킨다.
+  const pageOrder = order === "posted" && ascending
+    ? "(posted IS NULL) ASC, posted ASC"
+    : `${sortValue} ${direction}`;
   // 공고번호와 차수가 같으면 개찰차수로 페이지 경계의 순서를 고정한다.
   const tieBreak = "number, revision, opening_revision";
   // 검색 범위는 집계와 페이지에 적용하고 수집 상태는 페이지에만 적용한다.
@@ -49,7 +53,7 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
     paged AS MATERIALIZED (
       SELECT number, revision, opening_revision, collected_at, latest_id, ${sortValue} AS sortValue
       FROM g2b_notice_list WHERE ${condition} AND ${status}
-      ORDER BY ${sortValue} ${direction}, ${tieBreak}
+      ORDER BY ${pageOrder}, ${tieBreak}
       LIMIT ${pageSize} OFFSET (
         SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
       )

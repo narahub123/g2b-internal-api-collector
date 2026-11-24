@@ -61,6 +61,10 @@ export function openContractList(db: G2bDatabase) {
       const { where, values, order, ascending } = collectionListCriteria(query);
       const criteria = where.length ? where.join(" AND ") : "TRUE";
       const direction = ascending ? "ASC NULLS LAST" : "DESC";
+      // 기본 날짜 오름차순은 빈 날짜가 마지막에 오도록 인덱스와 같은 순서로 후보를 읽는다.
+      const pageOrder = order === "sortDate" && ascending
+        ? "(sortDate IS NULL) ASC, sortDate ASC"
+        : `${order} ${direction}`;
       const status = query.status === "collected" ? "collected_at IS NOT NULL"
         : query.status === "uncollected" ? "collected_at IS NULL" : "TRUE";
       // 기본 조회는 사전 집계 한 행을 사용하고 검색·필터 조회는 조건에 맞는 키를 센다.
@@ -73,7 +77,7 @@ export function openContractList(db: G2bDatabase) {
         paged AS MATERIALIZED (
           SELECT number, revision, opening_revision, collected_at, latest_id, ${order} AS sortValue
           FROM g2b_contract_list WHERE ${criteria} AND ${status}
-          ORDER BY ${order} ${direction}, number, revision, opening_revision
+          ORDER BY ${pageOrder}, number, revision, opening_revision
           LIMIT ${pageSize} OFFSET (
             SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
           )

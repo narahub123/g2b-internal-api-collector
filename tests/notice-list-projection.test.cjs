@@ -34,7 +34,25 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     assert.deepEqual((await client.execute("SELECT * FROM g2b_notice_list_counts WHERE id = 1")).rows, [
       { id: 1, total: 2, collected: 1, public_total: 1, public_collected: 0 },
     ]);
-    const list = openNoticeList(new G2bDatabase(client));
+    // 입찰공고 저장소와 실행 계획이 같은 메모리 DB를 사용한다.
+    const db = new G2bDatabase(client);
+    // 계측 중에도 원래 연결에서 쿼리를 실행하도록 바인딩한다.
+    const execute = db.execute.bind(db);
+    // 마지막 저장소 호출의 SQL과 인자를 실행 계획에 재사용한다.
+    let lastStatement;
+    /**
+     * 저장소가 전달한 SQL과 인자를 기록한 뒤 원래 연결에서 실행한다.
+     * @param {object} statement 실행할 SQL과 바인딩 인자.
+     * @returns {Promise<object>} 원래 연결이 반환한 실행 결과.
+     * @throws DB가 조회를 거부하면 호출자에게 오류를 전달한다.
+     */
+    db.execute = (statement) => {
+      // 이 호출의 SQL을 보관한 뒤 평소대로 실행한다.
+      lastStatement = statement;
+      return execute(statement);
+    };
+    // 계측 연결로 입찰공고 목록 저장소를 연다.
+    const list = openNoticeList(db);
     const query = { search: { field: "title", query: "" }, filters: {}, sort: "posted-desc", status: "total", page: 9 };
     const before = await list.page(query);
     assert.deepEqual(before.counts, { total: 2, collected: 1, uncollected: 1 });
@@ -44,6 +62,16 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     assert.deepEqual(await list.regions({ excludeMockNotices: true }), []);
     assert.deepEqual((await list.page(query, { excludeMockNotices: true })).counts, { total: 1, collected: 0, uncollected: 1 });
     assert.equal((await list.page({ ...query, search: { field: "title", query: "공고" } })).counts.total, 1);
+    // 게시일이 없는 미수집 행이 마지막에 남고 페이지 경계가 유지되는지 확인한다.
+    assert.deepEqual(await list.page({ ...query, sort: "posted-asc" }), before);
+    // 실제 조회와 같은 SQL과 인자로 실행 계획을 생성한다.
+    const ascendingPlan = await client.execute({ ...lastStatement, sql: `EXPLAIN QUERY PLAN ${lastStatement.sql}` });
+    // 페이지 키를 고르는 하위 계획에서 인덱스를 사용하고 별도 정렬을 피해야 한다.
+    const paged = ascendingPlan.rows.find(({ detail }) => detail === "MATERIALIZE paged");
+    assert.ok(paged);
+    const candidatePlan = ascendingPlan.rows.filter(({ parent }) => parent === paged.id);
+    assert.match(candidatePlan.map(({ detail }) => detail).join("\n"), /USING INDEX g2b_notice_list_posted_asc/);
+    assert.doesNotMatch(candidatePlan.map(({ detail }) => detail).join("\n"), /TEMP B-TREE FOR ORDER BY/);
     // 수집 여부와 모의공고 여부가 함께 바뀌는 양방향 전이를 같은 트랜잭션에서 검증한다.
     const transaction = await client.transaction("write");
     try {
