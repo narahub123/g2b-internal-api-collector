@@ -1,3 +1,4 @@
+import { businessKeySchema, businessSectionSchema } from "./business-filter";
 import type { Client } from "@libsql/client";
 import { orderPlanListSchema } from "./order-plan-list-schema";
 import { nameSearchSections, numberSearchSections, type NumberSearchSection } from "./number-search-config";
@@ -762,6 +763,18 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         CREATE INDEX g2b_contract_list_title_desc ON g2b_contract_list(sortTitle DESC, number, revision, opening_revision);
         INSERT INTO g2b_schema_migrations (version) VALUES (35);
       `);
+    }
+    // 업무구분 후보 인덱스와 매핑이 이미 설치됐는지 확인한다.
+    const businessKeys = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 36");
+    if (!businessKeys.rows.length) {
+      // 매핑 초기화와 동기화 트리거 설치를 같은 트랜잭션에 담는다.
+      await transaction.executeMultiple(businessKeySchema);
+      for (const section of ["order-plans", "opening-results", "notices", "contract-requests", "prior-specs", "contracts"] as const) {
+        // 기존 업무구분 판정 방식에 맞는 후보 구조를 설치한다.
+        await transaction.executeMultiple(businessSectionSchema(section));
+      }
+      // 설치가 끝난 뒤 적용 버전을 기록한다.
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (36)");
     }
     await transaction.commit();
   } finally {

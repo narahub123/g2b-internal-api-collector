@@ -5,7 +5,6 @@ import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query"
 import type { CollectionListRow } from "./collection-attempts";
 import type { G2bDatabase, SQLInputValue } from "./database";
 import { numberSearchSource, type SearchGram } from "./number-search";
-import { noticeRegionSource } from "./notice-region-search";
 
 // 목록 화면에서 정한 검색·필터 조건과 정렬 방식을 전달한다.
 type PageOptions = {
@@ -21,8 +20,8 @@ type PageOptions = {
   excludeMockNotices: boolean;
   // 후보를 좁힐 수 있을 때만 채워지는 검색 조각.
   grams: SearchGram[];
-  // 지역 범위가 좁을 때만 제공하는 목록 복합 키 JSON.
-  regionalKeys?: string;
+  // 지역 또는 업무구분 범위가 좁을 때만 제공하는 목록 복합 키 JSON.
+  candidateKeys?: string;
 };
 
 /**
@@ -35,7 +34,7 @@ type PageOptions = {
  */
 export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, options: PageOptions) {
   // 기본 게시일순은 인덱스 열을 직접 사용하고 나머지 정렬은 저장된 파생값을 사용한다.
-  const { where, values, order, ascending, excludeMockNotices, grams, regionalKeys } = options;
+  const { where, values, order, ascending, excludeMockNotices, grams, candidateKeys } = options;
   // 기존 게시일순이 보장되는 예산 단독 요청에서만 일치 건수로 조회 경로를 고른다.
   const budgetExpression = "json_extract(fields, '$.budget')";
   const adaptiveBudget = order === "posted" && !ascending && where.length > 0
@@ -66,9 +65,7 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
   // 예산 정렬은 기존 정렬 경로를 유지해 범위 필터용 인덱스의 영향을 받지 않는다.
   const candidateOrder = order === "budget" ? "+" + pageOrder : pageOrder;
   // 지역 또는 검색 후보로 만든 일치 집합을 집계와 페이지가 공유한다.
-  const source = regionalKeys === undefined
-    ? numberSearchSource("notices", grams, condition, values)
-    : noticeRegionSource(regionalKeys, condition, values);
+  const source = numberSearchSource("notices", grams, condition, values, candidateKeys);
   // 예산 단독 집계에만 기존의 명시적 예산 인덱스를 사용한다.
   const totalsSource = adaptiveBudget ? `g2b_notice_list INDEXED BY g2b_notice_list_budget WHERE ${condition}` : source.filtered;
   const totals = where.length
@@ -84,10 +81,14 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
     "notices", "g2b_notice_list INDEXED BY g2b_notice_list_budget",
     `g2b_notice_list INDEXED BY g2b_notice_list_${postedIndex}`, "posted", condition, status, selected,
   ) : "";
+  // 조건 없는 미수집 제목순은 업무구분 인덱스 대신 기존 상태 인덱스로 후보를 읽는다.
+  const pageSource = order === "sortTitle" && query.status === "uncollected" && !where.length && !source.prefix
+    ? `g2b_notice_list INDEXED BY g2b_notice_list_uncollected WHERE ${condition} AND`
+    : source.page;
   // 페이지 키를 먼저 확정한 뒤 기본 키로 공고와 최신 수집 시도의 상세 정보를 가져온다.
   const defaultPage = `paged AS MATERIALIZED (
       SELECT number, revision, opening_revision, collected_at, latest_id, ${sortValue} AS sortValue
-      FROM ${source.page} ${status}
+      FROM ${pageSource} ${status}
       ORDER BY ${candidateOrder}, ${tieBreak}
       LIMIT ${pageSize} OFFSET (
         SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals

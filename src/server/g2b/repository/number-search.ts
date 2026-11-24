@@ -1,3 +1,4 @@
+import { listKeySource } from "./notice-region-search";
 import { searchText } from "./collection-list-query";
 import type { G2bDatabase, SQLInputValue } from "./database";
 import { nameSearchSections, numberSearchSections, type NumberSearchSection } from "./number-search-config";
@@ -109,11 +110,14 @@ export function withListSearch<T>(
  * @param grams 각 검색 출처의 안전한 후보 조각.
  * @param condition 기존 검색·필터·노출 조건.
  * @param values 기존 조건의 바인딩 인자.
+ * @param candidateKeys 업무구분 또는 지역의 제한된 복합 키 JSON.
  * @returns 목록 대신 읽을 관계와 필요할 때만 추가할 공통 CTE 및 인자.
  */
-export function numberSearchSource(section: NumberSearchSection, grams: SearchGram[], condition: string, values: SQLInputValue[]) {
+export function numberSearchSource(section: NumberSearchSection, grams: SearchGram[], condition: string, values: SQLInputValue[], candidateKeys?: string) {
   // 인덱스를 사용하지 않는 요청은 기존 목록 관계와 실행 계획을 보존한다.
   const { id, table } = numberSearchSections[section];
+  // 업무구분이나 지역 후보가 확보됐으면 복합 키 직접 조회를 공유한다.
+  if (candidateKeys !== undefined) return listKeySource(candidateKeys, table, condition, values);
   if (!grams.length) return { prefix: "", filtered: `${table} WHERE ${condition}`, page: `${table} WHERE ${condition} AND`, args: null };
   // 둘 다 일치하는 행을 한 번만 읽도록 UNION으로 복합 키를 합친다.
   const keys = grams.map(({ source }) => `SELECT number AS gramNumber, revision AS gramRevision, opening_revision AS gramOpening

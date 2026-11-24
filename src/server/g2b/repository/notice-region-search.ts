@@ -35,23 +35,24 @@ export function withNoticeRegionKeys<T>(
 }
 
 /**
- * 지역 후보를 중복 제거하고 기존 목록 조건을 적용하는 CTE를 만든다.
+ * 후보 키를 중복 제거하고 해당 목록에 기존 조건을 적용하는 CTE를 만든다.
  * @param keys 탐색한 복합 키의 JSON.
+ * @param table 저장소 설정에서 가져온 목록 테이블 이름.
  * @param condition 기존 검색, 지역 및 다른 필터 조건.
  * @param values 기존 조건의 자리표시자 순서에 맞춘 값.
  * @returns 집계와 페이지에서 공유할 SQL 관계와 바인딩 값.
  */
-export function noticeRegionSource(keys: string, condition: string, values: SQLInputValue[]) {
-  // 여러 지역과 제한 없음에 동시에 걸린 공고도 복합 키 하나로 읽는다.
-  const prefix = `regional_keys AS MATERIALIZED (
-    SELECT DISTINCT json_extract(value, '$[0]') AS regionalNumber,
-      json_extract(value, '$[1]') AS regionalRevision, json_extract(value, '$[2]') AS regionalOpening
+export function listKeySource(keys: string, table: string, condition: string, values: SQLInputValue[]) {
+  // 여러 선택값에 해당하는 목록 행도 복합 키 하나로 읽는다.
+  const prefix = `candidate_keys AS MATERIALIZED (
+    SELECT DISTINCT json_extract(value, '$[0]') AS candidateNumber,
+      json_extract(value, '$[1]') AS candidateRevision, json_extract(value, '$[2]') AS candidateOpening
     FROM json_each(?)
   ), matched AS MATERIALIZED (
-    SELECT listed.* FROM regional_keys CROSS JOIN g2b_notice_list listed
-      ON listed.number = regionalNumber AND listed.revision = regionalRevision AND listed.opening_revision = regionalOpening
+    SELECT listed.* FROM candidate_keys CROSS JOIN ${table} listed
+      ON listed.number = candidateNumber AND listed.revision = candidateRevision AND listed.opening_revision = candidateOpening
     WHERE ${condition}
   ), `;
-  // 원래 지역 포함 규칙과 추가 필터를 통과한 행만 집계하거나 페이지에 사용한다.
+  // 기존 조회 조건을 통과한 행을 집계와 페이지에서 공유한다.
   return { prefix, filtered: "matched", page: "matched WHERE", args: [keys, ...values] };
 }

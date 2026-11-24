@@ -1,3 +1,4 @@
+import { withBusinessKeys } from "./business-filter";
 import type { G2bDatabase, SQLInputValue } from "./database";
 import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query";
 import { etcNoticeDetail, isMockNotice, noticeDetail } from "@/entities/notice/model/notice-detail";
@@ -181,7 +182,7 @@ export function openNoticeList(db: G2bDatabase) {
       }
       const business = query.filters.business;
       if (Array.isArray(business) && business.length) {
-        where.push("json_extract(fields, '$.business') IN (SELECT value FROM json_each(?))");
+        where.push("+json_extract(fields, '$.business') IN (SELECT value FROM json_each(?))");
         values.push(JSON.stringify(business));
       }
       const [field, direction] = query.sort.split("-");
@@ -190,19 +191,23 @@ export function openNoticeList(db: G2bDatabase) {
       const pageOptions = { where, values, order, ascending: direction === "asc", excludeMockNotices };
       // 날짜 범위가 활성화되면 기존 날짜 인덱스가 후보를 좁히도록 한다.
       const dateFiltered = Boolean(query.filters.posted || query.filters.submission);
-      /**
-       * 기존 글자 조각이나 날짜로 후보를 줄이지 못한 지역 요청에만 매핑을 확인한다.
-       * @param grams 검색에서 이미 좁힌 조각.
-       * @returns 같은 스냅샷에서 계산한 집계와 페이지.
-       */
       return withListSearch(db, "notices", query.search, (grams) => {
-        // 글자 조각이 없고 날짜 범위를 쓰지 않는 지역 요청만 제한된 매핑을 읽는다.
+        /**
+         * 검색·지역·날짜 우선 경로를 사용하고 남은 경우 업무구분 후보를 탐색한다.
+         * @param regionalKeys 지역 범위가 좁을 때 찾은 복합 키.
+         * @returns 같은 스냅샷의 상태별 집계와 페이지.
+         */
+        const page = (regionalKeys?: string) => withBusinessKeys(
+          db, "notices", business, Boolean(grams.length || dateFiltered || regionalKeys !== undefined),
+          // 탐색 결과가 없거나 상한에 걸리면 기존 SQL로 페이지를 조회한다.
+          (businessKeys) => queryNoticePage(db, query, { ...pageOptions, grams, candidateKeys: regionalKeys ?? businessKeys }),
+        );
+        // 지역 후보가 있으면 기존 지역 매핑을 먼저 사용한다.
         if (Array.isArray(selected) && selected.length && !dateFiltered && !grams.length) {
-          return withNoticeRegionKeys(db, selected, (regionalKeys) =>
-            queryNoticePage(db, query, { ...pageOptions, grams, regionalKeys }));
+          return withNoticeRegionKeys(db, selected, page);
         }
-        // 기존 인덱스 후보와 지역 필터의 결과를 집계와 페이지에서 함께 사용한다.
-        return queryNoticePage(db, query, { ...pageOptions, grams });
+        // 지역 후보 없이 검색·날짜 또는 업무구분 경로를 평가한다.
+        return page();
       });
     },
   };

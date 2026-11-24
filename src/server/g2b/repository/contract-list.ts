@@ -1,3 +1,4 @@
+import { withBusinessKeys } from "./business-filter";
 import { dateBucketPageSql, firstDateSeekPage } from "./date-bucket-page";
 import { numberSearchSource, withListSearch } from "./number-search";
 import type { G2bDatabase } from "./database";
@@ -80,9 +81,10 @@ export function openContractList(db: G2bDatabase) {
        * @param grams 검색 출처별 조각. 비어 있으면 기존 목록을 읽는다.
        * @returns 상태별 건수와 페이지 데이터.
        */
-      return withListSearch(db, "contracts", query.search, async (grams) => {
+      return withListSearch(db, "contracts", query.search, (grams) => withBusinessKeys(
+        db, "contracts", query.filters.business, Boolean(grams.length || query.filters.date), async (candidateKeys) => {
         // 후보 제한이 가능하면 동일한 일치 집합을 집계와 페이지에 전달한다.
-        const source = numberSearchSource("contracts", grams, criteria, values);
+        const source = numberSearchSource("contracts", grams, criteria, values, candidateKeys);
         // 기본 조회는 사전 집계 한 행을 사용하고 검색·필터 조회는 조건에 맞는 키를 센다.
         const totals = where.length
           ? `SELECT COUNT(*) AS total, COUNT(collected_at) AS collected FROM ${source.filtered}`
@@ -127,7 +129,7 @@ export function openContractList(db: G2bDatabase) {
           totalPages,
           rows: rows.filter((row) => row.number !== null),
         };
-      });
+      }));
     },
   };
 }

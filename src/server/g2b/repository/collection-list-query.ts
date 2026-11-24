@@ -1,3 +1,4 @@
+import { collectionBusinessKeySql } from "./business-filter";
 import type { G2bDatabase, SQLInputValue } from "./database";
 import { decodeHTMLStrict } from "entities";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
@@ -134,7 +135,7 @@ export async function queryCollectionPage(db: G2bDatabase, targets: string, opti
 }
 
 // 공통 업무구분의 값은 코드가 있을 때 코드를 우선 사용한다.
-export const collectionBusinessKeySql = "COALESCE(json_extract(b.value, '$.code'), json_extract(b.value, '$.label'))";
+export { collectionBusinessKeySql };
 
 /**
  * 업무가 전달한 조회 필드로 검색·필터와 페이지 조회를 연결한다.

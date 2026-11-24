@@ -74,11 +74,11 @@ test("희소한 번호 조각은 같은 스냅샷에서 공고 목록 후보를 
     assert.deepEqual(regional.rows.map(({ number }) => number), ["COMMON0001", "SPECIALXYZ"]);
     assert.equal(regional.counts.total, 2);
     // 작은 후보 집합을 기존 건수와 페이지에서 공유해야 한다.
-    assert.match(statement.sql, /regional_keys AS MATERIALIZED/);
+    assert.match(statement.sql, /candidate_keys AS MATERIALIZED/);
     // 흔한 지역은 제한된 탐색을 마친 뒤 기존 페이지 조회로 돌아간다.
     const broad = await list.page({ ...region, filters: { region: ["일반"] } });
     assert.equal(broad.counts.total, 200);
-    assert.doesNotMatch(statement.sql, /regional_keys AS MATERIALIZED/);
+    assert.doesNotMatch(statement.sql, /candidate_keys AS MATERIALIZED/);
     // 지역 갱신과 롤백이 원본과 함께 매핑에 반영되어야 한다.
     await assert.rejects(db.transaction(async () => {
       // 지역을 교체하면 기존 후보에서는 새 지역의 공고를 제외한다.
