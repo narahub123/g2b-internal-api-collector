@@ -100,7 +100,12 @@ export function openPriorSpecList(db: G2bDatabase) {
       // 기본 날짜 오름차순은 빈 날짜가 마지막에 오도록 인덱스와 같은 순서로 후보를 읽는다.
       const pageOrder = order === "sortDate" && ascending
         ? "(sortDate IS NULL) ASC, sortDate ASC"
-        : `${order} ${direction}`;
+        // 미수집은 전체 제목 인덱스를 훑지 않도록 기존 상태별 탐색을 유지한다.
+        : order === "sortTitle" && query.status === "uncollected"
+          ? `+${order} ${direction}`
+          : order === "sortTitle" && ascending
+            ? "(sortTitle IS NULL) ASC, sortTitle ASC"
+            : `${order} ${direction}`;
       const status = query.status === "collected" ? "collected_at IS NOT NULL"
         : query.status === "uncollected" ? "collected_at IS NULL" : "TRUE";
       // 지원되는 검색만 후보를 좁히고 기존 필터를 통과한 행을 같은 스냅샷에서 조회한다.

@@ -740,6 +740,29 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       // 모든 업무의 구간 집계가 완성되면 다음 실행에서 건너뛸 버전을 기록한다.
       await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (34)");
     }
+    // 제목 순서에 맞춰 페이지 키를 읽을 수 있도록 양방향 인덱스의 설치 여부를 확인한다.
+    const titleOrder = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 35");
+    // 인덱스 설치와 버전 기록을 같은 트랜잭션에서 완료한다.
+    if (!titleOrder.rows.length) {
+      // 기존 제목 표현식과 동률 키를 사용하고 발주계획·사전규격은 노출 행만 인덱싱한다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_list_title_asc ON g2b_notice_list(
+          (json_extract(fields, '$.sortTitle') IS NULL), json_extract(fields, '$.sortTitle'), number, revision, opening_revision);
+        CREATE INDEX g2b_notice_list_title_desc ON g2b_notice_list(
+          json_extract(fields, '$.sortTitle') DESC, number, revision, opening_revision);
+        CREATE INDEX g2b_order_plan_list_title_asc ON g2b_order_plan_list((sortTitle IS NULL), sortTitle, number, revision, opening_revision) WHERE visible = 1;
+        CREATE INDEX g2b_order_plan_list_title_desc ON g2b_order_plan_list(sortTitle DESC, number, revision, opening_revision) WHERE visible = 1;
+        CREATE INDEX g2b_prior_spec_list_title_asc ON g2b_prior_spec_list((sortTitle IS NULL), sortTitle, number, revision, opening_revision) WHERE visible = 1;
+        CREATE INDEX g2b_prior_spec_list_title_desc ON g2b_prior_spec_list(sortTitle DESC, number, revision, opening_revision) WHERE visible = 1;
+        CREATE INDEX g2b_opening_result_list_title_asc ON g2b_opening_result_list((sortTitle IS NULL), sortTitle, number, revision, opening_revision);
+        CREATE INDEX g2b_opening_result_list_title_desc ON g2b_opening_result_list(sortTitle DESC, number, revision, opening_revision);
+        CREATE INDEX g2b_contract_request_list_title_asc ON g2b_contract_request_list((sortTitle IS NULL), sortTitle, number, revision, opening_revision);
+        CREATE INDEX g2b_contract_request_list_title_desc ON g2b_contract_request_list(sortTitle DESC, number, revision, opening_revision);
+        CREATE INDEX g2b_contract_list_title_asc ON g2b_contract_list((sortTitle IS NULL), sortTitle, number, revision, opening_revision);
+        CREATE INDEX g2b_contract_list_title_desc ON g2b_contract_list(sortTitle DESC, number, revision, opening_revision);
+        INSERT INTO g2b_schema_migrations (version) VALUES (35);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

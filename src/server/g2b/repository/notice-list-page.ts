@@ -43,9 +43,14 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
   const sortValue = order === "posted" ? "posted" : `json_extract(fields, '$.${order}')`;
   const direction = ascending ? "ASC NULLS LAST" : "DESC";
   // 게시일 오름차순에서는 빈 날짜를 마지막에 두는 순서까지 인덱스와 일치시킨다.
+  // 미수집 제목순은 기존 상태 인덱스를 우선할 수 있도록 제목 인덱스 정렬을 제외한다.
   const pageOrder = order === "posted" && ascending
     ? "(posted IS NULL) ASC, posted ASC"
-    : `${sortValue} ${direction}`;
+    : order === "sortTitle" && query.status === "uncollected"
+      ? `+${sortValue} ${direction}`
+      : order === "sortTitle" && ascending
+        ? `(${sortValue} IS NULL) ASC, ${sortValue} ASC`
+        : `${sortValue} ${direction}`;
   // 공고번호와 차수가 같으면 개찰차수로 페이지 경계의 순서를 고정한다.
   const tieBreak = "number, revision, opening_revision";
   // 검색 범위는 집계와 페이지에 적용하고 수집 상태는 페이지에만 적용한다.
