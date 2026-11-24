@@ -1,3 +1,4 @@
+import { dateBucketPageSql, firstDateSeekPage } from "./date-bucket-page";
 import { numberSearchSource, withListSearch } from "./number-search";
 import type { CollectionListRow } from "./collection-attempts";
 import { budgetPageSql } from "./budget-range-page";
@@ -133,8 +134,12 @@ export function openPriorSpecList(db: G2bDatabase) {
           "prior-specs", "g2b_prior_spec_list",
           `g2b_prior_spec_list INDEXED BY g2b_prior_spec_list_${dateIndex}`, "sortDate", criteria, status, selected,
         ) : "";
-        // 두 페이지 경로는 기존 표시 순서와 응답 조립을 공유한다.
-        const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${adaptiveBudget ? budgetPage : defaultPage}
+        // 검색과 필터가 없는 날짜 오름차순 전체 목록의 깊은 페이지는 구간 경계에서 탐색한다.
+        const seekDatePage = order === "sortDate" && ascending && query.page >= firstDateSeekPage
+          && query.status === "total" && !where.length;
+        // 예산 분기와 기본 조회를 포함한 모든 경로는 같은 응답을 조립한다.
+        const pageSql = seekDatePage ? dateBucketPageSql("prior-specs") : adaptiveBudget ? budgetPage : defaultPage;
+        const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}
           SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
             paged.collected_at AS collectedAt, json_extract(saved.data, '$.payload.dlBfSpecM.bfSpecNm') AS title,
             CAST(json_extract(saved.data, '$.payload.dlBfSpecM.prcmBsneSeCd') AS TEXT) AS businessCode,

@@ -1,3 +1,4 @@
+import { dateBucketPageSql, firstDateSeekPage } from "./date-bucket-page";
 import { numberSearchSource, withListSearch } from "./number-search";
 import type { G2bDatabase } from "./database";
 import type { CollectionListRow } from "./collection-attempts";
@@ -83,7 +84,11 @@ export function openContractList(db: G2bDatabase) {
           : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'contracts' AND scope = 'all'";
         const selected = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
         // 정렬과 페이지 경계를 먼저 확정해 원본 계약과 최신 시도는 선택한 키에 한해서 조회한다.
-        const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}),
+        // 검색과 필터가 없는 날짜 오름차순 전체 목록의 깊은 페이지는 구간 경계에서 탐색한다.
+        const seekDatePage = order === "sortDate" && ascending && query.page >= firstDateSeekPage
+          && query.status === "total" && !where.length;
+        // 다른 조건에서는 기존 정렬과 페이지 보정을 사용해 목록 키를 정한다.
+        const defaultPage = `
           paged AS MATERIALIZED (
             SELECT number, revision, opening_revision, collected_at, latest_id, ${order} AS sortValue
             FROM ${source.page} ${status}
@@ -91,7 +96,10 @@ export function openContractList(db: G2bDatabase) {
             LIMIT ${pageSize} OFFSET (
               SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
             )
-          )
+          )`;
+        // 페이지 키 경로만 바꾸고 상세 조립과 출력 정렬은 그대로 사용한다.
+        const pageSql = seekDatePage ? dateBucketPageSql("contracts") : defaultPage;
+        const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}
           SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
             paged.collected_at AS collectedAt, json_extract(saved.data, '$.detail.ctrtNm') AS title,
             CAST(json_extract(saved.data, '$.detail.prcmBsneSeCd') AS TEXT) AS businessCode,

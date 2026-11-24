@@ -1,3 +1,4 @@
+import { dateBucketPageSql, firstDateSeekPage } from "./date-bucket-page";
 import { budgetPageSql } from "./budget-range-page";
 import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collection-list";
 import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query";
@@ -87,8 +88,13 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
         SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
       )
     )`;
-  // 기존 최종 표시 순서와 조회 결과 형태를 두 경로에서 공유한다.
-  const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${adaptiveBudget ? budgetPage : defaultPage}
+  // 검색·필터·수집 상태·공개 범위가 구간 집계와 일치하는 깊은 페이지에서만 구간을 탐색한다.
+  const seekDatePage = order === "posted" && ascending && query.page >= firstDateSeekPage
+    && !excludeMockNotices && query.status === "total" && !where.length;
+  // 예산 및 다른 조건의 페이지는 검증된 기존 SQL 경로를 유지한다.
+  const pageSql = seekDatePage ? dateBucketPageSql("notices") : adaptiveBudget ? budgetPage : defaultPage;
+  // 기존 최종 표시 순서와 조회 결과 형태를 모든 경로에서 공유한다.
+  const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}
     SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
       paged.collected_at AS collectedAt, json_extract(saved.data, '$.title') AS title,
       CAST(COALESCE(json_extract(saved.data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),

@@ -2,6 +2,7 @@ import type { Client } from "@libsql/client";
 import { orderPlanListSchema } from "./order-plan-list-schema";
 import { nameSearchSections, numberSearchSections, type NumberSearchSection } from "./number-search-config";
 import { nameSearchSectionSql, numberSearchSchema, numberSearchSectionSql } from "./number-search-schema";
+import { datePageSchema, datePageSectionSchema } from "./date-bucket-page";
 import { noticeRegionBackfill, noticeRegionSchema } from "./notice-region-schema";
 import { openingResultListSchema } from "./opening-result-list-schema";
 import { priorSpecListSchema } from "./prior-spec-list-schema";
@@ -717,6 +718,27 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       await transaction.executeMultiple(noticeRegionSchema);
       await transaction.execute(noticeRegionBackfill);
       await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (32)");
+    }
+    // 입찰공고 날짜 구간 집계는 기존 목록을 읽어 최초 한 번만 채운다.
+    const noticeDateBuckets = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 33");
+    // 집계 적재와 변경 트리거가 모두 설치된 경우에만 완료 버전을 남긴다.
+    if (!noticeDateBuckets.rows.length) {
+      // 빈 DB와 기존 DB에서 같은 구간 집계와 변경 트리거를 설치한다.
+      await transaction.executeMultiple(datePageSchema + datePageSectionSchema("notices"));
+      // 다음 실행에서는 초기 집계와 트리거를 다시 생성하지 않는다.
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (33)");
+    }
+    // 나머지 다섯 업무의 구간 집계를 설치했는지 적용 이력으로 판별한다.
+    const collectionDateBuckets = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 34");
+    // 기존 DB의 목록을 먼저 집계하고 이후 변경을 반영할 트리거를 업무별로 추가한다.
+    if (!collectionDateBuckets.rows.length) {
+      // 각 업무의 정렬 열과 노출 조건을 구간 집계에 그대로 사용한다.
+      for (const section of ["order-plans", "prior-specs", "opening-results", "contract-requests", "contracts"] as const) {
+        // 초기 집계와 트리거를 같은 마이그레이션 트랜잭션으로 적용한다.
+        await transaction.executeMultiple(datePageSectionSchema(section));
+      }
+      // 모든 업무의 구간 집계가 완성되면 다음 실행에서 건너뛸 버전을 기록한다.
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (34)");
     }
     await transaction.commit();
   } finally {

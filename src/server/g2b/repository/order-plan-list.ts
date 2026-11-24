@@ -1,3 +1,4 @@
+import { dateBucketPageSql, firstDateSeekPage } from "./date-bucket-page";
 import { numberSearchSource, withListSearch } from "./number-search";
 import type { CollectionListRow } from "./collection-attempts";
 import { budgetPageSql } from "./budget-range-page";
@@ -136,8 +137,12 @@ export function openOrderPlanList(db: G2bDatabase) {
           "order-plans", "g2b_order_plan_list INDEXED BY g2b_order_plan_list_budget",
           `g2b_order_plan_list INDEXED BY g2b_order_plan_list_${dateIndex}`, "released", criteria, status, selectedCountSql,
         ) : "";
-        // 두 페이지 경로는 기존 표시 순서와 응답 조립을 공유한다.
-        const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${adaptiveBudget ? budgetPage : defaultPage}
+        // 검색과 필터가 없는 날짜 오름차순 전체 목록의 깊은 페이지는 구간 경계에서 탐색한다.
+        const seekDatePage = order === "released" && ascending && query.page >= firstDateSeekPage
+          && query.status === "total" && !where.length;
+        // 예산 분기와 기본 조회를 포함한 모든 경로는 같은 응답을 조립한다.
+        const pageSql = seekDatePage ? dateBucketPageSql("order-plans") : adaptiveBudget ? budgetPage : defaultPage;
+        const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}
           SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
             paged.collected_at AS collectedAt, COALESCE(NULLIF(TRIM(json_extract(saved.data, '$.payload.dlOderPlanM.bizNm')), ''), json_extract(saved.data, '$.payload.dlOderPlanM.itemNm')) AS title,
             CAST(json_extract(saved.data, '$.payload.dlOderPlanM.prcmBsneSeCd') AS TEXT) AS businessCode,
