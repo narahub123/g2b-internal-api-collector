@@ -3,6 +3,7 @@ import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collectio
 import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query";
 import type { CollectionListRow } from "./collection-attempts";
 import type { G2bDatabase, SQLInputValue } from "./database";
+import { numberSearchSource, type SearchGram } from "./number-search";
 
 // 목록 화면에서 정한 검색·필터 조건과 정렬 방식을 전달한다.
 type PageOptions = {
@@ -16,8 +17,8 @@ type PageOptions = {
   ascending: boolean;
   // 사용자 목록에서 모의공고를 제외할지 나타낸다.
   excludeMockNotices: boolean;
-  // 후보 인덱스를 쓸 때만 기존 번호 검색과 함께 적용할 세 글자 조각.
-  numberGram?: string;
+  // 후보를 좁힐 수 있을 때만 채워지는 번호 검색 조각.
+  grams: SearchGram[];
 };
 
 /**
@@ -30,7 +31,7 @@ type PageOptions = {
  */
 export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, options: PageOptions) {
   // 기본 게시일순은 인덱스 열을 직접 사용하고 나머지 정렬은 저장된 파생값을 사용한다.
-  const { where, values, order, ascending, excludeMockNotices, numberGram } = options;
+  const { where, values, order, ascending, excludeMockNotices, grams } = options;
   // 기존 게시일순이 보장되는 예산 단독 요청에서만 일치 건수로 조회 경로를 고른다.
   const budgetExpression = "json_extract(fields, '$.budget')";
   const adaptiveBudget = order === "posted" && !ascending && where.length > 0
@@ -55,21 +56,12 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
   const scope = excludeMockNotices ? "exclude_mock" : "all";
   // 예산 정렬은 기존 정렬 경로를 유지해 범위 필터용 인덱스의 영향을 받지 않는다.
   const candidateOrder = order === "budget" ? "+" + pageOrder : pageOrder;
-  // 예산 단독 집계는 수집 상태와 공개 범위가 포함된 커버링 인덱스를 읽는다.
-  const totalsSource = adaptiveBudget ? "g2b_notice_list INDEXED BY g2b_notice_list_budget" : "g2b_notice_list";
-  // 조각 인덱스에서 찾은 키로만 목록을 읽고 기존 검색과 노출 조건을 한 번 적용한다.
-  const matched = numberGram === undefined ? "" : `matched AS MATERIALIZED (
-    SELECT listed.* FROM (
-      SELECT number AS gramNumber, revision AS gramRevision, opening_revision AS gramOpening
-      FROM g2b_notice_number_grams WHERE gram = ?
-    ) CROSS JOIN g2b_notice_list listed
-      ON listed.number = gramNumber AND listed.revision = gramRevision AND listed.opening_revision = gramOpening
-    WHERE ${condition}
-  ), `;
-  // 후보를 미리 만들었으면 집계와 페이지가 같은 일치 집합을 읽는다.
-  const pageSource = numberGram === undefined ? `g2b_notice_list WHERE ${condition} AND ${status}` : `matched WHERE ${status}`;
+  // 번호 검색 후보로 만든 일치 집합을 집계와 페이지가 공유한다.
+  const source = numberSearchSource("notices", grams, condition, values);
+  // 예산 단독 집계에만 기존의 명시적 예산 인덱스를 사용한다.
+  const totalsSource = adaptiveBudget ? `g2b_notice_list INDEXED BY g2b_notice_list_budget WHERE ${condition}` : source.filtered;
   const totals = where.length
-    ? `SELECT COUNT(*) AS total, COUNT(collected_at) AS collected FROM ${numberGram === undefined ? `${totalsSource} WHERE ${condition}` : "matched"}`
+    ? `SELECT COUNT(*) AS total, COUNT(collected_at) AS collected FROM ${totalsSource}`
     : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'notices' AND scope = ?";
   // 선택 상태의 건수로 요청 페이지가 범위를 벗어났는지 계산한다.
   const selected = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
@@ -84,14 +76,14 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
   // 페이지 키를 먼저 확정한 뒤 기본 키로 공고와 최신 수집 시도의 상세 정보를 가져온다.
   const defaultPage = `paged AS MATERIALIZED (
       SELECT number, revision, opening_revision, collected_at, latest_id, ${sortValue} AS sortValue
-      FROM ${pageSource}
+      FROM ${source.page} ${status}
       ORDER BY ${candidateOrder}, ${tieBreak}
       LIMIT ${pageSize} OFFSET (
         SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
       )
     )`;
   // 기존 최종 표시 순서와 조회 결과 형태를 두 경로에서 공유한다.
-  const sql = `WITH ${matched}totals AS MATERIALIZED (${totals}), ${adaptiveBudget ? budgetPage : defaultPage}
+  const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${adaptiveBudget ? budgetPage : defaultPage}
     SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
       paged.collected_at AS collectedAt, json_extract(saved.data, '$.title') AS title,
       CAST(COALESCE(json_extract(saved.data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),
@@ -104,7 +96,7 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
     LEFT JOIN g2b_collection_attempts attempt ON attempt.id = paged.latest_id
     ORDER BY paged.sortValue ${direction}, paged.number, paged.revision, paged.opening_revision`;
   // 집계에는 검색·필터의 인자 또는 기본 노출 범위를 전달하고 페이지에는 검색·필터 인자를 전달한다.
-  const args = numberGram !== undefined ? [numberGram, ...values, query.page]
+  const args = source.args ? [...source.args, query.page]
     : adaptiveBudget ? [...values, query.page, scope, ...values, ...values]
     : [...(where.length ? values : [scope]), ...values, query.page];
   const rows = await db.prepare(sql).all(...args) as

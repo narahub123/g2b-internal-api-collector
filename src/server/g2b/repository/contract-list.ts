@@ -1,3 +1,4 @@
+import { numberSearchSource, withNumberSearch } from "./number-search";
 import type { G2bDatabase } from "./database";
 import type { CollectionListRow } from "./collection-attempts";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
@@ -67,43 +68,54 @@ export function openContractList(db: G2bDatabase) {
         : `${order} ${direction}`;
       const status = query.status === "collected" ? "collected_at IS NOT NULL"
         : query.status === "uncollected" ? "collected_at IS NULL" : "TRUE";
-      // 기본 조회는 사전 집계 한 행을 사용하고 검색·필터 조회는 조건에 맞는 키를 센다.
-      const totals = where.length
-        ? `SELECT COUNT(*) AS total, COUNT(collected_at) AS collected FROM g2b_contract_list WHERE ${criteria}`
-        : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'contracts' AND scope = 'all'";
-      const selected = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
-      // 정렬과 페이지 경계를 먼저 확정해 원본 계약과 최신 시도는 선택한 키에 한해서 조회한다.
-      const sql = `WITH totals AS MATERIALIZED (${totals}),
-        paged AS MATERIALIZED (
-          SELECT number, revision, opening_revision, collected_at, latest_id, ${order} AS sortValue
-          FROM g2b_contract_list WHERE ${criteria} AND ${status}
-          ORDER BY ${pageOrder}, number, revision, opening_revision
-          LIMIT ${pageSize} OFFSET (
-            SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
+      // 번호 검색만 후보를 좁히고 기존 필터를 통과한 행을 같은 스냅샷에서 조회한다.
+      const keyword = query.search.field === "number" ? query.search.query : "";
+      /**
+       * 선택된 번호 조각으로 이 업무의 건수와 요청 페이지를 조회한다.
+       * @param grams 번호 검색의 출처별 조각. 비어 있으면 기존 목록을 읽는다.
+       * @returns 상태별 건수와 페이지 데이터.
+       */
+      return withNumberSearch(db, "contracts", keyword, async (grams) => {
+        // 후보 제한이 가능하면 동일한 일치 집합을 집계와 페이지에 전달한다.
+        const source = numberSearchSource("contracts", grams, criteria, values);
+        // 기본 조회는 사전 집계 한 행을 사용하고 검색·필터 조회는 조건에 맞는 키를 센다.
+        const totals = where.length
+          ? `SELECT COUNT(*) AS total, COUNT(collected_at) AS collected FROM ${source.filtered}`
+          : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'contracts' AND scope = 'all'";
+        const selected = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
+        // 정렬과 페이지 경계를 먼저 확정해 원본 계약과 최신 시도는 선택한 키에 한해서 조회한다.
+        const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}),
+          paged AS MATERIALIZED (
+            SELECT number, revision, opening_revision, collected_at, latest_id, ${order} AS sortValue
+            FROM ${source.page} ${status}
+            ORDER BY ${pageOrder}, number, revision, opening_revision
+            LIMIT ${pageSize} OFFSET (
+              SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
+            )
           )
-        )
-        SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
-          paged.collected_at AS collectedAt, json_extract(saved.data, '$.detail.ctrtNm') AS title,
-          CAST(json_extract(saved.data, '$.detail.prcmBsneSeCd') AS TEXT) AS businessCode,
-          json_extract(saved.data, '$.detail.prcmBsneSeNm') AS businessLabel,
-          attempt.id, attempt.started_at AS startedAt, attempt.status, attempt.error, paged.sortValue,
-          totals.total, totals.collected, ${selected} AS selectedCount, attempt.diagnostics
-        FROM totals LEFT JOIN paged ON TRUE
-        LEFT JOIN contracts saved ON paged.collected_at IS NOT NULL AND saved.number = paged.number AND saved.revision = paged.revision
-        LEFT JOIN g2b_collection_attempts attempt ON attempt.id = paged.latest_id
-        ORDER BY paged.sortValue ${direction}, paged.number, paged.revision, paged.opening_revision`;
-      // 조건 인자를 집계와 페이지에 각각 전달한 뒤 빈 목록에서도 반환되는 집계 행을 사용한다.
-      const rows = await db.prepare(sql).all(...values, ...values, query.page) as
-        (CollectionListRow & { total: number; collected: number; selectedCount: number })[];
-      const { total, collected, selectedCount } = rows[0];
-      const totalPages = Math.ceil(selectedCount / pageSize);
-      // 기존 응답 구조를 유지하고 집계용 빈 행은 목록에서 제외한다.
-      return {
-        counts: { total, collected, uncollected: total - collected },
-        page: Math.max(1, Math.min(query.page, totalPages)),
-        totalPages,
-        rows: rows.filter((row) => row.number !== null),
-      };
+          SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
+            paged.collected_at AS collectedAt, json_extract(saved.data, '$.detail.ctrtNm') AS title,
+            CAST(json_extract(saved.data, '$.detail.prcmBsneSeCd') AS TEXT) AS businessCode,
+            json_extract(saved.data, '$.detail.prcmBsneSeNm') AS businessLabel,
+            attempt.id, attempt.started_at AS startedAt, attempt.status, attempt.error, paged.sortValue,
+            totals.total, totals.collected, ${selected} AS selectedCount, attempt.diagnostics
+          FROM totals LEFT JOIN paged ON TRUE
+          LEFT JOIN contracts saved ON paged.collected_at IS NOT NULL AND saved.number = paged.number AND saved.revision = paged.revision
+          LEFT JOIN g2b_collection_attempts attempt ON attempt.id = paged.latest_id
+          ORDER BY paged.sortValue ${direction}, paged.number, paged.revision, paged.opening_revision`;
+        // 조건 인자를 집계와 페이지에 각각 전달한 뒤 빈 목록에서도 반환되는 집계 행을 사용한다.
+        const rows = await db.prepare(sql).all(...(source.args ?? [...values, ...values]), query.page) as
+          (CollectionListRow & { total: number; collected: number; selectedCount: number })[];
+        const { total, collected, selectedCount } = rows[0];
+        const totalPages = Math.ceil(selectedCount / pageSize);
+        // 기존 응답 구조를 유지하고 집계용 빈 행은 목록에서 제외한다.
+        return {
+          counts: { total, collected, uncollected: total - collected },
+          page: Math.max(1, Math.min(query.page, totalPages)),
+          totalPages,
+          rows: rows.filter((row) => row.number !== null),
+        };
+      });
     },
   };
 }

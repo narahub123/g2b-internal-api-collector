@@ -6,6 +6,40 @@ const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations"
 const { G2bDatabase } = require("../src/server/g2b/repository/database");
 const { openG2bRepository } = require("../src/server/g2b/repository/turso");
 
+/** 출처를 합치는 번호 검색이 중복, 접수번호 갱신과 다른 업무의 동일 키를 올바르게 처리하는지 확인한다. */
+test("사전규격 번호와 접수번호 조각을 같은 목록 키로 합친다", async () => {
+  // 실제 초기화와 트리거를 적용할 격리 메모리 DB를 연다.
+  const client = createClient({ url: "file::memory:" });
+  try {
+    await migrateG2bDatabase(client);
+    // 희소 검색 한도보다 모집단이 충분하도록 번호 범위와 겹치지 않는 원본을 적재한다.
+    await client.executeMultiple(`
+      WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<320)
+      INSERT INTO prior_specs SELECT printf('BASE%04d',i),'2026-01-01','{}','{}' FROM n;
+      INSERT INTO prior_specs VALUES
+        ('XYZ891','2026-01-01','{}','{"fields":{"receipt":"xyz891"}}'),
+        ('RECEIPT-ONLY','2026-01-01','{}','{"fields":{"receipt":"xyz891"}}');
+      INSERT INTO notices VALUES ('XYZ891','','2026-01-01','{}','{}');
+    `);
+    // 번호와 접수번호가 모두 맞는 행 및 접수번호만 맞는 행을 한 번씩 반환해야 한다.
+    const db = new G2bDatabase(client);
+    const { collectionAttempts: { priorSpecList } } = openG2bRepository(db);
+    const query = { search: { field: "number", query: "XYZ891" }, filters: {}, sort: "date-desc", status: "total", page: 1 };
+    const first = await priorSpecList.page(query);
+    assert.deepEqual(first.rows.map(({ number }) => number), ["RECEIPT-ONLY", "XYZ891"]);
+    assert.equal(first.counts.total, 2);
+    // 파생 접수번호를 바꾸면 이전 조각은 사라지고 번호와 다른 업무의 조각은 남아야 한다.
+    await client.execute(`UPDATE prior_specs SET query_data = json_set(query_data,'$.fields.receipt','changed900')
+      WHERE number = 'RECEIPT-ONLY'`);
+    assert.deepEqual((await priorSpecList.page(query)).rows.map(({ number }) => number), ["XYZ891"]);
+    assert.deepEqual((await priorSpecList.page({ ...query, search: { field: "number", query: "changed900" } })).rows.map(({ number }) => number), ["RECEIPT-ONLY"]);
+    assert.equal((await client.execute("SELECT COUNT(*) AS total FROM g2b_number_search_grams WHERE section = 1 AND gram = '891'")).rows[0].total, 1);
+  } finally {
+    // 계측에 사용한 DB 연결만 닫는다.
+    client.close();
+  }
+});
+
 /** 조회 불가 연결의 중복, 키 이동, 원본 저장·삭제 및 롤백 후 집계 정합성을 확인한다. */
 test("사전규격 목록이 조회 불가 연결을 해당 미수집 키에만 적용한다", async () => {
   // 전체 마이그레이션을 적용한 테스트 연결에서 실제 목록 저장소를 연다.

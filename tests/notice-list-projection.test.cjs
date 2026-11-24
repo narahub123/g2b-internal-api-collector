@@ -42,7 +42,7 @@ test("희소한 번호 조각은 같은 스냅샷에서 공고 목록 후보를 
     // 조각 인덱스와 목록의 복합 기본 키를 사용했는지 검증한다.
     const plan = await client.execute({ ...statement, sql: `EXPLAIN QUERY PLAN ${statement.sql}` });
     const details = plan.rows.map(({ detail }) => detail).join("\n");
-    assert.match(details, /SEARCH g2b_notice_number_grams USING PRIMARY KEY/);
+    assert.match(details, /SEARCH g2b_number_search_grams USING PRIMARY KEY/);
     assert.match(details, /SEARCH listed USING PRIMARY KEY/);
     // 같은 후보라도 사용자 목록의 모의공고 제외 조건은 적용되어야 한다.
     const publicPage = await list.page(request, { excludeMockNotices: true });
@@ -102,7 +102,7 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     // 마이그레이션을 재실행해 이미 반영한 건수를 중복 적용하지 않는지 확인한다.
     await migrateG2bDatabase(client);
     // 같은 번호·차수의 반복 세 글자는 한 번만 유지한다.
-    const grams = await client.execute("SELECT gram FROM g2b_notice_number_grams WHERE number = 'A' ORDER BY gram");
+    const grams = await client.execute("SELECT gram FROM g2b_number_search_grams WHERE number = 'A' ORDER BY gram");
     assert.deepEqual(grams.rows, [{ gram: "000" }, { gram: "a00" }]);
     // 공통 집계의 두 범위와 이전 버전 조회의 호환 뷰가 같은 건수를 제공해야 한다.
     const countsSql = "SELECT scope, total, collected FROM g2b_collection_list_counts WHERE section = 'notices' ORDER BY scope";
@@ -172,8 +172,8 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     try {
       // 복합 키 변경 시 이전 조각을 지우고 새 키를 인덱싱한다.
       await transaction.execute("UPDATE g2b_notice_list SET number = 'CHANGED' WHERE number = 'A'");
-      assert.equal((await transaction.execute("SELECT DISTINCT number FROM g2b_notice_number_grams WHERE gram = 'ged'")).rows[0].number, "CHANGED");
-      assert.deepEqual((await transaction.execute("SELECT gram FROM g2b_notice_number_grams WHERE number = 'A'")).rows, []);
+      assert.equal((await transaction.execute("SELECT DISTINCT number FROM g2b_number_search_grams WHERE gram = 'ged'")).rows[0].number, "CHANGED");
+      assert.deepEqual((await transaction.execute("SELECT gram FROM g2b_number_search_grams WHERE number = 'A'")).rows, []);
       // 뒤에 이어질 상태 전이 검증을 위해 목록 키를 복구한다.
       await transaction.execute("UPDATE g2b_notice_list SET number = 'A' WHERE number = 'CHANGED'");
       // 미수집 시도만 있던 B를 모의공고로 저장하면 전체 수집 건수는 늘고 사용자 전체 건수는 줄어든다.
@@ -209,7 +209,7 @@ test("입찰공고 목록이 최신 시도, 정확한 집계 및 선택지를 �
     assert.deepEqual((await list.page(query)).counts, { total: 0, collected: 0, uncollected: 0 });
     assert.deepEqual(await list.regions(), []);
     // 원본과 수집 이력이 사라진 키는 검색 인덱스에서도 제거돼야 한다.
-    assert.deepEqual((await client.execute("SELECT gram FROM g2b_notice_number_grams")).rows, []);
+    assert.deepEqual((await client.execute("SELECT gram FROM g2b_number_search_grams")).rows, []);
   } finally {
     // 테스트 전용 연결을 닫는다.
     client.close();

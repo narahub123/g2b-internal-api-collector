@@ -5,7 +5,7 @@ import type { Notice } from "@/entities/notice/model/types";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { appendCollectionDateRange, cleanText, searchText, sortDate } from "./collection-list-query";
 import { queryNoticePage } from "./notice-list-page";
-import { findSelectiveNoticeNumberGram, noticeNumberGrams } from "./notice-number-search";
+import { withNumberSearch } from "./number-search";
 
 // 사용자 입찰공고의 조회 결과, 집계, 선택지에 같은 노출 기준을 적용한다.
 type NoticeListOptions = { excludeMockNotices?: boolean };
@@ -185,19 +185,12 @@ export function openNoticeList(db: G2bDatabase) {
       }
       const [field, direction] = query.sort.split("-");
       const order = sortColumns.get(field) ?? "posted";
-      // 공고번호의 짧은 검색어와 다른 검색 유형은 기존 쿼리를 그대로 실행한다.
-      const grams = query.search.field === "number" ? noticeNumberGrams(keyword) : [];
+      // 번호 검색에서만 공통 후보 탐색을 적용한다.
+      const numberKeyword = query.search.field === "number" ? query.search.query : "";
       const pageOptions = { where, values, order, ascending: direction === "asc", excludeMockNotices };
-      if (grams.length) {
-        // 후보 인덱스 탐색과 정확한 결과를 같은 읽기 트랜잭션에서 처리한다.
-        return db.transaction(async () => {
-          // 흔한 조각이면 numberGram이 비어 기존 목록 경로로 조회한다.
-          const numberGram = await findSelectiveNoticeNumberGram(db, grams);
-          return queryNoticePage(db, query, { ...pageOptions, numberGram });
-        }, false);
-      }
-      // 상태별 건수와 선택 페이지를 동일한 스냅샷에서 조회한다.
-      return queryNoticePage(db, query, pageOptions);
+      // 후보 확인부터 집계와 페이지 선택까지 동일한 스냅샷에서 수행한다.
+      return withNumberSearch(db, "notices", numberKeyword, (grams) =>
+        queryNoticePage(db, query, { ...pageOptions, grams }));
     },
   };
 }

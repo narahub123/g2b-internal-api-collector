@@ -13,7 +13,9 @@ test("계약요청 목록의 복합 키, 최신 이력, 집계와 선택지를 �
   try {
     await migrateG2bDatabase(client);
     const db = new G2bDatabase(client);
-    const { collectionAttempts: { contractRequestList: list } } = openG2bRepository(db);
+    const { collectionAttempts: history } = openG2bRepository(db);
+    // 계약요청 조회와 수집 이력 진입점으로 실제 목록 트리거를 실행한다.
+    const list = history.contractRequestList;
     const query = { search: { field: "title", query: "" }, filters: {}, sort: "written-desc", status: "total", page: 9 };
     assert.deepEqual((await list.page(query)).counts, { total: 0, collected: 0, uncollected: 0 });
     await client.executeMultiple(`
@@ -75,6 +77,10 @@ test("계약요청 목록의 복합 키, 최신 이력, 집계와 선택지를 �
     // 저장 자료가 없는 B의 마지막 시도가 삭제되면 목록 키와 전체 건수도 사라진다.
     await client.execute("DELETE FROM g2b_collection_attempts WHERE id = 4");
     assert.deepEqual((await list.page(query)).counts, { total: 2, collected: 1, uncollected: 1 });
+    // 상위 저장문의 충돌 정책에 관계없이 반복 조각을 한 번만 저장해야 한다.
+    await history.start({ section: "contract-requests", number: "REPEAT0000", revision: "000", openingRevision: "" });
+    const repeated = await client.execute("SELECT COUNT(*) AS total FROM g2b_number_search_grams WHERE section = 5 AND number = 'REPEAT0000' AND gram = '000'");
+    assert.equal(repeated.rows[0].total, 1);
   } finally {
     // 테스트 연결을 닫아 다른 테스트와 상태를 공유하지 않게 한다.
     client.close();

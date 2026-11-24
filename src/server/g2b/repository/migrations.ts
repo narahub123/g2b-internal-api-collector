@@ -1,6 +1,7 @@
 import type { Client } from "@libsql/client";
 import { orderPlanListSchema } from "./order-plan-list-schema";
-import { noticeNumberGramsBackfill, noticeNumberGramsSchema } from "./notice-number-grams-schema";
+import { numberSearchSections, type NumberSearchSection } from "./number-search-config";
+import { numberSearchSchema, numberSearchSectionSql } from "./number-search-schema";
 import { openingResultListSchema } from "./opening-result-list-schema";
 import { priorSpecListSchema } from "./prior-spec-list-schema";
 import { contractRequestListSchema } from "./contract-request-list-schema";
@@ -651,14 +652,41 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (29);
       `);
     }
-    // 공고번호 검색용 조각이 아직 설치되지 않은 DB만 초기화한다.
-    const noticeNumberGrams = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 30");
-    if (!noticeNumberGrams.rows.length) {
-      // 조각 테이블과 동기화 트리거를 설치한다.
-      await transaction.executeMultiple(noticeNumberGramsSchema);
-      // 기존 키를 초기 적재한 다음 같은 트랜잭션에 완료 버전을 기록한다.
-      await transaction.execute(noticeNumberGramsBackfill);
-      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (30)");
+    // 입찰공고 전용 버전 30에서도 확장 적용 여부를 판별하도록 실제 테이블을 확인한다.
+    const numberGrams = await transaction.execute(`SELECT name FROM sqlite_schema WHERE type = 'table'
+      AND name IN ('g2b_notice_number_grams', 'g2b_number_search_grams')`);
+    // 공통 테이블을 설치한 뒤에는 기존 조각을 다시 적재하지 않는다.
+    if (!numberGrams.rows.some(({ name }) => name === "g2b_number_search_grams")) {
+      // 빈 DB와 버전 29는 모든 업무를, 기존 버전 30은 입찰공고를 복사해 초기화한다.
+      const legacy = numberGrams.rows.some(({ name }) => name === "g2b_notice_number_grams");
+      await transaction.executeMultiple(numberSearchSchema);
+      if (legacy) {
+        // 기존 기본 키가 유일하고 새 입찰공고 범위는 비어 있으므로 전건 복사 후 건수가 같아야 한다.
+        await transaction.execute(`INSERT INTO g2b_number_search_grams
+          SELECT 1, 1, gram, number, revision, opening_revision FROM g2b_notice_number_grams`);
+        const { rows } = await transaction.execute(`SELECT
+          (SELECT COUNT(*) FROM g2b_notice_number_grams) =
+          (SELECT COUNT(*) FROM g2b_number_search_grams WHERE section = 1 AND source = 1) AS same`);
+        // 복사 검증에 실패하면 기존 테이블과 버전을 보존하도록 롤백한다.
+        if (!rows[0].same) throw new Error("입찰공고 번호 조각 복사 건수가 일치하지 않습니다.");
+      }
+      // 여섯 업무의 조각을 먼저 채우고 이후 목록 변경을 반영할 트리거를 설치한다.
+      for (const section of Object.keys(numberSearchSections) as NumberSearchSection[]) {
+        const { backfill, triggers } = numberSearchSectionSql(section);
+        if (!legacy || section !== "notices") await transaction.execute(backfill);
+        await transaction.executeMultiple(triggers);
+      }
+      // 공통 구조의 초기화가 끝난 뒤 같은 트랜잭션에서 이전 트리거와 전용 테이블을 제거한다.
+      if (legacy) {
+        await transaction.executeMultiple(`
+          DROP TRIGGER g2b_notice_number_grams_insert;
+          DROP TRIGGER g2b_notice_number_grams_delete;
+          DROP TRIGGER g2b_notice_number_grams_update;
+          DROP TABLE g2b_notice_number_grams;
+        `);
+      }
+      // 최초 적용은 버전 30을 기록하고 기존 버전 30은 이력을 유지한다.
+      await transaction.execute("INSERT OR IGNORE INTO g2b_schema_migrations (version) VALUES (30)");
     }
     await transaction.commit();
   } finally {
