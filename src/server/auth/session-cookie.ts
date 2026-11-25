@@ -30,5 +30,16 @@ export async function readSessionCookie(requestHeaders: Headers): Promise<AuthSe
     || typeof user.consentRenewal?.required !== "boolean" || typeof user.consentRenewal?.overdue !== "boolean") {
     return null;
   }
+  // 구형 쿠키는 읽되 새 연결 정보가 들어 있다면 발급 구조를 검증한다.
+  const account = user.oauthAccount;
+  // 식별 값이 비어 있거나 이메일 형식이 세션 구조와 다르면 인증 자료로 사용하지 않는다.
+  if (account !== undefined && (!account || typeof account.provider !== "string" || !account.provider
+    || typeof account.providerUserId !== "string" || !account.providerUserId
+    || typeof account.linkGeneration !== "string" || !account.linkGeneration
+    || (account.email !== null && typeof account.email !== "string"))) {
+    // 연결을 다시 식별할 수 없는 쿠키는 미인증으로 처리한다.
+    return null;
+  }
+  // 기존 쿠키와 구조 검증을 통과한 신규 쿠키에만 서비스 프로필을 반환한다.
   return user;
 }

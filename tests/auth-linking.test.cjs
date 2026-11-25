@@ -18,7 +18,8 @@ test("추가 인증된 대상만 OAuth 연결을 얻고 이미 다른 대상에 
     await client.executeMultiple(`
       INSERT INTO auth_users (id, email, nickname, role) VALUES
         ('selected', 'same@example.com', 'Original', 'ADMIN'), ('other', 'same@example.com', 'Other', 'USER');
-      INSERT INTO auth_oauth_accounts VALUES ('google', 'selected-sub', 'selected'), ('google', 'other-sub', 'other');
+      INSERT INTO auth_oauth_accounts (provider, provider_user_id, user_id, link_generation)
+        VALUES ('google', 'selected-sub', 'selected', 'selected-generation'), ('google', 'other-sub', 'other', 'other-generation');
       INSERT INTO auth_consent_records (user_id, item_id, version, agreed, agreed_at, created_at)
         VALUES ('selected', 'terms', 'old', 1, 10, 10);
     `);
@@ -33,6 +34,9 @@ test("추가 인증된 대상만 OAuth 연결을 얻고 이미 다른 대상에 
     assert.equal(second.status, "link-conflict");
     assert.equal((await resolveEnrollment(database, "login", newIdentity, [])).user.id, "selected");
     assert.equal(first.user.nickname, "Original");
+    // 소유를 증명한 계정과 구분해 가입을 시작한 계정으로 세션을 발급한다.
+    assert.equal(first.user.oauthAccount.providerUserId, "new-sub");
+    assert.equal(first.user.oauthAccount.email, newIdentity.email);
     assert.equal((await client.execute("SELECT role FROM auth_users WHERE id = 'selected'")).rows[0].role, "ADMIN");
     assert.equal((await client.execute("SELECT version FROM auth_consent_records WHERE user_id = 'selected'")).rows[0].version, "old");
     assert.equal((await client.execute("SELECT COUNT(*) AS count FROM auth_consent_records")).rows[0].count, 1);
@@ -74,7 +78,8 @@ test("현재 정책의 버전, 동의 상태, 시행일과 마감일을 기준�
   // 공통 세션 발급기에 계산된 기존 회원의 결과가 그대로 전달되는지 확인한다.
   let issued;
   const status = await startEnrollmentSession({
-    status: "existing", user: { id: "member", email: "same@example.com", nickname: "Saved", image: null },
+    status: "existing", user: { id: "member", email: "same@example.com", nickname: "Saved", image: null,
+      oauthAccount: { provider: "google", providerUserId: "sub", email: "same@example.com", linkGeneration: "generation" } },
   }, async (session) => { issued = session; }, async (id) => {
     assert.equal(id, "member");
     return { required: true, overdue: true };

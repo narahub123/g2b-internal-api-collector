@@ -820,6 +820,19 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       // 초기화가 끝나면 적용 버전을 기록한다.
       await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (39)");
     }
+    // 계정별 이메일과 연결 세대가 설치됐는지 적용 이력으로 확인한다.
+    const oauthAccountProfile = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 40");
+    // 기존 연결을 보존하면서 새 컬럼과 초기 세대를 한 번만 적용한다.
+    if (!oauthAccountProfile.rows.length) {
+      // 기존 사용자 이메일은 연결 계정의 인증 근거가 아니므로 미확인 상태로 둔다.
+      await transaction.execute("ALTER TABLE auth_oauth_accounts ADD COLUMN email TEXT");
+      // 기존 행은 아래에서 채우고 새 연결은 생성 시 세대 값을 명시한다.
+      await transaction.execute("ALTER TABLE auth_oauth_accounts ADD COLUMN link_generation TEXT NOT NULL DEFAULT ''");
+      // 기존 연결마다 재연결 시 재사용하지 않을 세대를 지정한다.
+      await transaction.execute("UPDATE auth_oauth_accounts SET link_generation = lower(hex(randomblob(16)))");
+      // 컬럼 생성과 초기화가 완료된 경우에만 버전을 기록한다.
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (40)");
+    }
     await transaction.commit();
   } finally {
     transaction.close();

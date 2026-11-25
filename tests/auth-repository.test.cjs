@@ -13,11 +13,13 @@ test("인증 마이그레이션은 중복 이메일, OAuth 고유 연결, 동의
     const db = openAuthRepository(client);
     await client.executeMultiple(`
       INSERT INTO auth_users (id, email, nickname) VALUES ('a', 'x@example.com', 'A'), ('b', 'X@example.com', 'B');
-      INSERT INTO auth_oauth_accounts VALUES ('google', 'first', 'a'), ('google', 'second', 'a');
+      INSERT INTO auth_oauth_accounts (provider, provider_user_id, user_id, link_generation)
+        VALUES ('google', 'first', 'a', 'first-generation'), ('google', 'second', 'a', 'second-generation');
       INSERT INTO auth_consent_records (user_id, item_id, version, agreed, agreed_at, created_at) VALUES
         ('a', 'terms', '1', 1, 10, 10), ('a', 'terms', '1', 0, NULL, 10);
     `);
-    await assert.rejects(client.execute("INSERT INTO auth_oauth_accounts VALUES ('google', 'first', 'b')"), /UNIQUE/);
+    // 이미 연결된 공급자 키는 다른 내부 사용자에 다시 연결할 수 없다.
+    await assert.rejects(client.execute("INSERT INTO auth_oauth_accounts (provider, provider_user_id, user_id, link_generation) VALUES ('google', 'first', 'b', 'conflict-generation')"), /UNIQUE/);
     assert.deepEqual(await db.findUserState("a"), { id: "a", role: "USER" });
     await client.execute("UPDATE auth_users SET role = 'ADMIN' WHERE id = 'a'");
     assert.deepEqual(await db.findUserState("a"), { id: "a", role: "ADMIN" });
