@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { House, LayoutDashboard, LogOut, UserRound } from "lucide-react";
-import { Avatar } from "@/shared/ui/Avatar";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -58,14 +58,14 @@ export function AccountDropdown({ profile, links }: AccountDropdownProps) {
             className="rounded-full"
             aria-label="계정 메뉴 열기"
           >
-            <Avatar nickname={profile.nickname} image={profile.image} />
+            <UserAvatar nickname={profile.nickname} image={profile.image} />
           </Button>
         </DropdownMenuTrigger>
 
         <DropdownMenuContent align="end" sideOffset={8} className="w-64">
           <DropdownMenuLabel className="font-normal">
             <div className="flex items-center gap-3 py-1">
-              <Avatar nickname={profile.nickname} image={profile.image} />
+              <UserAvatar nickname={profile.nickname} image={profile.image} />
 
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">
