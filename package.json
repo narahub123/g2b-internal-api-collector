@@ -36,7 +36,8 @@
     "sanitize-html": "^2.18.1",
     "sonner": "2.0.8",
     "tailwind-merge": "^3.7.0",
-    "tough-cookie": "^6.1.0"
+    "tough-cookie": "^6.1.0",
+    "vaul": "^1.1.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.5",
