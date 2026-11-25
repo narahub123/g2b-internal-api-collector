@@ -3,7 +3,7 @@ import type { Client } from "@libsql/client";
 import { orderPlanListSchema } from "./order-plan-list-schema";
 import { nameSearchSections, numberSearchSections, type NumberSearchSection } from "./number-search-config";
 import { nameSearchSectionSql, numberSearchSchema, numberSearchSectionSql } from "./number-search-schema";
-import { datePageSchema, datePageSectionSchema } from "./date-bucket-page";
+import { datePageSchema, datePageSectionSchema, upgradeDatePageSection } from "./date-bucket-page";
 import { noticeRegionBackfill, noticeRegionSchema } from "./notice-region-schema";
 import { openingResultListSchema } from "./opening-result-list-schema";
 import { priorSpecListSchema } from "./prior-spec-list-schema";
@@ -806,6 +806,19 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       }
       // 초기 적재와 동기화 설치가 끝난 후 완료 버전을 기록한다.
       await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (38)");
+    }
+    // 날짜 범위 집계에 필요한 수집 건수가 설치됐는지 확인한다.
+    const rangedDateCounts = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 39");
+    // 모든 구간 적재와 트리거 변경을 기존 스키마와 같은 트랜잭션에 담는다.
+    if (!rangedDateCounts.rows.length) {
+      // 이전 버전과 동일한 구간 키에 수집 건수를 추가한다.
+      await transaction.execute("ALTER TABLE g2b_list_date_buckets ADD COLUMN collected INTEGER NOT NULL DEFAULT 0");
+      for (const section of ["notices", "order-plans", "prior-specs", "opening-results", "contract-requests", "contracts"] as const) {
+        // 업무별 날짜 및 노출 조건으로 건수를 채워 기존 DB의 검색 결과를 보존한다.
+        await transaction.executeMultiple(upgradeDatePageSection(section));
+      }
+      // 초기화가 끝나면 적용 버전을 기록한다.
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (39)");
     }
     await transaction.commit();
   } finally {

@@ -1,5 +1,5 @@
 import { withBusinessKeys } from "./business-filter";
-import { dateBucketPageSql, firstDateSeekPage } from "./date-bucket-page";
+import { dateBucketPageSql, firstDateSeekPage, rangedDatePage } from "./date-bucket-page";
 import { numberSearchSource, withListSearch } from "./number-search";
 import type { CollectionListRow } from "./collection-attempts";
 import type { CollectionListQuery } from "@/shared/model/g2b/collection-list-query";
@@ -117,7 +117,13 @@ export function openOpeningResultList(db: G2bDatabase) {
           )`;
         // 페이지 키 경로만 바꾸고 상세 조립과 출력 정렬은 그대로 사용한다.
         const pageSql = seekDatePage ? dateBucketPageSql("opening-results") : defaultPage;
-        const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}
+        // 날짜 범위만 적용한 관리자 전체 목록은 구간 집계와 기존 날짜 인덱스를 사용한다.
+        const rangePage = order === "sortDate" && ascending && query.status === "total" && !source.prefix
+          ? rangedDatePage("opening-results", where, values, query.page)
+          : undefined;
+        // 기존 조회와 날짜 구간 조회는 최종 행 조립을 공유한다.
+        const pageCtes = rangePage?.sql ?? `${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}`;
+        const sql = `WITH ${pageCtes}
           SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
             paged.collected_at AS collectedAt, ${openingResultTitleSql} AS title,
             CAST(${openingResultBusinessCodeSql} AS TEXT) AS businessCode,
@@ -131,7 +137,7 @@ export function openOpeningResultList(db: G2bDatabase) {
           LEFT JOIN g2b_collection_attempts attempt ON attempt.id = paged.latest_id
           ORDER BY paged.sortValue ${direction}, paged.number, paged.revision, paged.opening_revision`;
         // 조건 인자를 집계와 페이지에 각각 전달한 뒤 빈 목록에서도 반환되는 집계 행을 사용한다.
-        const rows = await db.prepare(sql).all(...(source.args ?? [...values, ...values]), query.page) as
+        const rows = await db.prepare(sql).all(...(rangePage?.args ?? [...(source.args ?? [...values, ...values]), query.page])) as
           (CollectionListRow & { total: number; collected: number; selectedCount: number })[];
         const { total, collected, selectedCount } = rows[0];
         const totalPages = Math.ceil(selectedCount / pageSize);

@@ -1,4 +1,4 @@
-import { dateBucketPageSql, firstDateSeekPage } from "./date-bucket-page";
+import { dateBucketPageSql, firstDateSeekPage, rangedDatePage } from "./date-bucket-page";
 import { budgetPageSql } from "./budget-range-page";
 import { COLLECTION_LIST_PAGE_SIZE as pageSize } from "@/shared/config/collection-list";
 import type { NoticeListQuery } from "@/entities/notice/model/notice-list-query";
@@ -103,7 +103,13 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
   // 예산 및 다른 조건의 페이지는 검증된 기존 SQL 경로를 유지한다.
   const pageSql = seekDatePage ? dateBucketPageSql("notices") : adaptiveBudget ? budgetPage : defaultPage;
   // 기존 최종 표시 순서와 조회 결과 형태를 모든 경로에서 공유한다.
-  const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}
+  // 날짜 범위만 적용한 관리자 전체 목록은 구간 집계와 기존 날짜 인덱스를 사용한다.
+  const rangePage = order === "posted" && ascending && query.status === "total" && !excludeMockNotices && !source.prefix
+    ? rangedDatePage("notices", where, values, query.page)
+    : undefined;
+  // 기존 조회와 날짜 구간 조회는 최종 행 조립을 공유한다.
+  const pageCtes = rangePage?.sql ?? `${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}`;
+  const sql = `WITH ${pageCtes}
     SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
       paged.collected_at AS collectedAt, json_extract(saved.data, '$.title') AS title,
       CAST(COALESCE(json_extract(saved.data, '$.payload.dlUntyBidPbancM.prcmBsneSeCd'),
@@ -119,7 +125,7 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
   const args = source.args ? [...source.args, query.page]
     : adaptiveBudget ? [...values, query.page, scope, ...values, ...values]
     : [...(where.length ? values : [scope]), ...values, query.page];
-  const rows = await db.prepare(sql).all(...args) as
+  const rows = await db.prepare(sql).all(...(rangePage?.args ?? args)) as
     (CollectionListRow & { total: number; collected: number; selectedCount: number })[];
   // 빈 페이지에도 집계가 한 행 남으므로 첫 행에서 페이지 범위를 계산한다.
   const { total, collected, selectedCount } = rows[0];

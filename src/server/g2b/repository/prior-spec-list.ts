@@ -1,5 +1,5 @@
 import { withBusinessKeys } from "./business-filter";
-import { dateBucketPageSql, firstDateSeekPage } from "./date-bucket-page";
+import { dateBucketPageSql, firstDateSeekPage, rangedDatePage } from "./date-bucket-page";
 import { numberSearchSource, withListSearch } from "./number-search";
 import type { CollectionListRow } from "./collection-attempts";
 import { budgetPageSql } from "./budget-range-page";
@@ -125,14 +125,20 @@ export function openPriorSpecList(db: G2bDatabase) {
           : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'prior-specs' AND scope = 'all'";
         const selected = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
         // 정렬과 페이지 경계를 먼저 확정해 원본 사전규격과 최신 시도는 선택한 키에 한해서 조회한다.
+        // 날짜 범위와 번호·업무구분을 함께 검사할 때는 NULL이 범위에 포함되지 않는다.
+        const compoundDateOrder = order === "sortDate" && ascending && !source.prefix
+          && query.search.field === "number" && Boolean(query.search.query)
+          && (Array.isArray(query.filters.business) && query.filters.business.length > 0) && where.some(clause => clause.startsWith("sortDate "));
         // 조건 없는 미수집 날짜순은 전체 목록 대신 상태별 인덱스에서 페이지 키를 읽는다.
         const pageSource = order === "sortDate" && ascending && query.status === "uncollected" && !where.length && !source.prefix
           ? `g2b_prior_spec_list INDEXED BY g2b_prior_spec_list_uncollected_asc WHERE ` + criteria + " AND TRUE AND"
-          : source.page;
+          : compoundDateOrder
+            ? `g2b_prior_spec_list INDEXED BY g2b_prior_spec_list_date_asc WHERE (sortDate IS NULL) = 0 AND ` + criteria + " AND"
+            : source.page;
         const defaultPage = `paged AS MATERIALIZED (
             SELECT number, revision, opening_revision, collected_at, latest_id, ${order} AS sortValue
             FROM ${pageSource} ${status}
-            ORDER BY ${pageOrder}, number, revision, opening_revision
+            ORDER BY ${compoundDateOrder ? order + " ASC" : pageOrder}, number, revision, opening_revision
             LIMIT ${pageSize} OFFSET (
               SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
             )
@@ -150,7 +156,13 @@ export function openPriorSpecList(db: G2bDatabase) {
           && query.status === "total" && !where.length;
         // 예산 분기와 기본 조회를 포함한 모든 경로는 같은 응답을 조립한다.
         const pageSql = seekDatePage ? dateBucketPageSql("prior-specs") : adaptiveBudget ? budgetPage : defaultPage;
-        const sql = `WITH ${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}
+        // 날짜 범위만 적용한 관리자 전체 목록은 구간 집계와 기존 날짜 인덱스를 사용한다.
+        const rangePage = order === "sortDate" && ascending && query.status === "total" && !source.prefix
+          ? rangedDatePage("prior-specs", where, values, query.page)
+          : undefined;
+        // 기존 조회와 날짜 구간 조회는 최종 행 조립을 공유한다.
+        const pageCtes = rangePage?.sql ?? `${source.prefix}totals AS MATERIALIZED (${totals}), ${pageSql}`;
+        const sql = `WITH ${pageCtes}
           SELECT paged.number, paged.revision, paged.opening_revision AS openingRevision,
             paged.collected_at AS collectedAt, json_extract(saved.data, '$.payload.dlBfSpecM.bfSpecNm') AS title,
             CAST(json_extract(saved.data, '$.payload.dlBfSpecM.prcmBsneSeCd') AS TEXT) AS businessCode,
@@ -163,7 +175,7 @@ export function openPriorSpecList(db: G2bDatabase) {
           ORDER BY paged.sortValue ${direction}, paged.number, paged.revision, paged.opening_revision`;
         // 조건 인자를 집계와 페이지에 각각 전달한 뒤 빈 목록에서도 반환되는 집계 행을 사용한다.
         const args = source.args ? [...source.args, query.page] : adaptiveBudget ? [...values, query.page, "all", ...values, ...values] : [...values, ...values, query.page];
-        const rows = await db.prepare(sql).all(...args) as
+        const rows = await db.prepare(sql).all(...(rangePage?.args ?? args)) as
           (CollectionListRow & { total: number; collected: number; selectedCount: number })[];
         const { total, collected, selectedCount } = rows[0];
         const totalPages = Math.ceil(selectedCount / pageSize);
