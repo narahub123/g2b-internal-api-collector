@@ -128,13 +128,16 @@ function WithdrawalDialog({ item, submit }: { item: ManagedConsent; submit: Subm
 /**
  * 정책별 최신 동의와 날짜를 표시하고 필요한 변경 동작을 제공한다.
  * @param props 현재 시행 중인 문서 및 계정에 적용된 동의 목록.
+ * @param props.onDataChanged 동의 쿼리를 다시 읽는 동작.
  * @returns PC와 모바일이 공유하는 동의 관리 카드.
  */
-export function ConsentManagement({ items, sessionOutOfSync }: {
+export function ConsentManagement({ items, sessionOutOfSync, onDataChanged }: {
   // 화면에 표시할 정책별 최신 동의.
   items: ManagedConsent[];
   // 같은 이력으로 계산한 상태와 로그인 쿠키의 재동의 상태가 다른지 여부.
   sessionOutOfSync: boolean;
+  // 저장 또는 문서 변경 이후 업무 데이터를 무효화한다.
+  onDataChanged: () => void;
 }) {
   // 결과 안내를 카드에 유지하면서 표시 데이터만 서버에서 다시 읽는다.
   const router = useRouter();
@@ -151,7 +154,11 @@ export function ConsentManagement({ items, sessionOutOfSync }: {
       const saved = await withSessionCookieWrite(() => submitConsentChange(data));
       setResult(saved);
       if (saved === "signed-out") router.replace("/login");
-      else if (saved === "saved" || saved === "stale" || saved === "session-pending") router.refresh();
+      else if (saved === "saved" || saved === "stale" || saved === "session-pending") {
+        // 업무 데이터의 무효화와 기존 세션 화면 갱신을 함께 수행한다.
+        onDataChanged();
+        router.refresh();
+      }
     } catch {
       // 통신 오류에서는 저장 성공 여부를 단정하지 않는다.
       setResult("failed");

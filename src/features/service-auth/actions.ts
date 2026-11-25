@@ -172,7 +172,8 @@ export async function unlinkOAuthAccount(form: FormData): Promise<void> {
     redirect(`${MYPAGE_USER_PATH}?account=failed`);
   }
   // 실제 해제 여부에 따라 사용자 정보에서 성공 또는 제한을 안내한다.
-  redirect(removed ? `${MYPAGE_USER_PATH}?account=unlinked` : `${MYPAGE_USER_PATH}?account=unlink-blocked`);
+  // 같은 화면에서 연속 해제하더라도 별개의 성공 결과로 업무 캐시를 갱신한다.
+  redirect(removed ? `${MYPAGE_USER_PATH}?account=unlinked&accountChange=${randomBytes(8).toString("hex")}` : `${MYPAGE_USER_PATH}?account=unlink-blocked`);
 }
 
 /**
