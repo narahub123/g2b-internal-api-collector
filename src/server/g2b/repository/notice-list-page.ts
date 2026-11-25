@@ -81,9 +81,12 @@ export async function queryNoticePage(db: G2bDatabase, query: NoticeListQuery, o
     "notices", "g2b_notice_list INDEXED BY g2b_notice_list_budget",
     `g2b_notice_list INDEXED BY g2b_notice_list_${postedIndex}`, "posted", condition, status, selected,
   ) : "";
-  // 조건 없는 미수집 제목순은 업무구분 인덱스 대신 기존 상태 인덱스로 후보를 읽는다.
-  const pageSource = order === "sortTitle" && query.status === "uncollected" && !where.length && !source.prefix
-    ? `g2b_notice_list INDEXED BY g2b_notice_list_uncollected WHERE ${condition} AND`
+  // 조건 없는 미수집 목록은 기존 제목순 경로와 새 날짜 오름차순 경로에서 상태별 인덱스를 사용한다.
+  const uncollectedIndex = order === "posted" && ascending ? "uncollected_asc"
+    : order === "sortTitle" ? "uncollected" : undefined;
+  // 검색·필터가 있으면 기존 후보나 범위 인덱스를 선택할 수 있도록 제한하지 않는다.
+  const pageSource = uncollectedIndex && query.status === "uncollected" && !where.length && !source.prefix
+    ? `g2b_notice_list INDEXED BY g2b_notice_list_${uncollectedIndex} WHERE ${condition} AND TRUE AND`
     : source.page;
   // 페이지 키를 먼저 확정한 뒤 기본 키로 공고와 최신 수집 시도의 상세 정보를 가져온다.
   const defaultPage = `paged AS MATERIALIZED (

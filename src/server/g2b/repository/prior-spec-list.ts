@@ -125,9 +125,13 @@ export function openPriorSpecList(db: G2bDatabase) {
           : "SELECT total, collected FROM g2b_collection_list_counts WHERE section = 'prior-specs' AND scope = 'all'";
         const selected = query.status === "collected" ? "collected" : query.status === "uncollected" ? "total - collected" : "total";
         // 정렬과 페이지 경계를 먼저 확정해 원본 사전규격과 최신 시도는 선택한 키에 한해서 조회한다.
+        // 조건 없는 미수집 날짜순은 전체 목록 대신 상태별 인덱스에서 페이지 키를 읽는다.
+        const pageSource = order === "sortDate" && ascending && query.status === "uncollected" && !where.length && !source.prefix
+          ? `g2b_prior_spec_list INDEXED BY g2b_prior_spec_list_uncollected_asc WHERE ` + criteria + " AND TRUE AND"
+          : source.page;
         const defaultPage = `paged AS MATERIALIZED (
             SELECT number, revision, opening_revision, collected_at, latest_id, ${order} AS sortValue
-            FROM ${source.page} ${status}
+            FROM ${pageSource} ${status}
             ORDER BY ${pageOrder}, number, revision, opening_revision
             LIMIT ${pageSize} OFFSET (
               SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals

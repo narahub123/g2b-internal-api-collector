@@ -776,6 +776,23 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       // 설치가 끝난 뒤 적용 버전을 기록한다.
       await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (36)");
     }
+    // 미수집 날짜 오름차순의 후보 인덱스 설치 여부를 읽는다.
+    const uncollectedAscending = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 37");
+    // 기존 목록의 미수집 키만 색인하고 완료 버전을 같은 트랜잭션에 기록한다.
+    if (!uncollectedAscending.rows.length) {
+      // 기존 NULL 마지막과 복합 키 순서를 적용한다. TRUE 조건은 무필터 후보 경로에서 명시한다.
+      await transaction.executeMultiple(`
+        CREATE INDEX g2b_notice_list_uncollected_asc
+          ON g2b_notice_list((posted IS NULL), posted, number, revision, opening_revision)
+          WHERE collected_at IS NULL AND TRUE;
+        CREATE INDEX g2b_order_plan_list_uncollected_asc ON g2b_order_plan_list((released IS NULL), released, number, revision, opening_revision) WHERE collected_at IS NULL AND visible = 1 AND TRUE;
+        CREATE INDEX g2b_prior_spec_list_uncollected_asc ON g2b_prior_spec_list((sortDate IS NULL), sortDate, number, revision, opening_revision) WHERE collected_at IS NULL AND visible = 1 AND TRUE;
+        CREATE INDEX g2b_opening_result_list_uncollected_asc ON g2b_opening_result_list((sortDate IS NULL), sortDate, number, revision, opening_revision) WHERE collected_at IS NULL AND TRUE;
+        CREATE INDEX g2b_contract_request_list_uncollected_asc ON g2b_contract_request_list((written IS NULL), written, number, revision, opening_revision) WHERE collected_at IS NULL AND TRUE;
+        CREATE INDEX g2b_contract_list_uncollected_asc ON g2b_contract_list((sortDate IS NULL), sortDate, number, revision, opening_revision) WHERE collected_at IS NULL AND TRUE;
+        INSERT INTO g2b_schema_migrations (version) VALUES (37);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

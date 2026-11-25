@@ -95,10 +95,14 @@ export function openContractList(db: G2bDatabase) {
         const seekDatePage = order === "sortDate" && ascending && query.page >= firstDateSeekPage
           && query.status === "total" && !where.length;
         // 다른 조건에서는 기존 정렬과 페이지 보정을 사용해 목록 키를 정한다.
+        // 조건 없는 미수집 날짜순은 전체 목록 대신 상태별 인덱스에서 페이지 키를 읽는다.
+        const pageSource = order === "sortDate" && ascending && query.status === "uncollected" && !where.length && !source.prefix
+          ? `g2b_contract_list INDEXED BY g2b_contract_list_uncollected_asc WHERE ` + criteria + " AND TRUE AND"
+          : source.page;
         const defaultPage = `
           paged AS MATERIALIZED (
             SELECT number, revision, opening_revision, collected_at, latest_id, ${order} AS sortValue
-            FROM ${source.page} ${status}
+            FROM ${pageSource} ${status}
             ORDER BY ${pageOrder}, number, revision, opening_revision
             LIMIT ${pageSize} OFFSET (
               SELECT (max(1, min(?, ((${selected}) + ${pageSize - 1}) / ${pageSize})) - 1) * ${pageSize} FROM totals
