@@ -3,7 +3,7 @@ import { parseProfileImageKey } from "@/server/auth/profile";
 import { openProfileStorage } from "@/server/auth/profile-storage";
 
 /**
- * 현재 로그인 사용자가 여전히 참조하는 버전의 이미지를 비공개 버킷에서 제공한다.
+ * 현재 로그인 사용자가 여전히 참조하는 버전의 인증된 이미지를 제공한다.
  * @param request 화면에서 사용하는 이미지 버전 주소와 세션을 포함한 요청.
  * @returns 로그인한 소유자의 WebP 또는 캐시하지 않는 오류 응답.
  */
@@ -22,7 +22,7 @@ export async function GET(request: Request) {
     return new Response(null, { status: 404, headers: errorHeaders });
   }
   try {
-    // 접근할 수 있는 현행 이미지에만 R2 요청을 보낸다.
+    // 접근할 수 있는 현행 이미지에만 Cloudinary 서명 요청을 보낸다.
     const bytes = await openProfileStorage().read(key);
     if (!bytes) return new Response(null, { status: 404, headers: errorHeaders });
     // 공유 캐시를 제외하고 동일 브라우저에서만 해당 버전을 최대 5분간 재사용한다.

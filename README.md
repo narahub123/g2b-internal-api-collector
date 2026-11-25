@@ -38,9 +38,9 @@ Node.js 24 이상과 npm으로 실행합니다. Turso Cloud의 SQLite(libSQL) DB
 
 ### 마이페이지 프로필 이미지
 
-웹 서버에 비공개 R2 버킷의 `R2_ACCOUNT_ID`, `R2_PROFILE_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`를 설정합니다. R2 자격 증명은 프로필 버킷의 객체 읽기·쓰기·삭제와 목록 조회에 사용합니다. `AUTH_URL`은 브라우저에서 접속하는 서비스 주소로 설정합니다.
+웹 서버에 Cloudinary 제품 환경의 `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`을 설정합니다. 서버는 업로드·다운로드·삭제와 목록 조회에 이 자격 증명을 사용합니다. `AUTH_URL`은 브라우저에서 접속하는 서비스 주소로 설정합니다.
 
-프로필 파일은 인증된 웹 경로에서 제공하며 버전별 브라우저 캐시는 최대 5분입니다. `npm run profile:cleanup`은 24시간 이상 된 미참조 객체 수를 확인합니다. 실제 삭제는 대상 DB와 버킷 설정을 확인한 뒤 `npm run profile:cleanup -- --apply`로 실행합니다.
+프로필 파일은 Cloudinary의 `authenticated` 유형으로 저장합니다. 앱이 로그인 사용자와 현재 버전을 검증한 뒤 서버에서 서명한 주소로 파일을 읽어 전달합니다. 버전별 브라우저 캐시는 최대 5분입니다. `npm run profile:cleanup`은 24시간 이상 된 미참조 파일 수를 확인합니다. 실제 삭제는 대상 DB와 Cloudinary 환경을 확인한 뒤 `npm run profile:cleanup -- --apply`로 실행합니다.
 
 ### 첨부 처리 워커
 
