@@ -793,6 +793,20 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (37);
       `);
     }
+    // 제목·기관명 설치 이력과 별도로 계약요청 세부품명의 조각 설치 이력을 확인한다.
+    const requestItemGrams = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 38");
+    // 기존 검색 출처를 유지한 채 세부품명 출처만 채운다.
+    if (!requestItemGrams.rows.length) {
+      // 초기 적재와 목록 변경 트리거를 같은 트랜잭션에 반영한다.
+      for (const { backfill, triggers } of nameSearchSectionSql("contract-requests", true)) {
+        // 기존 목록에서는 이미 표시 가능한 품명만 들어 있는 파생 배열을 읽는다.
+        await transaction.execute(backfill);
+        // 이후 목록의 키나 표시 품명이 달라지면 해당 출처를 교체한다.
+        await transaction.executeMultiple(triggers);
+      }
+      // 초기 적재와 동기화 설치가 끝난 후 완료 버전을 기록한다.
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (38)");
+    }
     await transaction.commit();
   } finally {
     transaction.close();

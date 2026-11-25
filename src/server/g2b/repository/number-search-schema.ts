@@ -88,21 +88,22 @@ export function numberSearchSectionSql(section: NumberSearchSection) {
 /**
  * 제목과 기관명의 초기 적재와 출처별 목록 동기화 SQL을 만든다.
  * @param section 이름 검색이 활성화된 목록 업무.
+ * @param itemsOnly 계약요청 세부품명만 설치할 때 사용하고 기존 마이그레이션에서는 생략한다.
  * @returns 해당 업무에 적용할 출처별 트리거 SQL과 적재 SQL.
  */
-export function nameSearchSectionSql(section: NumberSearchSection) {
+export function nameSearchSectionSql(section: NumberSearchSection, itemsOnly = false) {
   // 활성화한 이름 출처와 기존 목록의 복합 키 정의를 읽는다.
   const names = nameSearchSections[section];
   const { id, table } = numberSearchSections[section];
-  const fields = [
-    { source: 3, expression: names?.title, array: false },
-    { source: 4, expression: names?.agency?.expression, array: names?.agency?.array ?? false },
+  const fields = itemsOnly ? [{ source: 5, expression: names?.item, arrayPath: "$.names" }] : [
+    { source: 3, expression: names?.title, arrayPath: undefined },
+    { source: 4, expression: names?.agency?.expression, arrayPath: names?.agency?.array ? "$.agencies" : undefined },
   ];
   // 비활성 출처에는 트리거와 조각을 설치하지 않는다.
-  return fields.flatMap(({ source, expression, array }) => {
+  return fields.flatMap(({ source, expression, arrayPath }) => {
     if (!expression) return [];
     /**
-     * 기관 배열은 개별 항목에서 조각을 추출하도록 출처 SELECT를 구성한다.
+     * 기관과 세부품명 배열은 개별 항목에서 조각을 추출하도록 출처 SELECT를 구성한다.
      * @param row 초기 적재의 목록 별칭 또는 트리거의 NEW.
      * @param backfill 전체 목록에서 적재할 때만 true.
      * @returns 해당 출처의 조각을 저장하는 INSERT.
@@ -112,9 +113,9 @@ export function nameSearchSectionSql(section: NumberSearchSection) {
       const value = expression?.replaceAll("@", row);
       const keys = `${row}.number AS number, ${row}.revision AS revision, ${row}.opening_revision AS opening_revision`;
       const rows = backfill ? ` FROM ${table} listed` : "";
-      const entries = array ? `${backfill ? " CROSS JOIN" : " FROM"} json_each(${row}.fields, '$.agencies') entry` : "";
-      // 한 목록 키에서 여러 기관에 같은 조각이 있어도 한 번만 저장한다.
-      return insertGrams(id, `SELECT ${source} AS source, ${keys}, ${array ? "entry.value" : value} AS value${rows}${entries}`);
+      const entries = arrayPath ? `${backfill ? " CROSS JOIN" : " FROM"} json_each(${row}.fields, '${arrayPath}') entry` : "";
+      // 한 목록 키에서 여러 배열 항목에 같은 조각이 있어도 한 번만 저장한다.
+      return insertGrams(id, `SELECT ${source} AS source, ${keys}, ${arrayPath ? "entry.value" : value} AS value${rows}${entries}`);
     }
     // 키가 같아도 해당 출처의 검색 문자열이 바뀌면 그 출처만 교체한다.
     const changed = `OLD.number IS NOT NEW.number OR OLD.revision IS NOT NEW.revision

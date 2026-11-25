@@ -17,6 +17,8 @@ export const nameSearchSections: Partial<Record<NumberSearchSection, {
   title?: string;
   // 기관 검색에 쓰는 기존 단일 값 또는 JSON 배열이다.
   agency?: { expression: string; array: boolean };
+  // 표시 조건을 통과한 세부품명 배열의 기존 검색 표현식이다.
+  item?: string;
 }>> = {
   notices: {
     title: "json_extract(@.fields, '$.searchTitle')",
@@ -25,6 +27,10 @@ export const nameSearchSections: Partial<Record<NumberSearchSection, {
   "order-plans": { title: "@.sortTitle", agency: { expression: "@.agency", array: false } },
   "prior-specs": { title: "@.sortTitle", agency: { expression: "json_extract(@.fields, '$.agencies')", array: true } },
   "opening-results": { title: "@.sortTitle", agency: { expression: "json_extract(@.fields, '$.agencies')", array: true } },
-  "contract-requests": { title: "@.sortTitle", agency: { expression: "@.agency", array: false } },
+    "contract-requests": {
+    title: "@.sortTitle",
+    agency: { expression: "@.agency", array: false },
+    item: "json_extract(@.fields, '$.names')",
+  },
   contracts: { title: "@.sortTitle", agency: { expression: "json_extract(@.fields, '$.agencies')", array: true } },
 };

@@ -5,7 +5,7 @@ import { nameSearchSections, numberSearchSections, type NumberSearchSection } fr
 
 // 각 검색 출처에서 기존 부분 일치 결과를 포함할 수 있는 조각을 하나씩 저장한다.
 export type SearchGram = {
-  // 번호·차수, 접수번호, 제목, 기관명의 고정 출처 식별자다.
+  // 번호·차수, 접수번호, 제목, 기관명, 세부품명의 고정 출처 식별자다.
   source: number;
   // 한도 안에서 건수를 확인한 조각이다.
   gram: string;
@@ -56,6 +56,9 @@ export function withListSearch<T>(
   } else if ((field === "title" && names?.title) || (field === "agency" && names?.agency)) {
     // 이름 검색어에서 번호의 구분자 제거를 적용하지 않는다.
     needles.push({ source: field === "title" ? 3 : 4, grams: lastGrams(searchText(keyword)) });
+  } else if (field === "item" && names?.item) {
+    // 세부품명은 기존 부분 일치 검색어의 정규화를 그대로 사용한다.
+    needles.push({ source: 5, grams: lastGrams(searchText(keyword)) });
   }
   // 지원 출처가 없거나 한 출처라도 짧으면 기존 목록을 조회한다.
   if (!needles.length || needles.some(({ grams }) => !grams.length)) return run([]);
