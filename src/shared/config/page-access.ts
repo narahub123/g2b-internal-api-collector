@@ -1,5 +1,6 @@
 import { AUTH_SUCCESS_PATH } from "./auth";
 import { isOAuthProvider } from "./oauth-providers";
+import { MYPAGE_MENUS, myPageMenuPath } from "./mypage";
 
 /** 인증과 메뉴에서 사용하는 최신 서버 역할. null은 비로그인이다. */
 export type PageRole = "USER" | "ADMIN" | null;
@@ -20,6 +21,8 @@ export const PAGE_PATH_HEADER = "x-g2b-page-path";
 const guestPages = new Set(["/login", "/signup", "/auth/complete", "/auth/link-account"]);
 // 사이트 루트와 실패 처리 경로는 누구나 도달할 수 있어야 한다.
 const publicPages = new Set(["/", AUTH_ERROR_PATH, AUTH_RETURN_PATH]);
+// 실제 메뉴 경로만 방문 이력과 탐색별 세션 갱신에 사용한다.
+const myPageMenuPaths = new Set<string>(MYPAGE_MENUS.map(({ id }) => myPageMenuPath(id)));
 // 각 나라장터 상세가 URL에서 사용하는 업무 식별자 수를 정의한다.
 const detailSegments = new Map([
   ["order-plans", 1], ["prior-specs", 1], ["contract-requests", 2],
@@ -99,6 +102,8 @@ export function parseInternalPage(value: unknown): URL | undefined {
 export function isReturnablePage(path: string): boolean {
   const canonical = normalizePath(path);
   if (["/", AUTH_SUCCESS_PATH, "/admin", "/admin/g2b", "/admin/g2b/notice-queue"].includes(canonical)) return true;
+  // 정확히 등록된 마이페이지 메뉴에 복귀할 수 있다.
+  if (myPageMenuPaths.has(canonical)) return true;
   const match = /^\/(admin\/)?g2b\/([^/]+)(.*)$/.exec(canonical);
   if (!match) return false;
   const depth = detailSegments.get(match[2]);

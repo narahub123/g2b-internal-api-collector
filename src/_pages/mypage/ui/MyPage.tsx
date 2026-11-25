@@ -1,48 +1,22 @@
+import type { ReactNode } from "react";
 import { ServiceMain } from "@/shared/ui/ServiceMain";
 import MyPageNavigation from "./MyPageNavigation";
-import UserInformation from "./UserInformation";
-import BusinessInformation from "./BusinessInformation";
-import Recommendations from "./Recommendations";
-import Interests from "./Interests";
-
-/** 마이페이지 메뉴 및 표시 순서. */
-const menus = [
-  {
-    id: "user",
-    label: "사용자 정보",
-    content: <UserInformation />,
-  },
-  {
-    id: "business",
-    label: "사업자 정보",
-    content: <BusinessInformation />,
-  },
-  {
-    id: "recommendation",
-    label: "추천",
-    content: <Recommendations />,
-  },
-  {
-    id: "interests",
-    label: "관심",
-    content: <Interests />,
-  },
-] as const;
-
-/** 마이페이지 최초 진입 시 표시할 메뉴. */
-const DEFAULT_MENU_ID: (typeof menus)[number]["id"] = "user";
 
 /**
- * 마이페이지 본문과 메뉴별 콘텐츠를 구성한다.
- * @returns 마이페이지 화면.
+ * 기존 본문 안에 마이페이지 제목과 탐색 메뉴를 배치한다.
+ * @param props.children 현재 메뉴 경로에서 렌더링한 본문.
+ * @returns 공통 제목, 탐색 메뉴 및 현재 본문을 포함한 화면.
  */
-export default function MyPage() {
+export default function MyPage({ children }: { children: ReactNode }) {
+  // 기존 본문 폭과 제목·메뉴 사이 간격을 유지한다.
   return (
     <ServiceMain>
       <div className="grid gap-4">
+        {/* 화면 크기와 관계없이 동일한 제목을 표시한다. */}
         <h1 className="text-2xl font-semibold">마이페이지</h1>
 
-        <MyPageNavigation menus={menus} defaultMenuId={DEFAULT_MENU_ID} />
+        {/* 현재 경로에서 선택된 본문을 탐색 메뉴 아래에 표시한다. */}
+        <MyPageNavigation>{children}</MyPageNavigation>
       </div>
     </ServiceMain>
   );

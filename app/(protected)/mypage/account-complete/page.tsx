@@ -1,3 +1,4 @@
+import { MYPAGE_USER_PATH } from "@/shared/config/mypage";
 import { redirect } from "next/navigation";
 import { OAuthCompletion } from "@/features/service-auth/OAuthCompletion";
 import { readOAuthFlow } from "@/server/auth/oauth-flow";
@@ -17,7 +18,8 @@ export default async function AccountCompletePage({ searchParams }: {
   await requirePageAccess(ACCOUNT_ADD_COMPLETION);
   // 공급자 코드는 브라우저로 보내지 않고 완료 폼에 흐름 키만 전달한다.
   const flow = await readOAuthFlow((await searchParams).flow);
-  if (flow?.purpose !== "account-add" || flow.stage !== "ready") redirect("/mypage?account=expired");
+  // 완료할 연결 흐름이 없으면 사용자 정보에서 만료를 안내한다.
+  if (flow?.purpose !== "account-add" || flow.stage !== "ready") redirect(`${MYPAGE_USER_PATH}?account=expired`);
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
       {/* 공급자에서 돌아온 뒤 기존 완료 폼이 선택한 계정의 검증을 요청한다. */}

@@ -129,5 +129,5 @@ test("계정 추가 콜백이 로그인 연결을 보존하고 취소와 재요�
   assert.equal(ready.flow.code, "original-code");
   // 취소하면 복원 가능한 흐름 없이 해당 계정 추가 쿠키 삭제를 요청한다.
   assert.deepEqual(resolveOAuthCallback(pending, "google", new URLSearchParams({ state: first, error: "access_denied" })),
-    { location: "/mypage?account=cancelled", clear: true });
+    { location: "/mypage/user?account=cancelled", clear: true });
 });

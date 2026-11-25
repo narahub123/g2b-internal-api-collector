@@ -1,6 +1,6 @@
 "use client";
 
-import { Avatar, AvatarImage, AvatarFallback } from "@/shared/ui/avatar";
+import { Avatar, AvatarImage, AvatarFallback } from "@/shared/ui/Avatar";
 import { cn } from "@/shared/lib/utils";
 
 /** 사용자 아바타 표시 및 스타일 설정에 필요한 속성. */

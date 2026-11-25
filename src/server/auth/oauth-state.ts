@@ -1,3 +1,4 @@
+import { MYPAGE_USER_PATH } from "@/shared/config/mypage";
 import { decode } from "next-auth/jwt";
 import { isOAuthProvider, type OAuthProviderId } from "@/shared/config/oauth-providers";
 import type { OAuthIdentity, SignupConsent } from "./enrollment";
@@ -222,7 +223,8 @@ export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: stri
   // 유일한 state가 정확히 일치할 때만 쿠키를 변경할 수 있다.
   const states = params.getAll("state");
   if (states.length !== 1 || states[0] !== flow.state) {
-    return { location: adding ? "/mypage?account=failed" : `${path}?notice=failed` };
+    // 계정 추가 흐름의 실패는 연결 목록이 있는 사용자 정보에서 안내한다.
+    return { location: adding ? `${MYPAGE_USER_PATH}?account=failed` : `${path}?notice=failed` };
   }
 
   // 이미 받은 콜백은 기존 코드를 유지한 채 같은 완료 화면으로 보낸다.
@@ -238,8 +240,8 @@ export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: stri
     || issuers.length > 1 || (issuers.length === 1 && !isResponseIssuer(issuers[0]))) {
     // 공급자 응답의 원문 대신 공개용 취소 또는 실패 코드만 전달한다.
     const notice = params.get("error") === "access_denied" ? "cancelled" : "failed";
-    // 계정 추가는 복원할 가입 동의가 없으므로 실패한 흐름을 바로 폐기한다.
-    if (adding) return { location: `/mypage?account=${notice}`, clear: true };
+    // 계정 추가는 실패한 흐름을 폐기하고 사용자 정보에서 결과를 보여 준다.
+    if (adding) return { location: `${MYPAGE_USER_PATH}?account=${notice}`, clear: true };
     return {
       location: flow.linkAttempt ? oauthLinkLocation(flow.linkAttempt.parent, notice) : `${path}?notice=${notice}&flow=${flow.state}`,
       flow: toOAuthDraft(flow),

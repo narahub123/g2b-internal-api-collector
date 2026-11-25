@@ -1,5 +1,6 @@
 "use server";
 
+import { MYPAGE_USER_PATH } from "@/shared/config/mypage";
 import { randomBytes } from "node:crypto";
 import { redirect } from "next/navigation";
 import { getG2bDatabase } from "@/server/g2b/repository";
@@ -92,7 +93,8 @@ export async function beginAccountOAuth(form: FormData): Promise<void> {
   if (auth.status === "error") redirect(AUTH_ERROR_PATH);
   // 사용자가 선택한 공개 공급자 등록만 사용한다.
   const provider = form.get("provider");
-  if (!isOAuthProvider(provider)) redirect("/mypage?account=failed");
+  // 지원하지 않는 공급자의 실패 결과를 사용자 정보 화면에서 표시한다.
+  if (!isOAuthProvider(provider)) redirect(`${MYPAGE_USER_PATH}?account=failed`);
   // 탭별 쿠키와 OAuth 요청을 묶고 현재 계정과 내부 사용자를 기록한다.
   const state = randomBytes(32).toString("base64url");
   const expiresAt = Math.floor(Date.now() / 1000) + OAUTH_FLOW_MAX_AGE;
@@ -107,7 +109,8 @@ export async function beginAccountOAuth(form: FormData): Promise<void> {
   } catch (error) {
     // 공급자 응답의 민감한 내용 없이 재시도 화면으로 돌려보낸다.
     console.error("[OAuth 계정 추가 시작]", error instanceof Error ? error.name : "UnknownError");
-    redirect("/mypage?account=failed");
+    // 연결을 시작하지 못하면 사용자 정보 화면에서 재시도하도록 안내한다.
+    redirect(`${MYPAGE_USER_PATH}?account=failed`);
   }
   redirect(authorizationUrl);
 }
@@ -127,7 +130,8 @@ async function finishAccountOAuth(flow: Extract<OAuthFlow, { stage: "ready" }>):
   const current = auth.user.oauthAccount;
   if (!actor || actor.userId !== auth.user.id || actor.provider !== current.provider
     || actor.providerUserId !== current.providerUserId || actor.linkGeneration !== current.linkGeneration) {
-    redirect("/mypage?account=expired");
+    // 세션의 연결이 달라졌으면 등록을 중단하고 사용자 정보에서 만료를 안내한다.
+    redirect(`${MYPAGE_USER_PATH}?account=expired`);
   }
   let result: Awaited<ReturnType<typeof addLinkedAccount>>;
   try {
@@ -138,10 +142,11 @@ async function finishAccountOAuth(flow: Extract<OAuthFlow, { stage: "ready" }>):
   } catch (error) {
     // OAuth 코드와 공급자 개인정보는 로그와 화면에 전달하지 않는다.
     console.error("[OAuth 계정 추가 완료]", error instanceof Error ? error.name : "UnknownError");
-    redirect("/mypage?account=failed");
+    // 연결 저장 실패는 사용자 정보의 공통 안내로 표시한다.
+    redirect(`${MYPAGE_USER_PATH}?account=failed`);
   }
-  // 현재 서비스 세션을 다시 발급하거나 덮어쓰지 않고 결과만 표시한다.
-  redirect(`/mypage?account=${result}`);
+  // 현재 서비스 세션을 유지한 채 사용자 정보에서 결과를 표시한다.
+  redirect(`${MYPAGE_USER_PATH}?account=${result}`);
 }
 
 /**
@@ -155,16 +160,19 @@ export async function unlinkOAuthAccount(form: FormData): Promise<void> {
   if (auth.status === "unauthenticated") redirect("/login");
   if (auth.status === "error") redirect(AUTH_ERROR_PATH);
   const generation = form.get("generation");
-  if (typeof generation !== "string" || !/^[a-f0-9-]{32,36}$/.test(generation)) redirect("/mypage?account=unlink-blocked");
+  // 연결 세대 형식이 유효하지 않으면 삭제 전에 사용자 정보로 돌아간다.
+  if (typeof generation !== "string" || !/^[a-f0-9-]{32,36}$/.test(generation)) redirect(`${MYPAGE_USER_PATH}?account=unlink-blocked`);
   let removed: boolean;
   try {
     // 서버에서 소유권, 현재 연결 및 마지막 계정 보호를 한 문장으로 확인한다.
     removed = await openAuthRepository(getG2bDatabase()).unlinkAccount(auth.user.id, auth.user.oauthAccount, generation);
   } catch (error) {
     console.error("[OAuth 계정 해제]", error instanceof Error ? error.name : "UnknownError");
-    redirect("/mypage?account=failed");
+    // 저장소 오류는 사용자 정보의 실패 안내로 전달한다.
+    redirect(`${MYPAGE_USER_PATH}?account=failed`);
   }
-  redirect(removed ? "/mypage?account=unlinked" : "/mypage?account=unlink-blocked");
+  // 실제 해제 여부에 따라 사용자 정보에서 성공 또는 제한을 안내한다.
+  redirect(removed ? `${MYPAGE_USER_PATH}?account=unlinked` : `${MYPAGE_USER_PATH}?account=unlink-blocked`);
 }
 
 /**

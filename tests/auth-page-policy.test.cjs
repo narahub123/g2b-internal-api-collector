@@ -49,6 +49,22 @@ test("복귀는 외부 주소와 현재 경로, 인증 경로 및 권한을 잃�
   assert.equal(findReturnDestination(["/?section=notices&page=4"], "/admin", "USER"), "/?section=notices&page=4");
 });
 
+/** 메뉴 URL을 회원 전용 복귀 경로로 인정하고 쿼리를 유지하는지 확인한다. */
+test("마이페이지 메뉴만 개별 복귀 경로로 인정한다", () => {
+  // 실제 접근과 복귀 이력에 공통으로 적용되는 경로 정책을 불러온다.
+  const { canAccessPage, findReturnDestination, isReturnablePage } = require("../src/shared/config/page-access");
+  // 개별 메뉴의 회원 접근 및 검색 조건이 포함된 복귀 목적지를 확인한다.
+  for (const path of ["/mypage/user", "/mypage/business", "/mypage/recommendation", "/mypage/interests"]) {
+    // 비로그인은 접근할 수 없고 일반 회원과 관리자는 접근할 수 있다.
+    assert.deepEqual([null, "USER", "ADMIN"].map((role) => canAccessPage(path, role)), [false, true, true]);
+    // 거절된 화면에서 돌아갈 때 메뉴 URL과 쿼리를 보존한다.
+    assert.equal(findReturnDestination([`${path}?source=history`], "/admin", "USER"), `${path}?source=history`);
+  }
+  // 일회성 완료 화면 및 등록되지 않은 하위 경로는 방문 이력에서 제외한다.
+  assert.equal(isReturnablePage("/mypage/account-complete"), false);
+  assert.equal(isReturnablePage("/mypage/business/example"), false);
+});
+
 /** 브라우저 잠금을 지원하지 않아도 먼저 요청한 갱신이 끝난 뒤 로그아웃 처리가 시작되는지 확인한다. */
 test("갱신 중 로그아웃하면 쿠키 쓰기 순서를 유지한다", async () => {
   const { withSessionCookieWrite } = require("../src/features/service-auth/session-writes");
