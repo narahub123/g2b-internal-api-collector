@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { AuthSessionUser } from "@/server/auth/types";
+import { profileImageUrl } from "@/server/auth/profile";
 import type { PageRole } from "@/shared/config/page-access";
 import { AccountNavigation } from "./AccountNavigation";
 
@@ -19,6 +20,8 @@ type ServiceHeaderProps = {
  * @returns 공통 회원 화면 헤더.
  */
 export function ServiceHeader({ role, profile, navigation }: ServiceHeaderProps) {
+  // 메뉴가 사용하는 표시값만 전달해 내부 객체 키와 OAuth 식별자가 브라우저로 직접 넘어가지 않도록 한다.
+  const menuProfile = { nickname: profile.nickname, image: profileImageUrl(profile.image), email: profile.oauthAccount?.email ?? "이메일 미확인" };
   // 헤더 테두리는 화면 전체에 표시하고 메뉴는 가운데 정렬된 영역에 배치한다.
   return (
     <header className="border-b bg-card px-4 py-2">
@@ -26,7 +29,7 @@ export function ServiceHeader({ role, profile, navigation }: ServiceHeaderProps)
         {/* 화면이 제공한 탐색 메뉴를 왼쪽에 배치한다. */}
         {navigation}
         {/* 탐색 메뉴가 없는 화면에서도 계정 메뉴는 오른쪽에 배치한다. */}
-        <AccountNavigation role={role} profile={profile} />
+        <AccountNavigation role={role} profile={menuProfile} />
       </div>
     </header>
   );

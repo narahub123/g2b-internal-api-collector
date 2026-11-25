@@ -20,9 +20,11 @@ test("인증 마이그레이션은 중복 이메일, OAuth 고유 연결, 동의
     `);
     // 이미 연결된 공급자 키는 다른 내부 사용자에 다시 연결할 수 없다.
     await assert.rejects(client.execute("INSERT INTO auth_oauth_accounts (provider, provider_user_id, user_id, link_generation) VALUES ('google', 'first', 'b', 'conflict-generation')"), /UNIQUE/);
-    assert.deepEqual(await db.findUserState("a"), { id: "a", role: "USER" });
+    // 보호 요청에서 조회한 최신 표시 프로필도 같은 행에서 읽는다.
+    assert.equal((await db.findUserState("a")).role, "USER");
     await client.execute("UPDATE auth_users SET role = 'ADMIN' WHERE id = 'a'");
-    assert.deepEqual(await db.findUserState("a"), { id: "a", role: "ADMIN" });
+    // 역할 변경이 다음 사용자 검증에 바로 반영된다.
+    assert.equal((await db.findUserState("a")).role, "ADMIN");
     assert.equal((await db.findUserByOAuth("google", "second")).id, "a");
     assert.deepEqual((await db.findEmailCandidates("x@example.com")).map(({ id }) => id), ["a", "b"]);
     assert.equal((await db.findLatestConsent("a", "terms")).agreed, false);

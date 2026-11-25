@@ -42,7 +42,7 @@ export async function readSession(requestHeaders?: Headers): Promise<AuthSession
 
 /**
  * 쿠키와 최신 DB 상태를 검증한다. 반환된 검증 함수를 한 요청에서 공유하면 사용자 조회를 재사용한다.
- * @param findUserState 내부 ID로 최신 사용자 존재 여부와 역할을 읽는 저장소 함수.
+ * @param findUserState 내부 ID로 최신 사용자 존재 여부, 역할, 표시 프로필을 읽는 저장소 함수.
  */
 export function createAuthVerification(
   findUserState: (id: string) => Promise<AuthUserState | undefined>,
@@ -55,7 +55,12 @@ export function createAuthVerification(
       const user = await readSession(requestHeaders);
       if (!user) return { status: "unauthenticated" };
       const state = await findUserState(user.id);
-      return state ? { status: "authenticated", user, state } : { status: "unauthenticated" };
+      // 쿠키의 인증 계정은 보존하고 표시 프로필에는 DB의 최신 값을 사용한다.
+      return state ? {
+        status: "authenticated",
+        user: { ...user, nickname: state.nickname, image: state.image },
+        state,
+      } : { status: "unauthenticated" };
     } catch (error) {
       console.error("[인증 상태 검증]", error instanceof Error ? error.name : "UnknownError");
       return { status: "error" };

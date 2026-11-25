@@ -3,7 +3,11 @@ import type { AuthOAuthProfile, AuthUserState } from "./types";
 
 /** 실제 조회와 인덱스 검증에서 동일하게 사용하는 SQL. */
 export const authQueries = {
-  userState: "SELECT id, role FROM auth_users WHERE id = ?",
+  userState: "SELECT id, role, nickname, image FROM auth_users WHERE id = ?",
+  // 이름만 바꾸면 변경된 이미지와 관계없이 현재 경로를 유지한다.
+  updateNickname: "UPDATE auth_users SET nickname = ? WHERE id = ?",
+  // 이미지 교체는 업로드가 시작될 때 읽은 기존 경로가 여전히 맞아야 한다.
+  replaceProfileImage: "UPDATE auth_users SET nickname = ?, image = ? WHERE id = ? AND image IS ?",
   emailCandidates: "SELECT id, nickname FROM auth_users WHERE email = ? COLLATE NOCASE ORDER BY id",
   // 공급자 복합 기본 키로 연결을 찾고 내부 사용자 기본 키로 표시 프로필을 읽는다.
   oauthProfile: `SELECT u.id, u.email, u.nickname, u.image, a.email AS oauth_email, a.link_generation
@@ -25,12 +29,38 @@ export const authQueries = {
  */
 export function openAuthRepository(client: Pick<Client, "execute">) {
   return {
-    /** 보호 요청에서는 기본 키로 존재 여부와 최신 역할만 읽는다. */
+    /**
+     * 보호 요청의 기본 키 조회를 사용해 최신 역할과 표시 프로필을 함께 읽는다.
+     * @param id 세션에서 검증한 내부 사용자 ID.
+     * @returns 사용자 상태 또는 내부 사용자가 없으면 undefined.
+     * @throws 조회가 실패하거나 저장된 역할이 지원되지 않으면 오류를 전달한다.
+     */
     async findUserState(id: string): Promise<AuthUserState | undefined> {
+      // 보호 요청당 같은 기본 키 조회 한 번으로 접근 여부와 프로필을 결정한다.
       const [row] = (await client.execute({ sql: authQueries.userState, args: [id] })).rows;
+      // 삭제된 사용자의 세션에는 유효한 상태를 제공하지 않는다.
       if (!row) return undefined;
+      // 정의된 역할만 보호 요청에 사용할 수 있다.
       if (row.role !== "USER" && row.role !== "ADMIN") throw new Error("지원하지 않는 사용자 역할");
-      return { id: String(row.id), role: row.role };
+      // 최신 닉네임과 이미지 경로를 권한 확인 결과에 담는다.
+      return { id: String(row.id), role: row.role, nickname: String(row.nickname), image: typeof row.image === "string" ? row.image : null };
+    },
+
+    /**
+     * 내부 사용자의 이름을 저장하고, 이미지가 있으면 기존 경로가 일치할 때 교체한다.
+     * @param id 쓰기 권한을 확인한 사용자 ID.
+     * @param nickname 검증한 닉네임.
+     * @param image 교체 전후 경로. 생략하면 닉네임만 수정한다.
+     * @returns 한 사용자만 변경했으면 true. 삭제됐거나 교체가 충돌하면 false.
+     * @throws 저장소 실패가 발생하면 오류를 전달한다.
+     */
+    async updateProfile(id: string, nickname: string, image?: { previous: string | null; next: string }) {
+      // 파일이 있을 때만 조건부 경로 갱신을 실행한다.
+      const result = await client.execute(image
+        ? { sql: authQueries.replaceProfileImage, args: [nickname, image.next, id, image.previous] }
+        : { sql: authQueries.updateNickname, args: [nickname, id] });
+      // 쓰기가 확정된 경우에만 호출자가 기존 파일을 정리할 수 있다.
+      return result.rowsAffected === 1;
     },
 
     /**

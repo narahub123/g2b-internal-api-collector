@@ -7,7 +7,10 @@ export type AuthProfile = {
 };
 
 /** 보호 요청마다 사용자 기본 키로 조회하는 접근 판단 자료. */
-export type AuthUserState = Pick<AuthProfile, "id"> & { role: "USER" | "ADMIN" };
+export type AuthUserState = Pick<AuthProfile, "id" | "nickname" | "image"> & {
+  // 보호된 화면과 업무 요청에서 확인하는 최신 권한.
+  role: "USER" | "ADMIN";
+};
 
 /** 로그인 시 계산하며 서비스 이용 제한에 사용하지 않는 동의 상태. */
 export type ConsentRenewal = {
