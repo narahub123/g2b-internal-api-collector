@@ -74,7 +74,7 @@ function AllConsents({ enabled, checked, onChange }: {
  * @param props.onChange 해당 항목의 체크 변경 콜백.
  * @returns 문서 버전과 동의 결과를 제출하는 표시 항목.
  */
-function ConsentField({ item, required, checked, onChange }: {
+export function ConsentField({ item, required, checked, onChange }: {
   // 현재 동의 대상 문서의 설정.
   item: ConsentItem;
   // 제출과 화면 안내에 반영할 필수 여부.

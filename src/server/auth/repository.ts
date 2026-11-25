@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client";
+import type { Client, Row } from "@libsql/client";
 import type { AuthOAuthProfile, AuthUserState, OAuthConnection } from "./types";
 
 /** 실제 조회와 인덱스 검증에서 동일하게 사용하는 SQL. */
@@ -38,7 +38,34 @@ export const authQueries = {
     FROM auth_consent_records WHERE user_id = ? AND item_id = ?
     ORDER BY created_at DESC, id DESC LIMIT 1
   `,
+  // 철회도 새 행에 기록해 과거 동의 내용을 유지한다.
+  appendConsent: `INSERT INTO auth_consent_records
+    (user_id, item_id, version, agreed, agreed_at, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 };
+
+/**
+ * DB의 정수 선택과 날짜를 화면 및 정책에 사용할 동의 기록으로 변환한다.
+ * @param row 최신 동의 인덱스에서 가져온 한 행.
+ * @returns 최신 버전과 동의·철회 상태, 사건 시각을 담은 기록.
+ */
+function decodeConsent(row: Row) {
+  // 철회나 미동의에는 표시할 동의 시각이 없다.
+  return {
+    id: Number(row.id), userId: String(row.user_id), itemId: String(row.item_id),
+    version: String(row.version), agreed: row.agreed === 1,
+    agreedAt: row.agreed_at == null ? null : Number(row.agreed_at), createdAt: Number(row.created_at),
+  };
+}
+
+/**
+ * 여러 정책의 최신 이력을 한 번의 호출에서 읽는 SQL을 생성한다.
+ * @param count 서버 정책 목록에서 조회할 항목 수. 1 이상이다.
+ * @returns 항목마다 최신 이력 한 건만 인덱스로 읽어 합치는 SQL.
+ */
+export function latestConsentListSql(count: number) {
+  // 항목별 ORDER BY 및 LIMIT을 개별 서브쿼리에 유지한다.
+  return Array<string>(count).fill(`SELECT * FROM (${authQueries.latestConsent})`).join(" UNION ALL ");
+}
 
 /**
  * 기존 libSQL 연결로 인증 조회 저장소를 연다. 연결 수명은 호출자가 관리한다.
@@ -205,11 +232,45 @@ export function openAuthRepository(client: Pick<Client, "execute">) {
     async findLatestConsent(userId: string, itemId: string) {
       const [row] = (await client.execute({ sql: authQueries.latestConsent, args: [userId, itemId] })).rows;
       if (!row) return undefined;
-      return {
-        id: Number(row.id), userId: String(row.user_id), itemId: String(row.item_id),
-        version: String(row.version), agreed: row.agreed === 1,
-        agreedAt: row.agreed_at == null ? null : Number(row.agreed_at), createdAt: Number(row.created_at),
-      };
+      return decodeConsent(row);
+    },
+
+    /**
+     * 화면에 해당하는 현재 정책들의 최신 이력을 한 번의 DB 요청으로 읽는다.
+     * @param userId 인증된 내부 사용자 식별자.
+     * @param itemIds 시행 중인 정책의 식별자 목록.
+     * @returns 조회된 항목만 들어 있는 최신 이력 맵.
+     * @throws 저장소 오류가 있으면 호출자에게 전달한다.
+     */
+    async listLatestConsents(userId: string, itemIds: readonly string[]) {
+      // 활성 문서가 없다면 연결을 사용하지 않는다.
+      const latest = new Map<string, ReturnType<typeof decodeConsent>>();
+      if (!itemIds.length) return latest;
+      // 바인딩으로 사용자와 항목을 지정해 이력 전체 대신 최신 행만 읽는다.
+      const { rows } = await client.execute({
+        sql: latestConsentListSql(itemIds.length), args: itemIds.flatMap((itemId) => [userId, itemId]),
+      });
+      for (const row of rows) {
+        // 문서 표시 순서는 조회 순서 대신 정책 목록에서 결정한다.
+        const consent = decodeConsent(row);
+        latest.set(consent.itemId, consent);
+      }
+      return latest;
+    },
+
+    /**
+     * 확인한 현재 버전의 동의 또는 철회 이력을 추가한다.
+     * @param userId 동의를 제출한 내부 사용자 ID.
+     * @param item 검증한 항목, 문서 버전 및 선택 상태.
+     * @param agreedAt 동의한 시각이며 철회는 null.
+     * @param createdAt 최신 기록의 순서를 유지할 이벤트 시각.
+     * @throws 저장에 실패하면 진행 중인 트랜잭션을 되돌릴 수 있게 오류를 전달한다.
+     */
+    async appendConsent(userId: string, item: { id: string; version: string; agreed: boolean },
+      agreedAt: number | null, createdAt: number) {
+      // 과거 이력을 수정하지 않고 새 사건을 한 행에 남긴다.
+      await client.execute({ sql: authQueries.appendConsent,
+        args: [userId, item.id, item.version, Number(item.agreed), agreedAt, createdAt] });
     },
   };
 }

@@ -126,10 +126,7 @@ export async function resolveEnrollment(
       // 동의 항목별로 선택 결과와 버전을 별도 이력으로 남긴다.
       for (const { id, version, agreed } of consent) {
         // 동의한 항목에만 동의 시각을 기록한다.
-        await database.execute({
-          sql: "INSERT INTO auth_consent_records (user_id, item_id, version, agreed, agreed_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-          args: [user.id, id, version, Number(agreed), agreed ? recordedAt : null, recordedAt],
-        });
+        await repository.appendConsent(user.id, { id, version, agreed }, agreed ? recordedAt : null, recordedAt);
       }
       // 커밋 시 세션 발급에 사용할 신규 프로필을 반환한다.
       return { status: "registered", user };

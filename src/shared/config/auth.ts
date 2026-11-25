@@ -11,6 +11,8 @@ export const SIGNUP_ALL_CONSENTS_ENABLED = true;
 export type ConsentPolicy = {
   // 동의 이력과 각 문서를 연결하는 고유 항목 ID.
   id: string;
+  // 가입 및 마이페이지에서 구별할 수 있는 문서 이름.
+  title: string;
   // 표시된 문서와 제출한 동의가 일치하는지 판단하는 문서 버전.
   version: string;
   // 사용자가 가입할 때 읽는 문서의 내용.
@@ -30,6 +32,7 @@ export const CONSENT_POLICIES: readonly ConsentPolicy[] = [
   // 개발용 이용약관의 필수 동의 항목.
   {
     id: "terms",
+    title: "이용약관",
     version: "preview-1",
     content: "이용약관 검증용 항목입니다.",
     required: true,
@@ -40,6 +43,7 @@ export const CONSENT_POLICIES: readonly ConsentPolicy[] = [
   // 개발용 개인정보 처리 동의의 필수 항목.
   {
     id: "privacy",
+    title: "개인정보 수집·이용 동의",
     version: "preview-1",
     content: "개인정보 수집·이용 동의 검증용 항목입니다.",
     required: true,

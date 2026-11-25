@@ -56,7 +56,7 @@ test("추가 인증된 대상만 OAuth 연결을 얻고 이미 다른 대상에 
 test("현재 정책의 버전, 동의 상태, 시행일과 마감일을 기준으로 세션용 상태를 판단한다", async () => {
   const { evaluateConsentRenewal } = require("../src/server/auth/consent-renewal");
   const { startEnrollmentSession } = require("../src/server/auth/enrollment");
-  const item = { id: "terms", version: "2", requiresRenewal: true,
+  const item = { id: "terms", version: "2", required: true, requiresRenewal: true,
     effectiveAt: "2026-01-01T00:00:00Z", renewalDeadline: "2026-02-01T00:00:00Z" };
   const calls = [];
   const latest = async (id) => { calls.push(id); return { version: "1", agreed: true }; };
