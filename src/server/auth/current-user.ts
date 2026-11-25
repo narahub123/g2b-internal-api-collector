@@ -8,5 +8,5 @@ import { createAuthVerification } from "./session";
  * @returns 검증된 사용자와 현재 권한, 미인증 또는 시스템 오류 상태.
  */
 export const verifyCurrentUser = cache(() =>
-  // 유효한 쿠키로 내부 ID가 확인된 경우에만 저장소에서 사용자 상태를 읽는다.
-  createAuthVerification((id) => openAuthRepository(getG2bDatabase()).findUserState(id))());
+  // 유효한 쿠키의 내부 ID와 OAuth 연결 세대를 함께 대조한다.
+  createAuthVerification((id, connection) => openAuthRepository(getG2bDatabase()).findUserState(id, connection))());

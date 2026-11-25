@@ -1,9 +1,26 @@
 import type { Client } from "@libsql/client";
-import type { AuthOAuthProfile, AuthUserState } from "./types";
+import type { AuthOAuthProfile, AuthUserState, OAuthConnection } from "./types";
 
 /** 실제 조회와 인덱스 검증에서 동일하게 사용하는 SQL. */
 export const authQueries = {
   userState: "SELECT id, role, nickname, image FROM auth_users WHERE id = ?",
+  // 보호 요청에서 OAuth 복합 키와 내부 사용자 기본 키를 한 문장으로 검증한다.
+  sessionUserState: `SELECT u.id, u.role, u.nickname, u.image FROM auth_oauth_accounts a
+    JOIN auth_users u ON u.id = a.user_id
+    WHERE a.provider = ? AND a.provider_user_id = ? AND a.link_generation = ? AND a.user_id = ?`,
+  // 기존 복합 키로 같은 내부 사용자와 연결 세대가 유지되는지 확인한다.
+  currentOAuthConnection: `SELECT 1 FROM auth_oauth_accounts
+    WHERE provider = ? AND provider_user_id = ? AND link_generation = ? AND user_id = ?`,
+  // 사용자별 연결 인덱스로 목록 범위를 제한한다.
+  linkedAccounts: "SELECT provider, provider_user_id, email, link_generation FROM auth_oauth_accounts WHERE user_id = ?",
+  // 실행 계정이 여전히 같은 사용자에 연결돼 있고 대상과 다를 때만 해제한다.
+  unlinkAccount: `DELETE FROM auth_oauth_accounts AS target WHERE target.user_id = ? AND target.link_generation = ?
+    AND EXISTS (SELECT 1 FROM auth_oauth_accounts AS actor
+      WHERE actor.provider = ? AND actor.provider_user_id = ? AND actor.link_generation = ?
+        AND actor.user_id = target.user_id AND actor.link_generation <> target.link_generation)`,
+  // 신규 연결은 내부 사용자에만 추가하고 기존 OAuth 고유 연결은 변경하지 않는다.
+  insertLinkedAccount: `INSERT INTO auth_oauth_accounts (provider, provider_user_id, user_id, email, link_generation)
+    VALUES (?, ?, ?, ?, ?) ON CONFLICT (provider, provider_user_id) DO NOTHING`,
   // 이름만 바꾸면 변경된 이미지와 관계없이 현재 경로를 유지한다.
   updateNickname: "UPDATE auth_users SET nickname = ? WHERE id = ?",
   // 이미지 교체는 업로드가 시작될 때 읽은 기존 경로가 여전히 맞아야 한다.
@@ -32,18 +49,65 @@ export function openAuthRepository(client: Pick<Client, "execute">) {
     /**
      * 보호 요청의 기본 키 조회를 사용해 최신 역할과 표시 프로필을 함께 읽는다.
      * @param id 세션에서 검증한 내부 사용자 ID.
-     * @returns 사용자 상태 또는 내부 사용자가 없으면 undefined.
+     * @param connection 보호 요청에서 확인할 공급자 계정과 연결 세대. 내부 관리 조회에서는 생략한다.
+     * @returns 유효한 사용자 상태 또는 사용자나 지정된 연결이 없으면 undefined.
      * @throws 조회가 실패하거나 저장된 역할이 지원되지 않으면 오류를 전달한다.
      */
-    async findUserState(id: string): Promise<AuthUserState | undefined> {
-      // 보호 요청당 같은 기본 키 조회 한 번으로 접근 여부와 프로필을 결정한다.
-      const [row] = (await client.execute({ sql: authQueries.userState, args: [id] })).rows;
+    async findUserState(id: string, connection?: OAuthConnection): Promise<AuthUserState | undefined> {
+      // 보호 요청은 연결 유효성까지 한 번에 읽고 내부 작업은 사용자만 읽는다.
+      const [row] = (await client.execute(connection
+        ? { sql: authQueries.sessionUserState, args: [connection.provider, connection.providerUserId, connection.linkGeneration, id] }
+        : { sql: authQueries.userState, args: [id] })).rows;
       // 삭제된 사용자의 세션에는 유효한 상태를 제공하지 않는다.
       if (!row) return undefined;
       // 정의된 역할만 보호 요청에 사용할 수 있다.
       if (row.role !== "USER" && row.role !== "ADMIN") throw new Error("지원하지 않는 사용자 역할");
       // 최신 닉네임과 이미지 경로를 권한 확인 결과에 담는다.
       return { id: String(row.id), role: row.role, nickname: String(row.nickname), image: typeof row.image === "string" ? row.image : null };
+    },
+
+    /**
+     * 현재 프로필에 연결된 OAuth 계정 목록을 읽는다.
+     * @param userId 인증된 내부 사용자 ID.
+     * @returns 공급자, 계정 키, 확인된 이메일과 해제 대상 식별용 세대.
+     * @throws DB 목록 조회 오류를 전달한다.
+     */
+    async listLinkedAccounts(userId: string) {
+      // 전체 계정이 아니라 현재 사용자의 연결만 읽는다.
+      const { rows } = await client.execute({ sql: authQueries.linkedAccounts, args: [userId] });
+      // 이메일이 아직 확인되지 않은 기존 행은 null로 유지한다.
+      return rows.map((row) => ({ provider: String(row.provider), providerUserId: String(row.provider_user_id),
+        linkGeneration: String(row.link_generation), email: typeof row.email === "string" ? row.email : null }));
+    },
+
+    /**
+     * 로그인에 사용한 연결을 남긴 상태에서 다른 연결 한 건을 원자적으로 해제한다.
+     * @param userId 로그인한 내부 사용자 ID.
+     * @param actor 현재 로그인에 사용한 계정과 연결 세대.
+     * @param generation 확인 Dialog에서 선택한 대상 연결 세대.
+     * @returns 해제 성공이면 true. 소유권, 연결 세대 또는 다른 연결 유지 조건이 맞지 않으면 false.
+     * @throws DB 쓰기 오류를 전달한다.
+     */
+    async unlinkAccount(userId: string, actor: OAuthConnection, generation: string) {
+      // 실행 계정이 남아 있어야 하므로 현재 또는 마지막 계정을 삭제할 수 없다.
+      const result = await client.execute({ sql: authQueries.unlinkAccount,
+        args: [userId, generation, actor.provider, actor.providerUserId, actor.linkGeneration] });
+      // 경쟁 요청이 이미 대상이나 실행 계정을 제거했으면 해제 실패로 전달한다.
+      return result.rowsAffected === 1;
+    },
+
+    /**
+     * 공급자 계정이 지정된 내부 사용자와 연결 세대에 여전히 속하는지 확인한다.
+     * @param userId 검증할 내부 사용자.
+     * @param connection 인증에서 확인한 공급자 고유 계정과 세대.
+     * @returns 같은 연결 행이 현재 존재하면 true.
+     * @throws DB 조회 오류를 전달한다.
+     */
+    async isOAuthConnectionCurrent(userId: string, connection: OAuthConnection) {
+      // 다른 사용자에게 재연결됐거나 세대가 바뀐 경우도 해제된 인증으로 본다.
+      const { rows } = await client.execute({ sql: authQueries.currentOAuthConnection,
+        args: [connection.provider, connection.providerUserId, connection.linkGeneration, userId] });
+      return rows.length === 1;
     },
 
     /**
@@ -102,10 +166,14 @@ export function openAuthRepository(client: Pick<Client, "execute">) {
       // 미제공 또는 동일 이메일이면 DB 쓰기를 생략한다.
       if (verifiedEmail !== null && verifiedEmail !== account.email) {
         // 동시에 변경된 이메일이나 재연결된 계정은 이전 조회 결과로 덮어쓰지 않는다.
-        await client.execute({
+        const result = await client.execute({
           sql: authQueries.oauthEmailUpdate,
           args: [verifiedEmail, account.provider, account.providerUserId, account.linkGeneration, account.email],
         });
+        // 동시 이메일 갱신과 연결 해제·재연결을 구분해 유효한 연결만 세션 발급으로 넘긴다.
+        if (result.rowsAffected === 0 && !await this.isOAuthConnectionCurrent(profile.id, account)) {
+          throw new Error("OAuth 계정 연결이 변경되었습니다.");
+        }
       }
       // 세션에는 DB에 과거 저장된 값 대신 이번 인증에서 확인된 값을 전달한다.
       return { ...profile, oauthAccount: { ...account, email: verifiedEmail } };

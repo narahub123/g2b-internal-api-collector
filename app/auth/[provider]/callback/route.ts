@@ -1,4 +1,4 @@
-import { readOAuthFlow, writeOAuthFlow } from "@/server/auth/oauth-flow";
+import { clearOAuthFlow, readOAuthFlow, writeOAuthFlow } from "@/server/auth/oauth-flow";
 import { resolveOAuthCallback } from "@/server/auth/oauth-state";
 import { isOAuthProvider } from "@/shared/config/oauth-providers";
 
@@ -31,6 +31,8 @@ export async function GET(request: Request, context: { params: Promise<{ provide
     if (!isOAuthProvider(provider) || states.length !== 1) return go("/login?notice=failed");
     // 공급자가 돌려준 키로 선택한 탭의 상태를 읽어 검증한다.
     const result = resolveOAuthCallback(await readOAuthFlow(states[0]), provider, query);
+    // 취소·실패한 계정 추가 요청의 쿠키는 다시 사용하지 않는다.
+    if (result.clear) await clearOAuthFlow(states[0]);
     // 상태 전이가 필요한 응답에서만 해당 탭의 쿠키를 갱신한다.
     if (result.flow) await writeOAuthFlow(result.flow);
     // 상태 검증과 쿠키 처리를 마친 뒤 안전한 내부 경로로 이동한다.

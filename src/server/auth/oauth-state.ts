@@ -2,9 +2,19 @@ import { decode } from "next-auth/jwt";
 import { isOAuthProvider, type OAuthProviderId } from "@/shared/config/oauth-providers";
 import type { OAuthIdentity, SignupConsent } from "./enrollment";
 import type { OAuthVerification } from "./oauth-providers";
+import type { OAuthConnection } from "./types";
 
 /** 최초 인증 화면과 복귀 화면을 연결하는 인증 목적. */
-export type AuthPurpose = "login" | "signup";
+export type AuthPurpose = "login" | "signup" | "account-add";
+
+/** 마이페이지에서 계정 추가를 시작한 내부 사용자와 로그인 연결. */
+export type AccountAddActor = OAuthConnection & {
+  /** 인증이 끝날 때도 같아야 하는 내부 사용자 ID. */
+  userId: string;
+};
+
+/** 가입·로그인 완료와 구분되는 보호된 계정 추가 완료 화면. */
+export const ACCOUNT_ADD_COMPLETION = "/mypage/account-complete";
 
 /** 모든 상태에 공통으로 남기는 브라우저 요청과 동의 선택. */
 type FlowContext = {
@@ -20,6 +30,8 @@ type FlowContext = {
   expiresAt: number;
   /** 추가 인증에서만 사용하는 가입 선택 요청과 대상 내부 계정. */
   linkAttempt?: { parent: string; targetId: string };
+  /** 마이페이지 계정 추가를 시작한 로그인 연결. */
+  accountActor?: AccountAddActor;
 };
 
 /** 암호화 쿠키에 보관하는 초안, 콜백 대기, 교환 대기 상태. */
@@ -112,10 +124,19 @@ export async function decodeOAuthFlow(token: string | undefined, secret: string,
     // 복호화에 성공해도 쿠키 내부의 상태는 구조 검증을 거친다.
     const flow = payload?.flow;
     if (!payload || !(payload.exp > now) || !isRecord(flow) || flow.state !== state
-      || !isOAuthProvider(flow.provider) || (flow.purpose !== "signup" && flow.purpose !== "login")
+      || !isOAuthProvider(flow.provider) || (flow.purpose !== "signup" && flow.purpose !== "login" && flow.purpose !== "account-add")
       || typeof flow.expiresAt !== "number" || !Number.isSafeInteger(flow.expiresAt) || flow.expiresAt <= now
       || !Array.isArray(flow.consent) || !flow.consent.every(isConsent)
-      || (flow.purpose === "login" && flow.consent.length > 0)) return undefined;
+      || (flow.purpose !== "signup" && flow.consent.length > 0)) return undefined;
+
+    // 계정 추가는 가입 흐름과 분리하고 로그인한 사용자 및 연결에만 묶는다.
+    if (flow.purpose === "account-add") {
+      const actor = flow.accountActor;
+      if ((flow.stage !== "pending" && flow.stage !== "ready") || !isRecord(actor)
+        || !isOAuthProvider(actor.provider) || typeof actor.userId !== "string" || !actor.userId || actor.userId.length > 128
+        || typeof actor.providerUserId !== "string" || !actor.providerUserId || actor.providerUserId.length > 512
+        || typeof actor.linkGeneration !== "string" || !actor.linkGeneration || actor.linkGeneration.length > 64) return undefined;
+    } else if ("accountActor" in flow) return undefined;
 
     // 추가 인증은 별도 키와 대상이 있는 가입 대기 흐름에서만 허용한다.
     if ("linkAttempt" in flow) {
@@ -188,6 +209,7 @@ export function toOAuthDraft({ provider, purpose, consent, state, expiresAt }: O
 export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: string, params: URLSearchParams): {
   location: string;
   flow?: OAuthFlow;
+  clear?: boolean;
 } {
   // 선택한 공급자와 콜백 경로가 다르거나 재시도 초안이면 코드가 있어도 처리하지 않는다.
   if (!flow || flow.stage === "draft" || flow.stage === "link-choice" || flow.provider !== provider) {
@@ -195,12 +217,16 @@ export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: stri
   }
   // 실패 시 이동할 화면은 최초 인증 목적에서 결정한다.
   const path = flow.purpose === "signup" ? "/signup" : "/login";
+  // 회원 계정 추가는 비로그인 전용 완료 화면을 사용하지 않는다.
+  const adding = flow.purpose === "account-add";
   // 유일한 state가 정확히 일치할 때만 쿠키를 변경할 수 있다.
   const states = params.getAll("state");
-  if (states.length !== 1 || states[0] !== flow.state) return { location: `${path}?notice=failed` };
+  if (states.length !== 1 || states[0] !== flow.state) {
+    return { location: adding ? "/mypage?account=failed" : `${path}?notice=failed` };
+  }
 
   // 이미 받은 콜백은 기존 코드를 유지한 채 같은 완료 화면으로 보낸다.
-  const completion = `/auth/complete?flow=${flow.state}`;
+  const completion = `${adding ? ACCOUNT_ADD_COMPLETION : "/auth/complete"}?flow=${flow.state}`;
   if (flow.stage === "ready") return { location: completion };
 
   // 인가 코드가 한 번만 전달됐는지 검사할 수 있도록 전체 값을 읽는다.
@@ -212,6 +238,8 @@ export function resolveOAuthCallback(flow: OAuthFlow | undefined, provider: stri
     || issuers.length > 1 || (issuers.length === 1 && !isResponseIssuer(issuers[0]))) {
     // 공급자 응답의 원문 대신 공개용 취소 또는 실패 코드만 전달한다.
     const notice = params.get("error") === "access_denied" ? "cancelled" : "failed";
+    // 계정 추가는 복원할 가입 동의가 없으므로 실패한 흐름을 바로 폐기한다.
+    if (adding) return { location: `/mypage?account=${notice}`, clear: true };
     return {
       location: flow.linkAttempt ? oauthLinkLocation(flow.linkAttempt.parent, notice) : `${path}?notice=${notice}&flow=${flow.state}`,
       flow: toOAuthDraft(flow),

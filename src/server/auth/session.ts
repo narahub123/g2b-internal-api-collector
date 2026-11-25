@@ -2,12 +2,12 @@ import NextAuth, { type NextAuthConfig } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { headers } from "next/headers";
 import { AUTH_SUCCESS_PATH, SESSION_MAX_AGE } from "@/shared/config/auth";
-import type { AuthSessionUser, AuthUserState } from "./types";
+import type { AuthOAuthProfile, AuthSessionUser, AuthUserState, OAuthConnection } from "./types";
 import { readSessionCookie, secureSessionCookie, sessionCookieName } from "./session-cookie";
 
 /** 쿠키 검증 실패와 저장소/인증 시스템 장애를 구분하는 보호 요청의 결과. */
 export type AuthVerification =
-  | { status: "authenticated"; user: AuthSessionUser; state: AuthUserState }
+  | { status: "authenticated"; user: AuthSessionUser & AuthOAuthProfile; state: AuthUserState }
   | { status: "unauthenticated" }
   | { status: "error" };
 
@@ -45,7 +45,7 @@ export async function readSession(requestHeaders?: Headers): Promise<AuthSession
  * @param findUserState 내부 ID로 최신 사용자 존재 여부, 역할, 표시 프로필을 읽는 저장소 함수.
  */
 export function createAuthVerification(
-  findUserState: (id: string) => Promise<AuthUserState | undefined>,
+  findUserState: (id: string, connection: OAuthConnection) => Promise<AuthUserState | undefined>,
   requestHeaders?: Headers,
 ): () => Promise<AuthVerification> {
   let verification: Promise<AuthVerification> | undefined;
@@ -53,12 +53,15 @@ export function createAuthVerification(
   async function verify(): Promise<AuthVerification> {
     try {
       const user = await readSession(requestHeaders);
-      if (!user) return { status: "unauthenticated" };
-      const state = await findUserState(user.id);
+      // OAuth 연결을 식별할 수 없는 구형 쿠키는 재로그인을 요구한다.
+      const oauthAccount = user?.oauthAccount;
+      if (!user || !oauthAccount) return { status: "unauthenticated" };
+      // 같은 공급자 계정이 다시 연결됐어도 세대가 다르면 이전 세션은 거절한다.
+      const state = await findUserState(user.id, oauthAccount);
       // 쿠키의 인증 계정은 보존하고 표시 프로필에는 DB의 최신 값을 사용한다.
       return state ? {
         status: "authenticated",
-        user: { ...user, nickname: state.nickname, image: state.image },
+        user: { ...user, oauthAccount, nickname: state.nickname, image: state.image },
         state,
       } : { status: "unauthenticated" };
     } catch (error) {

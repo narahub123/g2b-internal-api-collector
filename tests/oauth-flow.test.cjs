@@ -99,3 +99,35 @@ test("탭별 콜백이 독립적으로 진행되며 이미 받은 콜백은 완�
   assert.equal(resolveOAuthCallback(signup, "other", new URLSearchParams({ state: first, code: "wrong" })).flow, undefined);
   assert.equal(resolveOAuthCallback(signup, "google", new URLSearchParams("state=" + first + "&state=" + second + "&code=x")).flow, undefined);
 });
+
+/** 마이페이지 인증은 기존 가입·로그인 흐름과 분리되고 만료된 연결 요청은 소비하지 않는다. */
+test("계정 추가 콜백이 로그인 연결을 보존하고 취소와 재요청을 구분한다", async () => {
+  const { oauthCookieName, decodeOAuthFlow, resolveOAuthCallback } = require("../src/server/auth/oauth-state");
+  // 별도 공급자 요청을 시작한 내부 계정과 연결 세대를 암호화한다.
+  const actor = { userId: "member", provider: "google", providerUserId: "original", linkGeneration: "generation" };
+  const pending = { ...signup, purpose: "account-add", consent: [], accountActor: actor };
+  /**
+   * 테스트 입력을 정상 단기 쿠키와 동일한 방식으로 암호화해 읽는다.
+   * @param {object} flow 검증할 OAuth 상태.
+   * @returns 복호화 및 구조 검증을 통과한 상태.
+   */
+  async function read(flow) {
+    const token = await encode({ token: { flow }, secret, salt: oauthCookieName(first), maxAge: 60 });
+    return decodeOAuthFlow(token, secret, first);
+  }
+  assert.deepEqual(await read(pending), pending);
+  assert.equal(await read({ ...pending, expiresAt: 1 }), undefined);
+  assert.equal(await read({ ...pending, accountActor: undefined }), undefined);
+  assert.equal(await read({ ...pending, purpose: "login" }), undefined);
+  assert.equal(await read({ ...pending, linkAttempt: { parent: second, targetId: actor.userId } }), undefined);
+  // 기존 로그인 완료 경로와 다른 경로에만 계정 추가를 넘긴다.
+  const ready = resolveOAuthCallback(pending, "google", new URLSearchParams({ state: first, code: "original-code" }));
+  assert.equal(ready.location, "/mypage/account-complete?flow=" + first);
+  assert.deepEqual((await read(ready.flow)).accountActor, actor);
+  assert.deepEqual(resolveOAuthCallback(ready.flow, "google", new URLSearchParams({ state: first, code: "replay" })),
+    { location: ready.location });
+  assert.equal(ready.flow.code, "original-code");
+  // 취소하면 복원 가능한 흐름 없이 해당 계정 추가 쿠키 삭제를 요청한다.
+  assert.deepEqual(resolveOAuthCallback(pending, "google", new URLSearchParams({ state: first, error: "access_denied" })),
+    { location: "/mypage?account=cancelled", clear: true });
+});

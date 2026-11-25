@@ -30,6 +30,9 @@ export type AuthOAuthAccount = {
   email: string | null;
 };
 
+/** 세션과 DB에서 같은 OAuth 연결인지 확인하는 키. */
+export type OAuthConnection = Pick<AuthOAuthAccount, "provider" | "providerUserId" | "linkGeneration">;
+
 /** 내부 사용자 프로필과 인증에 사용한 연결을 함께 전달한다. */
 export type AuthOAuthProfile = AuthProfile & {
   // 로그인 또는 가입 완료에 사용한 계정의 식별 정보.

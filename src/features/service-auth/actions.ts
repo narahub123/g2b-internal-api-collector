@@ -10,6 +10,7 @@ import { listLinkChoices, readLinkChoice } from "@/server/auth/link-choice";
 import { oauthAdapters } from "@/server/auth/oauth-providers";
 import { OAUTH_FLOW_MAX_AGE, oauthLinkLocation, toOAuthDraft, type OAuthFlow } from "@/server/auth/oauth-state";
 import { openAuthRepository } from "@/server/auth/repository";
+import { addLinkedAccount } from "@/server/auth/linked-accounts";
 import { isOAuthProvider } from "@/shared/config/oauth-providers";
 import { clearOAuthFlow, readOAuthFlow, restoreOAuthDraft, writeOAuthFlow } from "@/server/auth/oauth-flow";
 import { issueSession } from "@/server/auth/session";
@@ -77,6 +78,93 @@ async function exchangeOAuth(flow: Extract<OAuthFlow, { stage: "ready" }>): Prom
   if (identity.provider !== flow.provider) throw new Error("OAuth 공급자가 일치하지 않습니다.");
   // 검증된 프로필을 호출자에게 넘겨 기존 계정 조회나 가입을 진행할 수 있게 한다.
   return identity;
+}
+
+/**
+ * 로그인 계정에 묶인 별도의 OAuth 인증을 시작한다.
+ * @param form 계정 추가 Dialog에서 선택한 공급자를 담은 폼.
+ * @throws 로그인·마이페이지 안내 또는 공급자 인증으로 이동한다.
+ */
+export async function beginAccountOAuth(form: FormData): Promise<void> {
+  // 변경 작업은 유효한 기존 로그인 세션에서만 시작한다.
+  const auth = await verifyCurrentUser();
+  if (auth.status === "unauthenticated") redirect("/login");
+  if (auth.status === "error") redirect(AUTH_ERROR_PATH);
+  // 사용자가 선택한 공개 공급자 등록만 사용한다.
+  const provider = form.get("provider");
+  if (!isOAuthProvider(provider)) redirect("/mypage?account=failed");
+  // 탭별 쿠키와 OAuth 요청을 묶고 현재 계정과 내부 사용자를 기록한다.
+  const state = randomBytes(32).toString("base64url");
+  const expiresAt = Math.floor(Date.now() / 1000) + OAUTH_FLOW_MAX_AGE;
+  const { provider: actorProvider, providerUserId, linkGeneration } = auth.user.oauthAccount;
+  let authorizationUrl: string;
+  try {
+    // 기존 공급자 어댑터가 선택 화면과 코드 검증값을 준비할 때까지 대기한다.
+    const { url, nonce, verifier } = await oauthAdapters[provider].start(state);
+    await writeOAuthFlow({ provider, state, expiresAt, purpose: "account-add", consent: [],
+      stage: "pending", nonce, verifier, accountActor: { userId: auth.user.id, provider: actorProvider, providerUserId, linkGeneration } });
+    authorizationUrl = url;
+  } catch (error) {
+    // 공급자 응답의 민감한 내용 없이 재시도 화면으로 돌려보낸다.
+    console.error("[OAuth 계정 추가 시작]", error instanceof Error ? error.name : "UnknownError");
+    redirect("/mypage?account=failed");
+  }
+  redirect(authorizationUrl);
+}
+
+/**
+ * 연결 시작과 같은 사용자 및 로그인 연결인지 확인한 뒤 새 계정을 추가한다.
+ * @param flow 계정 추가용 콜백의 검증된 일회성 교환 상태.
+ * @throws 마이페이지의 처리 결과 또는 로그인 화면으로 이동한다.
+ */
+async function finishAccountOAuth(flow: Extract<OAuthFlow, { stage: "ready" }>): Promise<never> {
+  // 쿠키를 소비하고 OAuth 요청을 시작했던 연결이 여전히 활성 상태인지 확인한다.
+  await clearOAuthFlow(flow.state);
+  const auth = await verifyCurrentUser();
+  if (auth.status === "unauthenticated") redirect("/login");
+  if (auth.status === "error") redirect(AUTH_ERROR_PATH);
+  const actor = flow.accountActor;
+  const current = auth.user.oauthAccount;
+  if (!actor || actor.userId !== auth.user.id || actor.provider !== current.provider
+    || actor.providerUserId !== current.providerUserId || actor.linkGeneration !== current.linkGeneration) {
+    redirect("/mypage?account=expired");
+  }
+  let result: Awaited<ReturnType<typeof addLinkedAccount>>;
+  try {
+    // 공급자 응답을 검증하고 만료되지 않은 경우만 소유권을 다시 확인해 저장한다.
+    const identity = await exchangeOAuth(flow);
+    result = flow.expiresAt <= Math.floor(Date.now() / 1000)
+      ? "expired" : await addLinkedAccount(getG2bDatabase(), actor.userId, actor, identity);
+  } catch (error) {
+    // OAuth 코드와 공급자 개인정보는 로그와 화면에 전달하지 않는다.
+    console.error("[OAuth 계정 추가 완료]", error instanceof Error ? error.name : "UnknownError");
+    redirect("/mypage?account=failed");
+  }
+  // 현재 서비스 세션을 다시 발급하거나 덮어쓰지 않고 결과만 표시한다.
+  redirect(`/mypage?account=${result}`);
+}
+
+/**
+ * 확인 Dialog에서 선택한 OAuth 연결을 현재 계정의 권한으로 해제한다.
+ * @param form 해제할 연결 세대만 제출한 폼.
+ * @throws 마이페이지 결과 또는 로그인 화면으로 이동한다.
+ */
+export async function unlinkOAuthAccount(form: FormData): Promise<void> {
+  // 요청 사용자의 현재 세션을 검증하고 다른 사용자의 ID는 폼에서 받지 않는다.
+  const auth = await verifyCurrentUser();
+  if (auth.status === "unauthenticated") redirect("/login");
+  if (auth.status === "error") redirect(AUTH_ERROR_PATH);
+  const generation = form.get("generation");
+  if (typeof generation !== "string" || !/^[a-f0-9-]{32,36}$/.test(generation)) redirect("/mypage?account=unlink-blocked");
+  let removed: boolean;
+  try {
+    // 서버에서 소유권, 현재 연결 및 마지막 계정 보호를 한 문장으로 확인한다.
+    removed = await openAuthRepository(getG2bDatabase()).unlinkAccount(auth.user.id, auth.user.oauthAccount, generation);
+  } catch (error) {
+    console.error("[OAuth 계정 해제]", error instanceof Error ? error.name : "UnknownError");
+    redirect("/mypage?account=failed");
+  }
+  redirect(removed ? "/mypage?account=unlinked" : "/mypage?account=unlink-blocked");
 }
 
 /**
@@ -219,6 +307,8 @@ export async function finishOAuth(form: FormData): Promise<void> {
   const flow = await readOAuthFlow(form.get("flow"));
   // 정상 콜백 없이 완료 액션만 호출한 경우 인증을 시작하지 않는다.
   if (!flow || flow.stage !== "ready") redirectWithNotice("/login", "failed");
+  // 회원 계정 추가는 기존 로그인 흐름과 분리하며 새 서비스 세션을 발급하지 않는다.
+  if (flow.purpose === "account-add") return finishAccountOAuth(flow);
   // 추가 인증은 최초 가입 완료와 달리 선택한 내부 계정의 연결만 처리한다.
   if (flow.linkAttempt) return finishLinkOAuth(flow, flow.linkAttempt);
   // 가입과 로그인 URL 중 실패를 표시할 원래 화면을 선택한다.
