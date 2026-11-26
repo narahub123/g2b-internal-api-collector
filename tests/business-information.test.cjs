@@ -343,3 +343,38 @@ test("응답 오류 진단은 수신한 Content-Type만 기록한다", async (co
     });
   }
 });
+
+/** 사용자 목록과 상세 조회에서 사업자 간 데이터가 섞이지 않는지 검증한다. */
+test("마이페이지는 등록된 사업자의 요약과 선택한 상세만 읽는다", async (context) => {
+  // 실제 마이그레이션에 서로 다른 사용자와 사업자 및 부분 수집 결과를 준비한다.
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database");
+  const { openBusinessInformation } = require("../src/server/g2b/repository/business-information");
+  const client = createClient({ url: "file::memory:" });
+  context.after(() => client.close());
+  await migrateG2bDatabase(client);
+  await client.executeMultiple(`
+    INSERT INTO auth_users(id,email,nickname) VALUES ('a','a@example.test','a'),('b','b@example.test','b');
+    INSERT INTO businesses VALUES (1,'2208162517'),(2,'6168122531'),(3,'3808100318');
+    INSERT INTO user_businesses VALUES ('a',1),('a',3),('b',2);
+    INSERT INTO business_basic VALUES (1,'{"corpNm":"공유 업체","ceoNm":"상세 전용"}'),
+      (1,'{"adrs":"가","corpNm":""}'),(2,'{"corpNm":"다른 업체"}');
+    INSERT INTO business_smpp VALUES (1,'women','{"certSeCode":"03"}'),(2,'women','{"certSeCode":"03","issuInstt":"다른 업체"}');
+    INSERT INTO business_collection(business_id,kind,status,error,diagnostics)
+      VALUES (1,'women','failed','상세 내부 오류','{"name":"서버 전용"}'),(1,'sanction','succeeded',NULL,NULL);
+  `);
+  const store = openBusinessInformation(new G2bDatabase(client));
+  // 목록에는 요약만, 상세에는 선택 사업자의 항목과 화면용 수집 상태만 제공한다.
+  assert.deepEqual(await store.listForUser("a"), [
+    { id: 1, number: "2208162517", name: "공유 업체" },
+    { id: 3, number: "3808100318", name: null },
+  ]);
+  assert.equal(await store.detailForUser("a", 2), undefined);
+  assert.equal(await store.detailForUser("a", 999), undefined);
+  const detail = await store.detailForUser("a", 1);
+  assert.equal(detail.number, "2208162517");
+  assert.deepEqual(detail.sections.women, { status: "failed", items: [{ certSeCode: "03" }] });
+  assert.deepEqual(detail.sections.sanction, { status: "succeeded", items: [] });
+  assert.deepEqual(detail.sections.product, { status: "incomplete", items: [] });
+  assert.ok(!JSON.stringify(detail).includes("서버 전용"));
+});

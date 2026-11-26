@@ -3,6 +3,26 @@ import { BUSINESS_APIS, BUSINESS_API_KINDS } from "@/entities/business/model/bus
 import type { CollectionDiagnostic } from "@/shared/api/g2b/collection-diagnostic";
 import type { G2bDatabase } from "./database";
 
+/** 상세 화면에 제공하는 수집 상태이며 누락·만료 상태는 미완료로 표시한다. */
+type DisplayStatus = "incomplete" | "running" | "failed" | "succeeded";
+
+/** 한 아코디언의 표시 상태와 저장된 원본 업무 행이다. */
+type BusinessSection = {
+  /** 다시 수집할 수 있는지 판단하는 화면용 상태. */
+  status: DisplayStatus;
+  /** 선택한 사업자의 이 유형에 속하는 모든 저장 행. */
+  items: BusinessItem[];
+};
+
+/** 조달청 테이블에서 유형을 붙이고 SMPP 통합 테이블은 한 번만 읽는 상세 조회다. */
+const detailSql = [
+  ...BUSINESS_API_KINDS.filter((kind) => !BUSINESS_APIS[kind].certificate).map((kind) =>
+    `SELECT '${kind}' AS kind, payload, NULL AS status FROM ${BUSINESS_APIS[kind].table} WHERE business_id = :id`),
+  "SELECT kind, payload, NULL AS status FROM business_smpp WHERE business_id = :id",
+  `SELECT kind, NULL AS payload, CASE WHEN status = 'running' AND lease_until <= :now
+    THEN 'incomplete' ELSE status END AS status FROM business_collection WHERE business_id = :id`,
+].join(" UNION ALL ");
+
 /**
  * 사업자 및 API별 실행권을 관리하는 저장소를 연다. 호출자는 등록 및 실행권 확보를 같은 쓰기 트랜잭션에서 호출한다.
  * @param db 사업자 마이그레이션이 적용된 연결.
@@ -45,6 +65,53 @@ export function openBusinessInformation(db: G2bDatabase) {
       JOIN businesses b ON b.id = u.business_id WHERE u.user_id = ? AND u.business_id = ?`).get(userId, id);
     // 등록 관계가 있는 경우에만 수집용 번호를 제공한다.
     return row?.registration_number as string | undefined;
+  }
+
+  /**
+   * 사용자 연결을 기준으로 목록에서 사용할 최소 식별 정보만 조회한다.
+   * @param userId 인증한 내부 사용자 ID.
+   * @returns 내부 ID 순서의 사업자 ID, 번호와 확인된 업체명.
+   * @throws 조회에 실패하면 DB 오류를 전달한다.
+   */
+  async function listForUser(userId: string) {
+    // 현재 사용자 연결을 읽고 각 사업자의 기본정보에서 첫 유효 업체명만 가져온다.
+    const rows = await db.prepare(`SELECT u.business_id, b.registration_number,
+      (SELECT NULLIF(trim(json_extract(p.payload, '$.corpNm')), '') FROM business_basic p
+        WHERE p.business_id = u.business_id AND NULLIF(trim(json_extract(p.payload, '$.corpNm')), '') IS NOT NULL
+        ORDER BY p.payload LIMIT 1) AS name
+      FROM user_businesses u JOIN businesses b ON b.id = u.business_id
+      WHERE u.user_id = ? ORDER BY u.business_id`).all(userId);
+    // 원본 업무 행과 수집 진단을 제외한 목록 모델을 구성한다.
+    return rows.map((row) => ({ id: Number(row.business_id), number: String(row.registration_number), name: row.name as string | null }));
+  }
+
+  /**
+   * 등록 관계를 먼저 검증하고 같은 읽기 트랜잭션에서 선택한 사업자의 상세를 조회한다.
+   * @param userId 인증한 내부 사용자 ID.
+   * @param id 선택한 사업자의 내부 ID.
+   * @returns 등록한 사업자의 번호와 7종 표시 데이터. 관계가 없거나 존재하지 않으면 undefined.
+   * @throws 조회 또는 저장 데이터 해석에 실패하면 원인을 전달한다.
+   */
+  async function detailForUser(userId: string, id: number) {
+    // 권한 조회와 업무 조회 사이에 일관된 DB 스냅샷을 사용한다.
+    return db.transaction(async () => {
+      // 등록 관계가 없으면 업무 테이블을 조회하기 전에 종료한다.
+      const number = await registeredNumber(userId, id);
+      if (!number) return undefined;
+
+      // 고정된 업무 유형을 초기화해 아직 수집 상태가 없는 경우도 표시한다.
+      const sections = Object.fromEntries(BUSINESS_API_KINDS.map((kind) => [kind, { status: "incomplete", items: [] }])) as Record<BusinessApi, BusinessSection>;
+      // 선택 사업자의 데이터와 화면 상태만 읽고 오류 진단과 실행권은 전송하지 않는다.
+      const { rows } = await db.execute({ sql: detailSql, args: { id, now: Date.now() } });
+      for (const row of rows) {
+        // 상태와 업무 행을 각각 동일한 아코디언 모델에 모은다.
+        const section = sections[row.kind as BusinessApi];
+        if (typeof row.payload === "string") section.items.push(JSON.parse(row.payload) as BusinessItem);
+        else section.status = row.status as DisplayStatus;
+      }
+      // 페이지가 이 결과만으로 상세를 렌더링할 수 있게 반환한다.
+      return { number, sections };
+    }, false);
   }
 
   /**
@@ -134,5 +201,5 @@ export function openBusinessInformation(db: G2bDatabase) {
   }
 
   // 등록 서비스에서 트랜잭션 경계를 조합할 수 있게 저장소 동작을 전달한다.
-  return { register, registeredNumber, claim, complete, fail };
+  return { register, registeredNumber, listForUser, detailForUser, claim, complete, fail };
 }

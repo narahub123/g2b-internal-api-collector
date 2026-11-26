@@ -24,3 +24,25 @@ export function myPageMenuPath(id: MyPageMenuId) {
 
 /** 계정 연결 결과를 표시하는 사용자 정보 경로. */
 export const MYPAGE_USER_PATH = myPageMenuPath("user");
+
+/**
+ * 등록 사업자 하나의 상세 경로를 구성한다.
+ * @param id 저장된 내부 사업자 식별자.
+ * @returns 목록에서 이동하고 액션에서 갱신할 상세 경로.
+ */
+export function myPageBusinessPath(id: number) {
+  // 목록 주소의 하위 경로로 구성해 같은 마이페이지 메뉴를 유지한다.
+  return `${myPageMenuPath("business")}/${id}` as const;
+}
+
+/**
+ * 상세 경로와 재시도 입력에 공통으로 정수 ID 범위를 검사한다.
+ * @param value URL 또는 폼에서 받은 원본 값.
+ * @returns 유효한 양의 정수 또는 undefined.
+ */
+export function parseMyPageBusinessId(value: unknown) {
+  // 다른 표기, 숫자가 아닌 값 및 안전한 정수 범위를 벗어난 입력을 거절한다.
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return undefined;
+  const id = Number(value);
+  return Number.isSafeInteger(id) ? id : undefined;
+}

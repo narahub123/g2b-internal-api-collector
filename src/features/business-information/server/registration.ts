@@ -14,6 +14,15 @@ const LEASE_MS = 3 * BUSINESS_API_TIMEOUT_MS;
 /** 수집 시작 시각을 한국 기준일로 변환하는 공용 포매터. */
 const koreanDate = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" });
 
+/** 재시도 요청에 등록 관계가 없을 때 서비스와 화면이 공유하는 오류다. */
+export class BusinessNotRegisteredError extends Error {
+  /** 사업자 존재 여부와 관계없이 일관된 접근 오류를 생성한다. */
+  constructor() {
+    // 등록 관계가 없는 요청에는 사업자 존재 여부를 공개하지 않는다.
+    super("등록된 사업자 정보를 찾을 수 없습니다.");
+  }
+}
+
 /**
  * 사용자 입력을 저장·조회에 공통으로 사용할 사업자번호로 변환한다.
  * @param input 구분자 없는 10자리 번호 또는 3-2-5 형식.
@@ -172,7 +181,7 @@ export function openBusinessRegistration(db: G2bDatabase, collect: CollectBusine
     const { number, kinds, referenceDate } = await db.transaction(async () => {
       // 사용자 연결을 확인한 같은 트랜잭션에서 수집 실행권을 확보한다.
       const number = await store.registeredNumber(userId, id);
-      if (!number) throw new Error("등록된 사업자 정보를 찾을 수 없습니다.");
+      if (!number) throw new BusinessNotRegisteredError();
       // SMPP 기준일은 이번 수집 시작 시점의 한국 날짜를 사용한다.
       const now = Date.now();
       const referenceDate = koreanDate.format(now).replaceAll("-", "");
