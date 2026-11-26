@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import { DetailInterest } from "@/features/g2b-interest/DetailInterest";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { type ContractRequest } from "../model/contract-request";
 
@@ -55,7 +56,9 @@ export function ContractRequestDetail({
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
+      {/* 동일 업무를 보는 사용자·관리자 상세에서 공통 관심 상태를 표시한다. */}
       <DetailTitle
+        interest={<DetailInterest item={{ type: "contract-requests", number, revision }} />}
         title={formatValue(detail.bizNm) ?? "계약요청 상세"}
         subtitle={`${number} / ${revision}`}
         business={resolveG2bBusiness(undefined, detail.prcmBsneAreaNm)}

@@ -8,6 +8,7 @@ import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import { DetailInterest } from "@/features/g2b-interest/DetailInterest";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import type { PriorSpec } from "../model/prior-spec";
 import { priorSpecDisplay } from "../model/prior-spec-display";
@@ -101,7 +102,9 @@ export function PriorSpecDetail({
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
+      {/* 동일 업무를 보는 사용자·관리자 상세에서 공통 관심 상태를 표시한다. */}
       <DetailTitle
+        interest={<DetailInterest item={{ type: "prior-specs", number: spec.number, revision: "" }} />}
         title={title.trim() ? title : "사전규격 상세"}
         subtitle={spec.number}
         business={resolveG2bBusiness(spec.payload.dlBfSpecM.prcmBsneSeCd, spec.payload.dlBfSpecM.prcmBsneSeCdNm)}

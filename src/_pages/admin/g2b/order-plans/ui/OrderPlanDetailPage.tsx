@@ -1,8 +1,8 @@
-import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { DetailNavigation } from "@/shared/ui/g2b/DetailNavigation";
 import { loadAttachmentPreviewLookup } from "@/_pages/admin/g2b/ui/attachment-preview-data";
 import { AttachmentJobsSection } from "@/_pages/admin/g2b/ui/AttachmentJobsSection";
 import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
-import { noticePath, priorSpecPath } from "@/_pages/admin/config/routes";
+import { ADMIN_G2B_PATH, noticePath, priorSpecPath } from "@/_pages/admin/config/routes";
 import { notFound } from "next/navigation";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { OrderPlanDetail } from "@/entities/order-plan/ui/OrderPlanDetail";
@@ -28,7 +28,8 @@ export async function OrderPlanDetailPage({
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <DetailNavigation section="order-plans" />
+      {/* 관리자 상세에서도 공통 이동 버튼으로 해당 관리자 업무 목록에 연결한다. */}
+      <DetailNavigation listHref={`${ADMIN_G2B_PATH}/order-plans`} />
       <h1 className="sr-only">발주계획</h1>
       {plan ? (
         <OrderPlanDetail

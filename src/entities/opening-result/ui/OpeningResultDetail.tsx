@@ -5,6 +5,7 @@ import { formatG2bDisplayDateTime } from "@/shared/lib/g2b/g2b-display-format";
 import { Accordion } from "@/shared/ui/accordion";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import { DetailInterest } from "@/features/g2b-interest/DetailInterest";
 import type { G2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { type OpeningResult } from "../model/opening-result";
 import {
@@ -145,7 +146,9 @@ export function OpeningResultDetail({
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
+      {/* 동일 업무를 보는 사용자·관리자 상세에서 공통 관심 상태를 표시한다. */}
       <DetailTitle
+        interest={<DetailInterest item={{ type: "opening-results", ...noticeKey }} />}
         title={title ?? "개찰결과 상세"}
         subtitle={`${noticeKey.number} / ${noticeKey.revision}`}
         business={business}

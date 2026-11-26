@@ -1,4 +1,5 @@
-import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { DetailNavigation } from "@/shared/ui/g2b/DetailNavigation";
+import { ADMIN_G2B_PATH } from "@/_pages/admin/config/routes";
 import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
 import { contractRequestApiPath } from "@/features/collect-g2b/api/routes";
 import { notFound } from "next/navigation";
@@ -31,7 +32,8 @@ export async function ContractRequestDetailPage({
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <DetailNavigation section="contract-requests" />
+      {/* 관리자 상세에서도 공통 이동 버튼으로 해당 관리자 업무 목록에 연결한다. */}
+      <DetailNavigation listHref={`${ADMIN_G2B_PATH}/contract-requests`} />
       <h1 className="sr-only">계약요청</h1>
       {contractRequest ? (
         <ContractRequestDetail

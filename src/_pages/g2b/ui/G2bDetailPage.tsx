@@ -1,6 +1,4 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { List } from "lucide-react";
 import { contractRequestRevision } from "@/entities/contract-request/model/contract-request";
 import { ContractRequestDetail } from "@/entities/contract-request/ui/ContractRequestDetail";
 import { contractRevision } from "@/entities/contract/model/contract";
@@ -19,7 +17,7 @@ import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
 import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 import type { NumberWithRevision } from "@/shared/lib/g2b/revision-route";
-import { Button } from "@/shared/ui/button";
+import { DetailNavigation } from "@/shared/ui/g2b/DetailNavigation";
 import { userDetailPath, userListReturnHref } from "../config/routes";
 
 async function savedNoticePaths(keys: NumberWithRevision[]) {
@@ -133,7 +131,9 @@ async function loadDetail(section: CollectionSection, { number, revision = "" }:
 }
 
 /**
- * 저장된 사용자 상세를 열고 검증된 현재 업무의 목록으로 돌아가는 링크를 제공한다.
+ * 저장된 사용자 상세를 열고 직전 기록과 검증된 업무 목록에 각각 연결한다.
+ * @param props 업무 유형, 상세 키 및 일반 업무 목록에서 전달한 복귀 조건.
+ * @returns 상세 본문과 공통 이동 버튼이 있는 회원 화면.
  * @throws 식별자가 유효하지 않거나 자료가 없거나 모의공고 상세를 요청하면 404 처리하고, 저장소 오류는 호출자에 전달한다.
  */
 export async function G2bDetailPage({ section, params, searchParams }: {
@@ -146,14 +146,8 @@ export async function G2bDetailPage({ section, params, searchParams }: {
 
   return (
     <main className="mx-auto grid w-full min-w-0 max-w-6xl gap-6 px-4 py-8 sm:px-6">
-      <nav aria-label="상세 페이지 이동">
-        <Button asChild variant="outline">
-          <Link href={userListReturnHref(section, from)} prefetch={false}>
-            <List aria-hidden="true" />
-            목록으로 이동
-          </Link>
-        </Button>
-      </nav>
+      {/* 일반 업무 목록의 검색·필터·페이지 주소를 공통 이동 영역에 전달한다. */}
+      <DetailNavigation listHref={userListReturnHref(section, from)} />
       {section !== "notices" && <h1 className="sr-only">{G2B_SECTIONS[section]}</h1>}
       {detail}
     </main>

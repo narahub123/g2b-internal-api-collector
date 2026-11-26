@@ -11,6 +11,7 @@ import type { AttachmentPreviewLookup } from "@/shared/model/g2b/attachment-extr
 import { AttachmentTable } from "@/shared/ui/g2b/AttachmentTable";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import { DetailTitle } from "@/shared/ui/g2b/DetailTitle";
+import { DetailInterest } from "@/features/g2b-interest/DetailInterest";
 import { resolveG2bBusiness } from "@/shared/lib/g2b/g2b-business";
 import { NoticeValue } from "./NoticeValue";
 import { BaseAmountButton, BaseAmountDisclosure, BaseAmountPanel } from "./BaseAmountDisclosure";
@@ -23,7 +24,7 @@ import {
 } from "../model/notice-display";
 import { getPrivateNoticeAttachmentFiles, getPrivateNoticeDisplay } from "../model/private-notice-display";
 import type { Notice } from "../model/types";
-import { etcNoticeDetail, noticeAttachmentGroup, noticeDetail, privateNoticeResult } from "../model/notice-detail";
+import { etcNoticeDetail, isMockNotice, noticeAttachmentGroup, noticeDetail, privateNoticeResult } from "../model/notice-detail";
 import type { NumberWithRevision } from "@/shared/lib/g2b/revision-route";
 
 /**
@@ -207,7 +208,9 @@ export async function NoticeDetail({
 
   return (
     <article className="grid min-w-0 gap-6 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
+      {/* 동일 업무를 보는 사용자·관리자 상세에서 공통 관심 상태를 표시한다. */}
       <DetailTitle
+        interest={isMockNotice(notice) ? undefined : <DetailInterest item={{ type: "notices", number, revision }} />}
         headingLevel="h1"
         title={notice.title}
         subtitle={`${number} / ${revision}`}

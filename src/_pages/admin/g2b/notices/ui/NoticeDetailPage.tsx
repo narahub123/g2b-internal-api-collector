@@ -1,4 +1,4 @@
-import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { DetailNavigation } from "@/shared/ui/g2b/DetailNavigation";
 import { loadAttachmentPreviewLookup } from "@/_pages/admin/g2b/ui/attachment-preview-data";
 import { AttachmentJobsSection } from "@/_pages/admin/g2b/ui/AttachmentJobsSection";
 import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { getNoticeOrderPlanNumber } from "@/entities/order-plan/model/order-plan";
 import {
+  ADMIN_G2B_PATH,
   contractPath,
   contractRequestPath,
   noticePath,
@@ -35,7 +36,8 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
     if (!target) notFound();
     return (
       <div className="grid min-w-0 gap-6">
-        <DetailNavigation section="notices" />
+        {/* 관리자 상세에서도 공통 이동 버튼으로 해당 관리자 업무 목록에 연결한다. */}
+        <DetailNavigation listHref={`${ADMIN_G2B_PATH}/notices`} />
         <section className="space-y-3 rounded-lg border bg-card p-4">
           <h1 className="text-xl font-semibold">{target.title || "공고명 미확인"}</h1>
           <p className="text-sm">공고번호 {target.number} · 차수 {target.revision}</p>
@@ -60,7 +62,8 @@ export async function NoticeDetailPage({ params }: { params: Promise<NoticeKey> 
     number && (await repository.findOrderPlan(number)) ? number : undefined;
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <DetailNavigation section="notices" />
+      {/* 수집된 상세도 같은 관리자 업무 목록으로 연결한다. */}
+      <DetailNavigation listHref={`${ADMIN_G2B_PATH}/notices`} />
       {failure && (
         <section aria-label="최근 수집 실패" className="rounded-lg border bg-card p-4">
           <p className="text-sm text-destructive">{failure.error || "최근 수집에 실패했습니다."}</p>

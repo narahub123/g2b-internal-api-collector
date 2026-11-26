@@ -1,8 +1,8 @@
-import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { DetailNavigation } from "@/shared/ui/g2b/DetailNavigation";
 import { loadAttachmentPreviewLookup } from "@/_pages/admin/g2b/ui/attachment-preview-data";
 import { AttachmentJobsSection } from "@/_pages/admin/g2b/ui/AttachmentJobsSection";
 import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
-import { orderPlanPath } from "@/_pages/admin/config/routes";
+import { ADMIN_G2B_PATH, orderPlanPath } from "@/_pages/admin/config/routes";
 import { notFound } from "next/navigation";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { g2bNumber } from "@/shared/model/g2b/g2b-number";
@@ -27,7 +27,8 @@ export async function PriorSpecDetailPage({
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <DetailNavigation section="prior-specs" />
+      {/* 관리자 상세에서도 공통 이동 버튼으로 해당 관리자 업무 목록에 연결한다. */}
+      <DetailNavigation listHref={`${ADMIN_G2B_PATH}/prior-specs`} />
       <h1 className="sr-only">사전규격</h1>
       {spec ? (
         <PriorSpecDetail

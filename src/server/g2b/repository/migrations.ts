@@ -1,5 +1,6 @@
 import { businessKeySchema, businessSectionSchema } from "./business-filter";
 import { businessInformationSchema } from "./business-information-schema";
+import { interestSchema } from "./interest-schema";
 import type { Client } from "@libsql/client";
 import { orderPlanListSchema } from "./order-plan-list-schema";
 import { nameSearchSections, numberSearchSections, type NumberSearchSection } from "./number-search-config";
@@ -864,6 +865,14 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
         INSERT INTO g2b_schema_migrations (version) VALUES (42);
       `);
     }
+    // 사용자 관심 테이블과 원본 삭제 트리거를 같은 버전으로 적용한다.
+    const interestVersion = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 43");
+    // 기존 설치에서는 한 번만 적용하고, 중간에 실패하면 버전과 스키마를 함께 되돌린다.
+    if (!interestVersion.rows.length) {
+      // 관심 저장과 원본 삭제에 필요한 스키마를 적용한 뒤 버전을 기록한다.
+      await transaction.executeMultiple(`${interestSchema}\nINSERT INTO g2b_schema_migrations (version) VALUES (43);`);
+    }
+    // 모든 마이그레이션이 성공한 경우 스키마를 확정한다.
     await transaction.commit();
   } finally {
     transaction.close();

@@ -1,6 +1,6 @@
-import { DetailNavigation } from "@/_pages/admin/g2b/ui/DetailNavigation";
+import { DetailNavigation } from "@/shared/ui/g2b/DetailNavigation";
 import { CollectionDetailActions } from "@/_pages/admin/g2b/ui/CollectionDetailActions";
-import { noticePath } from "@/_pages/admin/config/routes";
+import { ADMIN_G2B_PATH, noticePath } from "@/_pages/admin/config/routes";
 import { openingResultApiPath } from "@/features/collect-g2b/api/routes";
 import { notFound } from "next/navigation";
 import type { NoticeKey } from "@/entities/notice/model/types";
@@ -34,7 +34,8 @@ export async function OpeningResultDetailPage({ params }: { params: Promise<Noti
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-6">
-      <DetailNavigation section="opening-results" />
+      {/* 관리자 상세에서도 공통 이동 버튼으로 해당 관리자 업무 목록에 연결한다. */}
+      <DetailNavigation listHref={`${ADMIN_G2B_PATH}/opening-results`} />
       <h1 className="sr-only">개찰결과</h1>
       {results.length ? (
         <OpeningResultDetail
