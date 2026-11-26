@@ -207,7 +207,13 @@ export async function collectBusinessApi(kind: BusinessApi, number: string, refe
       // 경로·페이지·제공기관 결과와 원래 예외를 공통 수집 진단에 연결한다.
       throw collectionError(error, {
         step, request, details: { operation, page },
-        response: response ? { status: response.status, errorCode, errorMessage } : undefined,
+        response: response ? {
+          status: response.status,
+          // 응답 헤더가 제공하는 형식만 기록하고 본문은 진단에 포함하지 않는다.
+          contentType: response.headers.get("content-type") ?? undefined,
+          errorCode,
+          errorMessage,
+        } : undefined,
       });
     }
   }

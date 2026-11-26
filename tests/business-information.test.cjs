@@ -241,12 +241,105 @@ test("만료된 실행권은 저장할 수 없으며 새 실행권으로 이어�
 
   // 실행권이 만료되면 새로운 요청이 오기 전이라도 기존 호출 결과는 반영할 수 없다.
   now = 2_000;
-  await store.complete(1, "basic", "old", [{ corpNm: "만료된 시도" }]);
+  assert.equal(await store.complete(1, "basic", "old", [{ corpNm: "만료된 시도" }]), "lease-lost");
   assert.equal((await client.execute("SELECT * FROM business_basic")).rows.length, 0);
   assert.equal((await store.claim(1, "new", now, 3_000, "20261127")).length, 7);
   // 이전 실패 응답도 새 실행권을 지우지 않으며 새 실행만 데이터를 저장한다.
+  assert.equal(await store.complete(1, "basic", "old", [{ corpNm: "인수된 시도" }]), "lease-lost");
   await store.fail(1, "basic", "old", { name: "Error", message: "지연된 실패" });
-  await store.complete(1, "basic", "new", [{ corpNm: "새 시도" }]);
+  assert.equal(await store.complete(1, "basic", "new", [{ corpNm: "새 시도" }]), "saved");
   assert.equal((await client.execute("SELECT payload FROM business_basic")).rows[0].payload, '{"corpNm":"새 시도"}');
   assert.equal((await client.execute("SELECT reference_date FROM business_collection WHERE kind = 'women'")).rows[0].reference_date, "20261127");
+});
+
+/** 실패 상태 저장이 거절돼도 두 진단을 정제해 남기고 다른 API를 완료한다. */
+test("실패 기록 장애에서 수집 오류와 DB 오류를 안전하게 기록한다", async (context) => {
+  // 실제 마이그레이션에 실패 갱신만 거절하는 트리거를 설치한다.
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database");
+  const { openBusinessRegistration } = require("../src/features/business-information/server/registration");
+  const { collectionError } = require("../src/shared/api/g2b/collection-diagnostic");
+  const client = createClient({ url: "file::memory:" });
+  context.after(() => client.close());
+  await migrateG2bDatabase(client);
+  // 테스트용 인증값을 설정하고 테스트가 끝나면 원래 환경을 복원한다.
+  const key = "fixture/service+key";
+  const token = "fixture/database+token";
+  const settings = { PPS_USER_INFO_SERVICE_KEY: key, TURSO_AUTH_TOKEN: token };
+  for (const [name, value] of Object.entries(settings)) {
+    const previous = process.env[name];
+    process.env[name] = value;
+    context.after(() => {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    });
+  }
+  await client.executeMultiple(`
+    INSERT INTO auth_users(id,email,nickname) VALUES ('a','a@example.test','a');
+    CREATE TRIGGER reject_failure BEFORE UPDATE OF status ON business_collection WHEN NEW.status = 'failed'
+      BEGIN SELECT RAISE(ABORT, '쓰기 오류 ${token} ${encodeURIComponent(token)}'); END;
+  `);
+  // 수집과 상태 저장 오류를 실제 호출부에서 처리하도록 콘솔 기록을 관측한다.
+  const logger = context.mock.method(console, "error", () => {});
+  const service = openBusinessRegistration(new G2bDatabase(client), async (kind) => {
+    // 한 API의 실패와 다른 API의 실행권 인수를 독립적으로 재현한다.
+    if (kind === "basic") {
+      throw collectionError(new Error(`수집 오류 ${key} ${encodeURIComponent(key)}`), {
+        step: "외부 요청", request: { path: "/business?marker=hidden" },
+      });
+    }
+    if (kind === "industry") {
+      await client.execute("UPDATE business_collection SET lease_token = 'replacement' WHERE kind = 'industry'");
+    }
+    return [];
+  });
+  // 나머지 API를 저장한 뒤 공개용 고정 메시지를 전달하고 인수된 실행권을 보존한다.
+  await assert.rejects(service.register("a", "2208162517"), { message: "일부 사업자 정보의 수집 상태를 저장하지 못했습니다." });
+  const states = (await client.execute("SELECT kind, status, lease_token FROM business_collection")).rows;
+  assert.equal(states.filter(({ status }) => status === "succeeded").length, 5);
+  assert.equal(states.find(({ kind }) => kind === "industry").lease_token, "replacement");
+  // 두 진단의 메시지와 요청 경로를 검사하되 비밀값과 쿼리는 남기지 않는다.
+  assert.equal(logger.mock.callCount(), 1);
+  const [, id, kind, original, write] = logger.mock.calls[0].arguments;
+  assert.equal(id, 1);
+  assert.equal(kind, "basic");
+  assert.match(original.message, /수집 오류/);
+  assert.equal(original.request.path, "/business");
+  assert.match(write.message, /쓰기 오류/);
+  const logged = JSON.stringify(logger.mock.calls[0].arguments);
+  for (const secret of [key, token, encodeURIComponent(key), encodeURIComponent(token), "marker=hidden"]) {
+    assert.ok(!logged.includes(secret));
+  }
+});
+
+/** HTTP 응답 유무와 헤더에 따라 기존 진단에 콘텐츠 유형을 포함한다. */
+test("응답 오류 진단은 수신한 Content-Type만 기록한다", async (context) => {
+  // 테스트 환경에서 HTTP 오류, 해석 오류, 헤더 없음, 연결 실패를 순서대로 재현한다.
+  const { collectBusinessApi } = require("../src/features/business-information/server/collect-business-api");
+  const { describeCollectionError } = require("../src/shared/api/g2b/collection-diagnostic");
+  const previous = process.env.PPS_USER_INFO_SERVICE_KEY;
+  process.env.PPS_USER_INFO_SERVICE_KEY = "fixture";
+  context.after(() => {
+    if (previous === undefined) delete process.env.PPS_USER_INFO_SERVICE_KEY;
+    else process.env.PPS_USER_INFO_SERVICE_KEY = previous;
+  });
+  const cases = [
+    [new Response(null, { status: 503, headers: { "Content-Type": "text/html" } }), "text/html"],
+    [new Response("{", { headers: { "Content-Type": "application/json" } }), "application/json"],
+    [new Response(null, { status: 503 }), undefined],
+    [null, undefined],
+  ];
+  const fetchMock = context.mock.method(globalThis, "fetch", async () => {
+    throw new Error("연결 실패");
+  });
+  for (const [response, expected] of cases) {
+    if (response) fetchMock.mock.mockImplementationOnce(async () => response);
+    await assert.rejects(collectBusinessApi("basic", "2208162517", "20261126"), (error) => {
+      // 공통 진단으로 변환한 필드와 응답 자체의 유무를 검증한다.
+      const diagnostic = describeCollectionError(error);
+      assert.equal(diagnostic.response?.contentType, expected);
+      if (!response) assert.equal(diagnostic.response, undefined);
+      return true;
+    });
+  }
 });

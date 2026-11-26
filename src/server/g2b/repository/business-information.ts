@@ -81,11 +81,12 @@ export function openBusinessInformation(db: G2bDatabase) {
    * @param kind 저장할 API 유형.
    * @param token 현재 시도의 실행권.
    * @param items 전체 페이지를 검증한 업무 데이터.
+   * @returns 커밋 후 saved, 실행권 만료 또는 인수로 반영하지 않았으면 lease-lost.
    * @throws 데이터 또는 상태를 저장하지 못하면 반영을 취소하고 DB 오류를 전달한다.
    */
   async function complete(id: number, kind: BusinessApi, token: string, items: BusinessItem[]) {
     // 쓰기 트랜잭션에서 실행권 확인과 업무 데이터 교체를 묶는다.
-    await db.transaction(async () => {
+    return db.transaction(async (): Promise<"saved" | "lease-lost"> => {
       // 실행권을 잃은 요청은 후속 시도의 데이터나 상태를 바꿀 수 없다.
       const updated = await db.execute({
         sql: `UPDATE business_collection SET status = 'succeeded', lease_token = NULL, lease_until = NULL,
@@ -93,8 +94,8 @@ export function openBusinessInformation(db: G2bDatabase) {
               WHERE business_id = ? AND kind = ? AND lease_token = ? AND lease_until > ?`,
         args: [id, kind, token, Date.now()],
       });
-      // 다른 시도가 이미 인수했다면 업무 데이터를 건드리지 않고 종료한다.
-      if (!updated.rowsAffected) return;
+      // 실행권이 만료됐거나 다른 시도가 인수했으면 업무 데이터를 그대로 두고 결과를 구분한다.
+      if (!updated.rowsAffected) return "lease-lost";
 
       // 테이블 선택과 SMPP 유형 조건은 고정된 API 정의에서 가져온다.
       const { table, certificate } = BUSINESS_APIS[kind];
@@ -110,6 +111,8 @@ export function openBusinessInformation(db: G2bDatabase) {
           : `INSERT INTO ${table}(business_id, payload) SELECT ?, value FROM json_each(?) WHERE true ON CONFLICT DO NOTHING`,
         args: [...scopeArgs, payloads],
       });
+      // 업무 행 반영을 끝내고 트랜잭션이 커밋되면 호출부에 완료 결과를 전달한다.
+      return "saved";
     });
   }
 

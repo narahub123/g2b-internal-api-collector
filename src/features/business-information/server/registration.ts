@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { BusinessApi, BusinessItem } from "@/entities/business/model/business-apis";
-import { collectionAsyncStep, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
+import { collectionAsyncStep, collectionError, describeCollectionError } from "@/shared/api/g2b/collection-diagnostic";
 import type { G2bDatabase } from "@/server/g2b/repository/database";
 import { openBusinessInformation } from "@/server/g2b/repository/business-information";
 import { getG2bDatabase } from "@/server/g2b/repository";
@@ -45,11 +45,11 @@ export function normalizeBusinessNumber(input: string) {
 /**
  * 설정한 자격 증명의 원문과 자주 사용되는 URL 인코딩 표기를 진단 원문에서 제거한다.
  * @param value 길이를 자르기 전 오류 메시지 또는 중첩 진단 필드.
- * @returns 서비스 키가 마스킹된 문자열.
+ * @returns 서비스 키와 DB 인증 토큰이 마스킹된 문자열.
  */
-function redactServiceKeys(value: string) {
-  // 두 기관에서 설정한 키 모두를 확인해 DB와 호출자에 같은 정제 결과가 전달되게 한다.
-  const keys = [process.env.PPS_USER_INFO_SERVICE_KEY, process.env.SMPP_CERT_INFO_SERVICE_KEY];
+function redactCredentials(value: string) {
+  // 외부 기관의 키와 수집 상태 저장에 사용하는 DB 인증 토큰을 함께 제거한다.
+  const keys = [process.env.PPS_USER_INFO_SERVICE_KEY, process.env.SMPP_CERT_INFO_SERVICE_KEY, process.env.TURSO_AUTH_TOKEN];
   let redacted = value;
   for (const configured of keys) {
     // 비어 있는 값은 일반 오류 내용과 일치하지 않게 건너뛴다.
@@ -105,14 +105,21 @@ export function openBusinessRegistration(db: G2bDatabase, collect: CollectBusine
         // 수집 실패는 원래 예외의 진단을 보존하도록 실패 기록 경로로 전달한다.
         if (response.status === "rejected") throw response.reason;
         // 검증이 끝난 API는 현재 실행권으로 업무 행과 완료 상태를 저장한다.
-        await collectionAsyncStep("사업자 정보 저장", () => store.complete(id, kind, token, response.value));
+        const result = await collectionAsyncStep("사업자 정보 저장", () => store.complete(id, kind, token, response.value));
+        // 실행권 상실은 새 시도의 상태를 변경하지 않고 다음 API로 넘어간다.
+        if (result === "lease-lost") continue;
       } catch (error) {
         // 업무 저장 트랜잭션은 이미 취소됐으므로 기존 데이터는 유지하고 상태만 기록한다.
-        const diagnostics = describeCollectionError(error, redactServiceKeys);
+        const diagnostics = describeCollectionError(error, redactCredentials);
         try {
           // 정제된 진단을 현재 실행의 실패 상태에 기록한다.
           await store.fail(id, kind, token, diagnostics);
-        } catch {
+        } catch (writeError) {
+          // 기록 장애의 단계와 두 오류를 정제한 뒤 내부 식별자와 함께 서버 로그에 남긴다.
+          const writeDiagnostics = describeCollectionError(
+            collectionError(writeError, { step: "저장소 사업자 수집 실패 상태 기록" }), redactCredentials,
+          );
+          console.error("[사업자 수집 실패 및 상태 저장 실패]", id, kind, diagnostics, writeDiagnostics);
           // DB가 실패 상태를 받지 못해도 다음 API의 결과 저장을 이어 간다.
           failedToRecord = true;
         }
