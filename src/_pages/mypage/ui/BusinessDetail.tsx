@@ -6,6 +6,7 @@ import { myPageMenuPath } from "@/shared/config/mypage";
 import { Accordion } from "@/shared/ui/accordion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
+import { RefreshBusinessButton } from "@/features/business-information/ui/RefreshBusinessButton";
 import { BusinessForm } from "./BusinessForm";
 
 /** 소유 관계를 검증한 상세에서 화면에 전달하는 데이터다. */
@@ -28,9 +29,15 @@ export function BusinessDetail({ businessId, detail }: { businessId: number; det
         사업자 목록으로
       </Link>
       <Card>
-        <CardHeader>
-          <CardTitle>사업자 정보 상세</CardTitle>
-          <p className="text-sm text-muted-foreground">{formatBusinessNumber(detail.number)}</p>
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle>사업자 정보 상세</CardTitle>
+            <p className="text-sm text-muted-foreground">{formatBusinessNumber(detail.number)}</p>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-start justify-end gap-2">
+            {/* 현재 저장 상태와 관계없이 명시적으로 7종 갱신을 요청할 수 있다. */}
+            <RefreshBusinessButton id={businessId} number={detail.number} />
+          </div>
         </CardHeader>
         <CardContent className="grid min-w-0 gap-4">
           {/* 실행권을 확보할 수 있는 업무가 있을 때 재시도 요청을 제공한다. */}

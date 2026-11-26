@@ -4,8 +4,61 @@ import { revalidatePath } from "next/cache";
 import { verifyCurrentUser } from "@/server/auth/current-user";
 import { getG2bDatabase } from "@/server/g2b/repository";
 import { openBusinessInformation } from "@/server/g2b/repository/business-information";
-import { myPageBusinessPath, myPageMenuPath, parseMyPageBusinessId } from "@/shared/config/mypage";
-import { BusinessNotRegisteredError, getBusinessRegistration, normalizeBusinessNumber } from "./server/registration";
+import {
+  myPageBusinessPath,
+  myPageMenuPath,
+  parseMyPageBusinessId,
+} from "@/shared/config/mypage";
+import {
+  BusinessNotRegisteredError,
+  getBusinessRegistration,
+  normalizeBusinessNumber,
+} from "./server/registration";
+
+/**
+ * 현재 사용자가 등록한 사업자의 전체 정보를 명시적 요청으로 갱신한다.
+ * @param businessId 화면에서 선택한 내부 ID.
+ * @param number 화면에 표시한 원본 사업자등록번호.
+ * @returns 현재 화면에 표시할 갱신 결과 또는 접근 안내.
+ */
+export async function refreshMyBusiness(businessId: string, number: string) {
+  // 직접 제출된 서버 요청에도 현재 사용자 세션을 요구한다.
+  const auth = await verifyCurrentUser();
+  if (auth.status !== "authenticated") return "로그인 상태를 확인해 주세요.";
+
+  // 화면에 표시한 형식과 일치하는 식별값으로만 조회를 시작한다.
+  const id = parseMyPageBusinessId(businessId);
+  if (
+    id === undefined ||
+    typeof number !== "string" ||
+    !/^\d{10}$/.test(number)
+  ) {
+    return "등록된 사업자를 확인해 주세요.";
+  }
+
+  try {
+    // 기존 서비스에서 관계와 등록번호를 확인한 뒤 전체 실행권을 확보한다.
+    const result = await getBusinessRegistration().refresh(
+      auth.user.id,
+      id,
+      number,
+    );
+    if (result.status === "busy")
+      return "이 사업자의 정보를 수집 중입니다. 완료 후 다시 시도해 주세요.";
+
+    // 실패 상태와 정상 빈 결과도 목록 및 상세의 다음 조회에 반영한다.
+    revalidatePath(myPageMenuPath("business"));
+    revalidatePath(myPageBusinessPath(id));
+    if (result.saved === result.total) return "전체 정보를 갱신했습니다.";
+    if (result.saved === 0) return "사업자 정보 갱신을 완료하지 못했습니다.";
+    return `정보 ${result.total}종 중 ${result.saved}종을 갱신했습니다. 나머지 정보는 상세에서 확인해 주세요.`;
+  } catch (error) {
+    // 관계가 없는 요청에는 다른 사업자의 존재 여부나 수집 상태를 공개하지 않는다.
+    if (error instanceof BusinessNotRegisteredError)
+      return "등록된 사업자를 확인해 주세요.";
+    return "사업자 정보 갱신을 완료하지 못했습니다.";
+  }
+}
 
 /**
  * 인증된 사용자가 확인한 사업자 등록 관계를 해제하고 목록을 갱신한다.
@@ -20,13 +73,21 @@ export async function deleteMyBusiness(businessId: string, number: string) {
 
   // 목록에서 발급한 형식과 일치하는 ID 및 번호만 저장소에 전달한다.
   const id = parseMyPageBusinessId(businessId);
-  if (id === undefined || typeof number !== "string" || !/^\d{10}$/.test(number)) {
+  if (
+    id === undefined ||
+    typeof number !== "string" ||
+    !/^\d{10}$/.test(number)
+  ) {
     return "삭제할 사업자를 확인해 주세요.";
   }
 
   try {
     // 관계가 이미 해제됐거나 일치하지 않아도 동일하게 목록을 최신 상태로 갱신한다.
-    await openBusinessInformation(getG2bDatabase()).removeRegistration(auth.user.id, id, number);
+    await openBusinessInformation(getG2bDatabase()).removeRegistration(
+      auth.user.id,
+      id,
+      number,
+    );
     revalidatePath(myPageMenuPath("business"));
     revalidatePath(myPageBusinessPath(id));
     return "";
@@ -91,7 +152,8 @@ export async function retryMyBusiness(_previous: string, form: FormData) {
     message = "재시도를 마쳤습니다. 아래 수집 결과를 확인해 주세요.";
   } catch (error) {
     // 등록 관계가 없으면 다른 사업자의 화면을 갱신하기 전에 종료한다.
-    if (error instanceof BusinessNotRegisteredError) return "등록된 사업자를 확인해 주세요.";
+    if (error instanceof BusinessNotRegisteredError)
+      return "등록된 사업자를 확인해 주세요.";
     // 저장 오류가 발생한 경우에도 화면에 반영할 부분 결과가 있을 수 있다.
     message = "재시도를 완료하지 못했습니다. 수집 결과를 확인해 주세요.";
   }

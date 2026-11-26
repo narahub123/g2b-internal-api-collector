@@ -152,10 +152,15 @@ export function openBusinessInformation(db: G2bDatabase) {
    * @param now 실행권 만료를 비교할 밀리초 시각.
    * @param until 현재 실행권 만료 시각.
    * @param referenceDate SMPP에서 공통으로 사용할 한국 기준일.
+   * @param refresh 성공 항목도 포함하는 전체 갱신 여부. 호출자는 사업자 쓰기 트랜잭션에서 실행한다.
    * @returns 이 시도에서 확보한 업무 유형.
    * @throws 실행권을 저장하지 못하면 DB 오류를 전달한다.
    */
-  async function claim(id: number, token: string, now: number, until: number, referenceDate: string) {
+  async function claim(id: number, token: string, now: number, until: number, referenceDate: string, refresh = false) {
+    // 전체 갱신은 유효한 실행권이 하나라도 있으면 일부만 확보하지 않는다.
+    if (refresh && await db.prepare(`SELECT 1 FROM business_collection
+      WHERE business_id = ? AND status = 'running' AND lease_until > ? LIMIT 1`).get(id, now)) return [];
+
     // 각 API 정의에서 기준일 적용 대상을 정하고 SQLite에 한 번에 전달한다.
     const sources = BUSINESS_API_KINDS.map((kind) => ({ kind, date: BUSINESS_APIS[kind].certificate ? referenceDate : null }));
     // 누락 또는 실패 항목과 이전 실행이 만료된 항목만 현재 실행권으로 전환한다.
@@ -165,9 +170,10 @@ export function openBusinessInformation(db: G2bDatabase) {
             ON CONFLICT(business_id, kind) DO UPDATE SET status = 'running',
               reference_date = excluded.reference_date, lease_token = excluded.lease_token, lease_until = excluded.lease_until
             WHERE business_collection.status = 'failed' OR
+              (? = 1 AND business_collection.status = 'succeeded') OR
               (business_collection.status = 'running' AND business_collection.lease_until <= ?)
             RETURNING kind`,
-      args: [id, token, until, JSON.stringify(sources), now],
+      args: [id, token, until, JSON.stringify(sources), refresh ? 1 : 0, now],
     });
     // 실제로 확보한 항목만 외부 요청 대상으로 전달한다.
     return result.rows.map((row) => row.kind as BusinessApi);

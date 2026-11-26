@@ -6,6 +6,91 @@ const { test } = require("node:test");
 const { createClient } = require("@libsql/client");
 require("../scripts/register-project-typescript.cjs");
 
+/** 수동 갱신의 권한과 실행권, 결과별 데이터 반영을 검증한다. */
+test("전체 갱신은 성공 항목까지 재수집하고 정상 빈 응답과 실패를 구분한다", async (context) => {
+  // 실제 스키마의 공유 사업자에 초기 성공 결과를 준비한다.
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database");
+  const { openBusinessInformation } = require("../src/server/g2b/repository/business-information");
+  const { openBusinessRegistration } = require("../src/features/business-information/server/registration");
+  const client = createClient({ url: "file::memory:" });
+  context.after(() => client.close());
+  await migrateG2bDatabase(client);
+  await client.execute("INSERT INTO auth_users(id,email,nickname) VALUES ('a','a@example.test','a'),('b','b@example.test','b')");
+  const db = new G2bDatabase(client);
+  const store = openBusinessInformation(db);
+  let mode = "initial";
+  const calls = [];
+  const entered = Promise.withResolvers();
+  const responseGate = Promise.withResolvers();
+  const service = openBusinessRegistration(db, async (kind) => {
+    // 첫 갱신을 지연해 다른 요청이 같은 실행권을 인수하는지 확인한다.
+    calls.push(kind);
+    if (mode === "refresh") {
+      entered.resolve();
+      await responseGate.promise;
+      if (kind === "industry") throw new Error("업종 갱신 실패");
+      if (kind === "basic") return [{ corpNm: "변경 업체" }];
+      return [];
+    }
+    return kind === "basic" ? [{ corpNm: "기존 업체" }] : [{ bizno: "2208162517" }];
+  });
+  const id = await service.register("a", "2208162517");
+  await service.register("b", "2208162517");
+  calls.length = 0;
+  // 등록되지 않은 사용자와 번호 불일치는 모두 수집 전에 거부한다.
+  await assert.rejects(service.refresh("other", id, "2208162517"), /등록/);
+  await assert.rejects(service.refresh("a", id, "6168122531"), /등록/);
+  assert.equal(calls.length, 0);
+  mode = "refresh";
+  const refresh = service.refresh("a", id, "2208162517");
+  await entered.promise;
+  assert.deepEqual(await service.refresh("b", id, "2208162517"), { status: "busy" });
+  // 전체 갱신이 7종 실행권을 보유하는 동안 실패 재시도는 새 요청을 만들지 않는다.
+  await service.retry("b", id);
+  assert.equal(calls.length, 7);
+  responseGate.resolve();
+  assert.deepEqual(await refresh, { status: "finished", saved: 6, total: 7 });
+  // 다른 등록 사용자가 최신 기본정보, 실패한 업종의 기존 행과 정상 빈 물품을 조회한다.
+  assert.equal((await store.listForUser("b"))[0].name, "변경 업체");
+  const { sections } = await store.detailForUser("b", id);
+  assert.deepEqual(sections.industry, { status: "failed", items: [{ bizno: "2208162517" }] });
+  assert.deepEqual(sections.product, { status: "succeeded", items: [] });
+  mode = "initial";
+  calls.length = 0;
+  const retryStarted = Promise.withResolvers();
+  const retryGate = Promise.withResolvers();
+  const delayedRetry = openBusinessRegistration(db, async (kind) => {
+    calls.push(kind);
+    retryStarted.resolve();
+    await retryGate.promise;
+    return [];
+  });
+  const retry = delayedRetry.retry("b", id);
+  await retryStarted.promise;
+  // 반대로 재시도 한 종만 실행 중이어도 전체 갱신은 나머지 유형을 일부 확보하지 않는다.
+  assert.deepEqual(await service.refresh("a", id, "2208162517"), { status: "busy" });
+  assert.deepEqual(calls, ["industry"]);
+  retryGate.resolve();
+  await retry;
+
+  // 마지막 등록 관계가 삭제되면 진행 중인 갱신은 어떤 결과도 반영하지 못한다.
+  const deletionGate = Promise.withResolvers();
+  const refreshStarted = Promise.withResolvers();
+  const delayed = openBusinessRegistration(db, async () => {
+    refreshStarted.resolve();
+    await deletionGate.promise;
+    return [{ corpNm: "삭제 뒤 도착한 결과" }];
+  });
+  const pending = delayed.refresh("a", id, "2208162517");
+  await refreshStarted.promise;
+  assert.equal(await store.removeRegistration("a", id, "2208162517"), true);
+  assert.equal(await store.removeRegistration("b", id, "2208162517"), true);
+  deletionGate.resolve();
+  assert.deepEqual(await pending, { status: "finished", saved: 0, total: 7 });
+  assert.equal((await client.execute("SELECT COUNT(*) AS count FROM business_basic")).rows[0].count, 0);
+});
+
 /** 삭제가 공유 관계, 수집 실행권, 재사용 ID 및 트랜잭션에 미치는 영향을 확인한다. */
 test("사업자 등록 관계를 해제하고 마지막 연결에서만 수집 데이터를 삭제한다", async (context) => {
   // 기존 마이그레이션에 두 사용자와 7종의 저장 결과 및 실행 상태를 준비한다.

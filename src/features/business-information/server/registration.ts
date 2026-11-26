@@ -100,13 +100,15 @@ export function openBusinessRegistration(db: G2bDatabase, collect: CollectBusine
    * @param kinds 현재 시도에 할당된 API 목록.
    * @param token 늦게 돌아온 이전 실행의 저장을 차단하는 시도 식별자.
    * @param referenceDate 현재 SMPP 호출에 공통으로 전달할 기준일.
-   * @throws API 실패 진단 자체를 DB에 기록할 수 없었던 경우.
+   * @returns 실제 저장 완료 건수와 실패 진단 기록 실패 여부.
    */
   async function run(id: number, number: string, kinds: BusinessApi[], token: string, referenceDate: string) {
     // 외부 호출은 병렬로 진행하고 한 API가 실패해도 나머지 응답을 모두 기다린다.
     const responses = await Promise.allSettled(kinds.map(async (kind) => collect(kind, number, referenceDate)));
     // 같은 사업자의 완료 결과를 순차 기록해 동시에 여러 쓰기 트랜잭션을 열지 않는다.
     let failedToRecord = false;
+    // 실행권을 유지한 채 커밋한 결과만 완료 건수에 포함한다.
+    let saved = 0;
     for (const [index, kind] of kinds.entries()) {
       // 요청 순서에 대응하는 결과로 이 API의 상태만 갱신한다.
       const response = responses[index];
@@ -117,6 +119,7 @@ export function openBusinessRegistration(db: G2bDatabase, collect: CollectBusine
         const result = await collectionAsyncStep("사업자 정보 저장", () => store.complete(id, kind, token, response.value));
         // 실행권 상실은 새 시도의 상태를 변경하지 않고 다음 API로 넘어간다.
         if (result === "lease-lost") continue;
+        saved++;
       } catch (error) {
         // 업무 저장 트랜잭션은 이미 취소됐으므로 기존 데이터는 유지하고 상태만 기록한다.
         const diagnostics = describeCollectionError(error, redactCredentials);
@@ -135,10 +138,8 @@ export function openBusinessRegistration(db: G2bDatabase, collect: CollectBusine
       }
     }
 
-    // DB 장애 중에도 다른 API를 끝까지 처리한 뒤 정제된 고정 메시지를 호출자에게 전달한다.
-    if (failedToRecord) {
-      throw new Error("일부 사업자 정보의 수집 상태를 저장하지 못했습니다.");
-    }
+    // 기록 장애가 있어도 다른 API의 커밋 건수를 잃지 않게 한다.
+    return { saved, failedToRecord };
   }
 
   /**
@@ -164,7 +165,9 @@ export function openBusinessRegistration(db: G2bDatabase, collect: CollectBusine
       return { id, kinds, referenceDate };
     });
     // 동시 등록이 이미 수집을 시작했다면 현재 할당 목록은 비어 있다.
-    await run(id, number, kinds, token, referenceDate);
+    const result = await run(id, number, kinds, token, referenceDate);
+    // 기존 등록 호출부에는 상태 기록 장애를 동일한 오류로 전달한다.
+    if (result.failedToRecord) throw new Error("일부 사업자 정보의 수집 상태를 저장하지 못했습니다.");
     // 신규·기존 등록 모두 같은 공유 사업자 ID로 표시한다.
     return id;
   }
@@ -190,11 +193,41 @@ export function openBusinessRegistration(db: G2bDatabase, collect: CollectBusine
       return { number, kinds, referenceDate };
     });
     // 이미 성공했거나 다른 요청에서 실행 중인 API는 호출하지 않는다.
-    await run(id, number, kinds, token, referenceDate);
+    const result = await run(id, number, kinds, token, referenceDate);
+    // 기존 재시도 호출부에서 상태 기록 장애를 계속 구분한다.
+    if (result.failedToRecord) throw new Error("일부 사업자 정보의 수집 상태를 저장하지 못했습니다.");
+  }
+
+  /**
+   * 등록된 동일 사업자의 전체 수집을 시작하고 실제 반영 건수를 반환한다.
+   * @param userId 액션에서 인증한 사용자 ID.
+   * @param id 화면에서 선택한 내부 ID.
+   * @param expectedNumber 화면에 표시된 원본 사업자등록번호.
+   * @returns 이미 수집 중이면 busy, 처리했다면 완료 수와 전체 수.
+   * @throws 등록 관계나 번호가 일치하지 않거나 실행권 확보에 실패하면 오류를 전달한다.
+   */
+  async function refresh(userId: string, id: number, expectedNumber: string) {
+    // 권한 확인과 전체 실행권 확보를 하나의 쓰기 트랜잭션으로 묶는다.
+    const token = randomUUID();
+    const { number, kinds, referenceDate } = await db.transaction(async () => {
+      // 내부 ID가 재사용돼도 확인한 등록번호와 다르면 호출을 거부한다.
+      const number = await store.registeredNumber(userId, id);
+      if (!number || number !== expectedNumber) throw new BusinessNotRegisteredError();
+      // 기존 만료 기준과 같은 시각으로 전체 유형의 기준일을 계산한다.
+      const now = Date.now();
+      const referenceDate = koreanDate.format(now).replaceAll("-", "");
+      const kinds = await store.claim(id, token, now, now + LEASE_MS, referenceDate, true);
+      return { number, kinds, referenceDate };
+    });
+    // 이미 진행 중인 수집은 유지하며 새로운 외부 요청을 시작하지 않는다.
+    if (!kinds.length) return { status: "busy" } as const;
+    // 기존 수집과 저장 흐름을 재사용해 실제 반영된 건수만 반환한다.
+    const { saved } = await run(id, number, kinds, token, referenceDate);
+    return { status: "finished", saved, total: kinds.length } as const;
   }
 
   // 화면 및 액션에서 인증 이후 재사용할 수 있는 서버 명령을 노출한다.
-  return { register, retry };
+  return { register, retry, refresh };
 }
 
 /**
