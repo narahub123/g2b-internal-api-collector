@@ -58,8 +58,8 @@ export function BusinessDetail({
       </Link>
       <Card>
         <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <CardTitle>사업자 정보 상세</CardTitle>
+          <div className="flex flex-col gap-2">
+            <CardTitle>{name ?? "사업자 정보 상세"}</CardTitle>
             <p className="text-sm text-muted-foreground">
               {formatBusinessNumber(detail.number)}
             </p>
