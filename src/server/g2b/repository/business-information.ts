@@ -68,6 +68,37 @@ export function openBusinessInformation(db: G2bDatabase) {
   }
 
   /**
+   * 확인한 사업자의 현재 사용자 연결을 해제하고 마지막 연결이면 공유 데이터를 정리한다.
+   * @param userId 인증된 서비스 사용자 ID.
+   * @param id 목록에서 선택한 사업자의 내부 ID.
+   * @param number 확인 당시 목록에 표시된 정규화 사업자등록번호.
+   * @returns 해제했으면 true, 일치하는 연결이 없으면 false.
+   * @throws 쓰기 실패 시 연결 해제와 사업자 삭제를 함께 취소하고 DB 오류를 전달한다.
+   */
+  async function removeRegistration(userId: string, id: number, number: string) {
+    // 연결 해제와 마지막 연결 판단을 같은 쓰기 트랜잭션으로 묶는다.
+    return db.transaction(async () => {
+      // 사용자 연결과 확인 당시 번호가 모두 일치할 때만 삭제한다.
+      const removed = await db.execute({
+        sql: `DELETE FROM user_businesses WHERE user_id = ? AND business_id = ?
+              AND EXISTS (SELECT 1 FROM businesses WHERE id = ? AND registration_number = ?)`,
+        args: [userId, id, id, number],
+      });
+      // 실제로 연결을 해제한 요청만 공유 사업자 정리를 시도한다.
+      if (!removed.rowsAffected) return false;
+
+      // 사업자 ID 인덱스로 남은 연결의 존재를 확인하고 없으면 외래 키로 수집 데이터도 정리한다.
+      await db.execute({
+        sql: `DELETE FROM businesses WHERE id = ?
+              AND NOT EXISTS (SELECT 1 FROM user_businesses WHERE business_id = ?)`,
+        args: [id, id],
+      });
+      // 트랜잭션이 커밋되면 호출부가 화면을 갱신할 수 있게 한다.
+      return true;
+    });
+  }
+
+  /**
    * 사용자 연결을 기준으로 목록에서 사용할 최소 식별 정보만 조회한다.
    * @param userId 인증한 내부 사용자 ID.
    * @returns 내부 ID 순서의 사업자 ID, 번호와 확인된 업체명.
@@ -201,5 +232,5 @@ export function openBusinessInformation(db: G2bDatabase) {
   }
 
   // 등록 서비스에서 트랜잭션 경계를 조합할 수 있게 저장소 동작을 전달한다.
-  return { register, registeredNumber, listForUser, detailForUser, claim, complete, fail };
+  return { register, registeredNumber, removeRegistration, listForUser, detailForUser, claim, complete, fail };
 }

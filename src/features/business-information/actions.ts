@@ -2,8 +2,39 @@
 
 import { revalidatePath } from "next/cache";
 import { verifyCurrentUser } from "@/server/auth/current-user";
+import { getG2bDatabase } from "@/server/g2b/repository";
+import { openBusinessInformation } from "@/server/g2b/repository/business-information";
 import { myPageBusinessPath, myPageMenuPath, parseMyPageBusinessId } from "@/shared/config/mypage";
 import { BusinessNotRegisteredError, getBusinessRegistration, normalizeBusinessNumber } from "./server/registration";
+
+/**
+ * 인증된 사용자가 확인한 사업자 등록 관계를 해제하고 목록을 갱신한다.
+ * @param businessId 확인한 행의 내부 사업자 ID 문자열.
+ * @param number 확인한 행의 정규화 사업자등록번호.
+ * @returns 완료인 경우 빈 문자열, 실패 시 확인창에 표시할 문구.
+ */
+export async function deleteMyBusiness(businessId: string, number: string) {
+  // 브라우저가 제출한 사용자 정보 없이 현재 세션으로 삭제 권한을 확인한다.
+  const auth = await verifyCurrentUser();
+  if (auth.status !== "authenticated") return "로그인 상태를 확인해 주세요.";
+
+  // 목록에서 발급한 형식과 일치하는 ID 및 번호만 저장소에 전달한다.
+  const id = parseMyPageBusinessId(businessId);
+  if (id === undefined || typeof number !== "string" || !/^\d{10}$/.test(number)) {
+    return "삭제할 사업자를 확인해 주세요.";
+  }
+
+  try {
+    // 관계가 이미 해제됐거나 일치하지 않아도 동일하게 목록을 최신 상태로 갱신한다.
+    await openBusinessInformation(getG2bDatabase()).removeRegistration(auth.user.id, id, number);
+    revalidatePath(myPageMenuPath("business"));
+    revalidatePath(myPageBusinessPath(id));
+    return "";
+  } catch {
+    // 내부 DB 오류는 화면에 노출하지 않고 다시 시도할 수 있도록 안내한다.
+    return "삭제하지 못했습니다. 다시 시도해 주세요.";
+  }
+}
 
 /**
  * 인증된 사용자의 사업자 등록과 최초 수집을 실행한다.

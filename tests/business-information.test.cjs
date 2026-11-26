@@ -6,6 +6,75 @@ const { test } = require("node:test");
 const { createClient } = require("@libsql/client");
 require("../scripts/register-project-typescript.cjs");
 
+/** 삭제가 공유 관계, 수집 실행권, 재사용 ID 및 트랜잭션에 미치는 영향을 확인한다. */
+test("사업자 등록 관계를 해제하고 마지막 연결에서만 수집 데이터를 삭제한다", async (context) => {
+  // 기존 마이그레이션에 두 사용자와 7종의 저장 결과 및 실행 상태를 준비한다.
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database");
+  const { openBusinessInformation } = require("../src/server/g2b/repository/business-information");
+  const client = createClient({ url: "file::memory:" });
+  context.after(() => client.close());
+  await migrateG2bDatabase(client);
+  await client.executeMultiple(`
+    INSERT INTO auth_users(id,email,nickname) VALUES ('a','a@example.test','a'),('b','b@example.test','b');
+    INSERT INTO businesses VALUES (1,'2208162517');
+    INSERT INTO user_businesses VALUES ('a',1),('b',1);
+    INSERT INTO business_basic VALUES (1,'{"corpNm":"공유 업체"}');
+    INSERT INTO business_industry VALUES (1,'{}');
+    INSERT INTO business_product VALUES (1,'{}');
+    INSERT INTO business_sanction VALUES (1,'{}');
+    INSERT INTO business_smpp VALUES (1,'directProduction','{}'),(1,'women','{}'),(1,'disabled','{}');
+  `);
+  const db = new G2bDatabase(client);
+  const store = openBusinessInformation(db);
+  // 실행 중인 수집과 저장된 오류가 있는 상태에서 첫 사용자의 연결만 지운다.
+  const now = Date.now();
+  await store.claim(1, "old", now, now + 60_000, "20261126");
+  await store.fail(1, "sanction", "old", { name: "Error", message: "수집 실패" });
+  assert.equal(await store.removeRegistration("other", 1, "2208162517"), false);
+  assert.equal(await store.removeRegistration("a", 1, "2208162517"), true);
+  assert.equal(await store.removeRegistration("a", 1, "2208162517"), false);
+  assert.equal(await store.detailForUser("a", 1), undefined);
+  assert.equal((await store.detailForUser("b", 1)).sections.women.items.length, 1);
+  assert.equal(await store.complete(1, "industry", "old", [{ indstrytyCd: "0015" }]), "saved");
+
+  // 사업자 삭제가 실패하면 먼저 삭제한 마지막 연결도 롤백한다.
+  await client.executeMultiple("CREATE TRIGGER reject_delete BEFORE DELETE ON businesses BEGIN SELECT RAISE(ABORT,'삭제 오류'); END;");
+  await assert.rejects(store.removeRegistration("b", 1, "2208162517"), /삭제 오류/);
+  assert.equal((await store.detailForUser("b", 1)).sections.sanction.status, "failed");
+  await client.execute("DROP TRIGGER reject_delete");
+  assert.equal(await store.removeRegistration("b", 1, "2208162517"), true);
+  // 마지막 삭제는 모든 업무 행, 진단과 사용자 연결을 정리한다.
+  for (const table of ["businesses", "user_businesses", "business_basic", "business_industry", "business_product", "business_sanction", "business_smpp", "business_collection"]) {
+    assert.equal((await client.execute(`SELECT COUNT(*) AS count FROM ${table}`)).rows[0].count, 0);
+  }
+  assert.equal(await store.complete(1, "basic", "old", [{ corpNm: "지연 응답" }]), "lease-lost");
+
+  // 기존 ID가 다른 사업자에 재사용된 뒤에는 이전 확인으로 삭제하거나 저장할 수 없다.
+  const replacement = await db.transaction(async () => store.register("b", "6168122531"));
+  assert.equal(replacement, 1);
+  await store.claim(1, "new", now, now + 60_000, "20261126");
+  assert.equal(await store.removeRegistration("b", 1, "2208162517"), false);
+  assert.equal(await store.complete(1, "basic", "old", [{ corpNm: "지연 응답" }]), "lease-lost");
+  assert.equal((await store.detailForUser("b", 1)).number, "6168122531");
+
+  // 새 연결과 기존 연결 삭제를 동시에 실행해도 새 사용자의 공유 데이터가 유지된다.
+  await Promise.all([
+    db.transaction(async () => store.register("a", "6168122531")),
+    store.removeRegistration("b", 1, "6168122531"),
+  ]);
+  assert.equal((await store.detailForUser("a", 1)).sections.basic.status, "running");
+
+  // 마지막 삭제가 먼저 커밋된 경우 재등록은 새 수집 상태로 시작한다.
+  const [removed, registered] = await Promise.all([
+    store.removeRegistration("a", 1, "6168122531"),
+    db.transaction(async () => store.register("b", "6168122531")),
+  ]);
+  assert.equal(removed, true);
+  assert.equal((await store.detailForUser("b", registered)).sections.basic.status, "incomplete");
+  assert.equal(await store.complete(registered, "basic", "new", [{ corpNm: "지연 응답" }]), "lease-lost");
+});
+
 /** 실제 마이그레이션에서 공유 등록, 부분 실패, 재시도와 조회 계획을 검증한다. */
 test("사업자 등록과 7종 수집 결과를 사용자 간에 공유한다", async (context) => {
   // 운영 연결 없이 실제 스키마와 등록 서비스를 준비한다.

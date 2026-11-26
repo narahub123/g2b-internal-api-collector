@@ -2,6 +2,7 @@ import Link from "next/link";
 import { BusinessForm } from "./BusinessForm";
 import { myPageBusinessPath } from "@/shared/config/mypage";
 import { formatBusinessNumber } from "@/entities/business/model/business-display";
+import { DeleteBusinessDialog } from "@/features/business-information/ui/DeleteBusinessDialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 
 /** 목록에 노출할 사업자의 최소 식별 정보다. */
@@ -34,12 +35,14 @@ export default function BusinessInformation({ businesses }: { businesses: Busine
             // 사업자가 한 건이어도 상세 링크를 선택해야 업무 데이터를 읽는다.
             <ul className="divide-y">
               {businesses.map(({ id, name, number }) => (
-                <li key={id}>
+                <li key={id} className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 py-2">
                   {/* 링크 노출만으로 선택하지 않은 사업자의 상세를 조회하지 않는다. */}
-                  <Link prefetch={false} href={myPageBusinessPath(id)} className="flex flex-wrap items-baseline justify-between gap-2 py-3 hover:underline">
+                  <Link prefetch={false} href={myPageBusinessPath(id)} className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1 py-1 hover:underline">
                     {name && <span className="font-medium">{name}</span>}
                     <span className={name ? "text-sm text-muted-foreground" : "font-medium"}>{formatBusinessNumber(number)}</span>
                   </Link>
+                  {/* 상세 링크와 별도로 현재 등록 관계의 삭제를 확인한다. */}
+                  <DeleteBusinessDialog id={id} name={name} number={number} />
                 </li>
               ))}
             </ul>
