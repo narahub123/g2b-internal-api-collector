@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { BusinessDetail } from "@/_pages/mypage/ui/BusinessDetail";
+import { readCachedBusinessItems } from "@/features/business-information/server/detail-cache";
 import { requirePageAccess } from "@/server/auth/page-guard";
 import { getG2bDatabase } from "@/server/g2b/repository";
 import { openBusinessInformation } from "@/server/g2b/repository/business-information";
@@ -18,8 +19,8 @@ export default async function BusinessDetailPage({ params }: { params: Promise<{
   const id = parseMyPageBusinessId((await params).businessId);
   if (id === undefined) notFound();
 
-  // 등록 관계를 통과한 경우에만 선택한 사업자의 데이터를 읽는다.
-  const detail = await openBusinessInformation(getG2bDatabase()).detailForUser(auth.user.id, id);
+  // 등록 관계와 수집 상태를 DB에서 확인한 후 동일 버전의 업무 데이터를 재사용한다.
+  const detail = await openBusinessInformation(getG2bDatabase()).detailForUser(auth.user.id, id, readCachedBusinessItems);
   if (!detail) notFound();
 
   // 현재 사업자 ID는 재시도 폼을 구성하는 데 사용한다.

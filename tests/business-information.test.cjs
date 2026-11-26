@@ -6,6 +6,73 @@ const { test } = require("node:test");
 const { createClient } = require("@libsql/client");
 require("../scripts/register-project-typescript.cjs");
 
+/** 버전 키를 공유하고 기존 버전이 새 업무 데이터로 채워지지 않는지 검증한다. */
+test("사업자 업무 캐시는 등록 사용자 간 공유되고 변경된 버전을 다시 읽는다", async (context) => {
+  // 실제 스키마에 공유 사업자와 업무 행을 만들고 버전별 서버 캐시를 모의한다.
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database");
+  const { openBusinessInformation } = require("../src/server/g2b/repository/business-information");
+  const { openBusinessRegistration } = require("../src/features/business-information/server/registration");
+  const client = createClient({ url: "file::memory:" });
+  context.after(() => client.close());
+  await migrateG2bDatabase(client);
+  await client.execute("INSERT INTO auth_users(id,email,nickname) VALUES ('a','a@example.test','a'),('b','b@example.test','b')");
+  const db = new G2bDatabase(client);
+  const store = openBusinessInformation(db);
+  const service = openBusinessRegistration(db, async (kind) => kind === "basic" ? [{ corpNm: "초기 업체" }] : []);
+  const id = await service.register("a", "2208162517");
+  await service.register("b", "2208162517");
+  const cache = new Map();
+  const reads = [];
+  /** 버전 키가 처음 나타날 때만 실제 업무 테이블을 조회한다. */
+  async function readItems(id, version) {
+    reads.push(version);
+    if (!cache.has(version)) cache.set(version, await store.itemsForVersion(id, version));
+    return cache.get(version);
+  }
+  const first = await store.detailForUser("a", id, readItems);
+  assert.equal(first.sections.basic.items[0].corpNm, "초기 업체");
+  assert.deepEqual(await store.detailForUser("b", id, readItems), first);
+  assert.equal(cache.size, 1);
+  assert.equal(await store.detailForUser("missing", id, readItems), undefined);
+  assert.equal(reads.length, 2);
+
+  // 정상 빈 응답과 실패 상태를 기록한다. 실패만으로는 업무 버전이 바뀌지 않는다.
+  const before = reads[0];
+  const now = Date.now();
+  await db.transaction(async () => store.claim(id, "token", now, now + 60_000, "20261126", true));
+  // 업무 행 저장이 실패하면 성공 상태에 연동된 버전도 함께 롤백된다.
+  await client.executeMultiple("CREATE TRIGGER reject_cache_test_save BEFORE INSERT ON business_basic BEGIN SELECT RAISE(ABORT, '저장 실패'); END;");
+  await assert.rejects(store.complete(id, "basic", "token", [{ corpNm: "반영되지 않을 업체" }]), /저장 실패/);
+  await client.execute("DROP TRIGGER reject_cache_test_save");
+  await store.fail(id, "industry", "token", { name: "Error", message: "실패" });
+  const failed = await store.detailForUser("a", id, readItems);
+  assert.equal(failed.sections.industry.status, "failed");
+  assert.equal(failed.sections.basic.items[0].corpNm, "초기 업체");
+  assert.equal(reads.at(-1), before);
+  await store.complete(id, "basic", "token", []);
+  assert.deepEqual((await store.detailForUser("a", id, readItems)).sections.basic.items, []);
+  assert.notEqual(reads.at(-1), before);
+  await assert.rejects(store.itemsForVersion(id, before));
+
+  // 권한 확인 직후 버전이 바뀌면 이전 키를 채우지 않고 새 상세를 읽는다.
+  const raced = await store.detailForUser("a", id, async (id, version) => {
+    await store.complete(id, "product", "token", [{ dtilPrdctClsfcNo: "0015000000" }]);
+    return store.itemsForVersion(id, version);
+  });
+  assert.deepEqual(raced.sections.product, { status: "succeeded", items: [{ dtilPrdctClsfcNo: "0015000000" }] });
+
+  // 내부 ID가 재사용돼도 새 사업자의 업무 데이터를 이전 버전으로 읽지 않는다.
+  await store.removeRegistration("a", id, "2208162517");
+  assert.equal(await store.detailForUser("a", id, readItems), undefined);
+  await store.removeRegistration("b", id, "2208162517");
+  const replacement = await db.transaction(async () => store.register("a", "2208162517"));
+  assert.equal(replacement, id);
+  assert.deepEqual((await store.detailForUser("a", replacement, readItems)).sections.basic.items, []);
+  assert.ok(![...cache.keys()].includes(undefined));
+  assert.equal(cache.size, 3);
+});
+
 /** 수동 갱신의 권한과 실행권, 결과별 데이터 반영을 검증한다. */
 test("전체 갱신은 성공 항목까지 재수집하고 정상 빈 응답과 실패를 구분한다", async (context) => {
   // 실제 스키마의 공유 사업자에 초기 성공 결과를 준비한다.
@@ -102,7 +169,7 @@ test("사업자 등록 관계를 해제하고 마지막 연결에서만 수집 �
   await migrateG2bDatabase(client);
   await client.executeMultiple(`
     INSERT INTO auth_users(id,email,nickname) VALUES ('a','a@example.test','a'),('b','b@example.test','b');
-    INSERT INTO businesses VALUES (1,'2208162517');
+    INSERT INTO businesses(id,registration_number) VALUES (1,'2208162517');
     INSERT INTO user_businesses VALUES ('a',1),('b',1);
     INSERT INTO business_basic VALUES (1,'{"corpNm":"공유 업체"}');
     INSERT INTO business_industry VALUES (1,'{}');
@@ -509,7 +576,7 @@ test("마이페이지는 등록된 사업자의 요약과 선택한 상세만 �
   await migrateG2bDatabase(client);
   await client.executeMultiple(`
     INSERT INTO auth_users(id,email,nickname) VALUES ('a','a@example.test','a'),('b','b@example.test','b');
-    INSERT INTO businesses VALUES (1,'2208162517'),(2,'6168122531'),(3,'3808100318');
+    INSERT INTO businesses(id,registration_number) VALUES (1,'2208162517'),(2,'6168122531'),(3,'3808100318');
     INSERT INTO user_businesses VALUES ('a',1),('a',3),('b',2);
     INSERT INTO business_basic VALUES (1,'{"corpNm":"공유 업체","ceoNm":"상세 전용"}'),
       (1,'{"adrs":"가","corpNm":""}'),(2,'{"corpNm":"다른 업체"}');

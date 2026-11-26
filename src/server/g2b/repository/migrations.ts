@@ -843,6 +843,27 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       // 모든 테이블이 준비된 뒤 마이그레이션 이력을 남긴다.
       await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (41)");
     }
+    // 사업자 상세의 업무 캐시를 저장 결과와 함께 교체할 버전이 있는지 확인한다.
+    const businessDataVersion = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 42");
+    if (!businessDataVersion.rows.length) {
+      // 기존 사업자에 버전을 채우고 구버전 앱과 같이 동작하는 동안에도 DB에서 버전을 관리한다.
+      await transaction.executeMultiple(`
+        ALTER TABLE businesses ADD COLUMN data_version TEXT NOT NULL DEFAULT '';
+        UPDATE businesses SET data_version = lower(hex(randomblob(16)));
+        CREATE TRIGGER businesses_initialize_data_version AFTER INSERT ON businesses
+          WHEN NEW.data_version = ''
+        BEGIN
+          UPDATE businesses SET data_version = lower(hex(randomblob(16))) WHERE id = NEW.id;
+        END;
+        -- 성공 전환과 업무 행 교체는 같은 쓰기 트랜잭션이므로 버전도 함께 커밋하거나 롤백한다.
+        CREATE TRIGGER businesses_advance_data_version AFTER UPDATE OF status ON business_collection
+          WHEN OLD.status = 'running' AND NEW.status = 'succeeded'
+        BEGIN
+          UPDATE businesses SET data_version = lower(hex(randomblob(16))) WHERE id = NEW.business_id;
+        END;
+        INSERT INTO g2b_schema_migrations (version) VALUES (42);
+      `);
+    }
     await transaction.commit();
   } finally {
     transaction.close();

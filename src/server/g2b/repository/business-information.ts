@@ -14,14 +14,24 @@ type BusinessSection = {
   items: BusinessItem[];
 };
 
-/** 조달청 테이블에서 유형을 붙이고 SMPP 통합 테이블은 한 번만 읽는 상세 조회다. */
-const detailSql = [
+/** 버전으로 조회한 7종 업무 행을 상태와 별개로 저장하는 캐시 데이터다. */
+type BusinessItems = Record<BusinessApi, BusinessItem[]>;
+
+/** 권한 확인 후 지정한 버전의 업무 데이터만 읽는 함수다. */
+type ReadBusinessItems = (id: number, version: string) => Promise<BusinessItems>;
+
+/** 권한 조회 직후 삭제되었거나 새 버전으로 교체된 경우의 내부 신호다. */
+class BusinessDataVersionChangedError extends Error {}
+
+/** 조달청 4개 테이블과 SMPP 통합 테이블을 확인된 버전의 사업자로 제한한다. */
+const businessItemsSql = `WITH target AS MATERIALIZED (
+  SELECT id FROM businesses WHERE id = :id AND data_version = :version
+)
+SELECT NULL AS kind, NULL AS payload FROM target UNION ALL ${[
   ...BUSINESS_API_KINDS.filter((kind) => !BUSINESS_APIS[kind].certificate).map((kind) =>
-    `SELECT '${kind}' AS kind, payload, NULL AS status FROM ${BUSINESS_APIS[kind].table} WHERE business_id = :id`),
-  "SELECT kind, payload, NULL AS status FROM business_smpp WHERE business_id = :id",
-  `SELECT kind, NULL AS payload, CASE WHEN status = 'running' AND lease_until <= :now
-    THEN 'incomplete' ELSE status END AS status FROM business_collection WHERE business_id = :id`,
-].join(" UNION ALL ");
+    `SELECT '${kind}' AS kind, payload FROM ${BUSINESS_APIS[kind].table} WHERE business_id = (SELECT id FROM target)`),
+  "SELECT kind, payload FROM business_smpp WHERE business_id = (SELECT id FROM target)",
+].join(" UNION ALL ")}`;
 
 /**
  * 사업자 및 API별 실행권을 관리하는 저장소를 연다. 호출자는 등록 및 실행권 확보를 같은 쓰기 트랜잭션에서 호출한다.
@@ -117,32 +127,87 @@ export function openBusinessInformation(db: G2bDatabase) {
   }
 
   /**
-   * 등록 관계를 먼저 검증하고 같은 읽기 트랜잭션에서 선택한 사업자의 상세를 조회한다.
+   * 등록 관계, 데이터 버전과 최신 수집 상태를 한 문장으로 조회한다.
    * @param userId 인증한 내부 사용자 ID.
    * @param id 선택한 사업자의 내부 ID.
-   * @returns 등록한 사업자의 번호와 7종 표시 데이터. 관계가 없거나 존재하지 않으면 undefined.
-   * @throws 조회 또는 저장 데이터 해석에 실패하면 원인을 전달한다.
+   * @returns 등록된 경우 상세 조합에 필요한 행, 관계가 없으면 빈 배열.
+   * @throws DB 조회 오류를 전달한다.
    */
-  async function detailForUser(userId: string, id: number) {
-    // 권한 조회와 업무 조회 사이에 일관된 DB 스냅샷을 사용한다.
-    return db.transaction(async () => {
-      // 등록 관계가 없으면 업무 테이블을 조회하기 전에 종료한다.
-      const number = await registeredNumber(userId, id);
-      if (!number) return undefined;
+  async function detailMetadata(userId: string, id: number) {
+    // 업무 테이블을 열지 않고 권한을 확인한다. 수집된 상태가 없어도 등록 행은 반환한다.
+    return db.prepare(`SELECT b.registration_number, b.data_version, c.kind,
+      CASE WHEN c.status = 'running' AND c.lease_until <= ? THEN 'incomplete' ELSE c.status END AS status
+      FROM user_businesses u JOIN businesses b ON b.id = u.business_id
+      LEFT JOIN business_collection c ON c.business_id = b.id
+      WHERE u.user_id = ? AND u.business_id = ?`).all(Date.now(), userId, id);
+  }
 
-      // 고정된 업무 유형을 초기화해 아직 수집 상태가 없는 경우도 표시한다.
-      const sections = Object.fromEntries(BUSINESS_API_KINDS.map((kind) => [kind, { status: "incomplete", items: [] }])) as Record<BusinessApi, BusinessSection>;
-      // 선택 사업자의 데이터와 화면 상태만 읽고 오류 진단과 실행권은 전송하지 않는다.
-      const { rows } = await db.execute({ sql: detailSql, args: { id, now: Date.now() } });
-      for (const row of rows) {
-        // 상태와 업무 행을 각각 동일한 아코디언 모델에 모은다.
-        const section = sections[row.kind as BusinessApi];
-        if (typeof row.payload === "string") section.items.push(JSON.parse(row.payload) as BusinessItem);
-        else section.status = row.status as DisplayStatus;
+  /**
+   * 권한을 확인한 사업자의 업무 데이터가 요청한 버전과 일치할 때만 읽는다.
+   * @param id 권한 확인을 통과한 사업자의 내부 ID.
+   * @param version 권한 조회에서 확인한 업무 데이터 버전.
+   * @returns 요청한 버전에서 읽은 7종 업무 행.
+   * @throws 조회 사이에 버전이 바뀌었거나 삭제됐거나 DB 조회가 실패한 경우.
+   */
+  async function itemsForVersion(id: number, version: string): Promise<BusinessItems> {
+    // 단일 SQL 스냅샷에서 버전 일치 표시와 업무 행을 함께 읽는다.
+    const { rows } = await db.execute({ sql: businessItemsSql, args: { id, version } });
+    // 일치 표시조차 없으면 빈 응답으로 캐시하지 않고 호출부에 재조회 신호를 보낸다.
+    if (!rows.length) throw new BusinessDataVersionChangedError();
+
+    // 모든 유형을 초기화해 정상 빈 데이터도 캐시할 수 있게 한다.
+    const items = Object.fromEntries(BUSINESS_API_KINDS.map((kind) => [kind, []])) as BusinessItems;
+    for (const row of rows) {
+      // 일치 표시 행은 제외하고 실제 업무 데이터만 저장한다.
+      if (typeof row.payload === "string") items[row.kind as BusinessApi].push(JSON.parse(row.payload) as BusinessItem);
+    }
+    // 수집 상태나 사용자 정보 없이 버전으로 식별된 업무 데이터만 반환한다.
+    return items;
+  }
+
+  /**
+   * 현재 등록 관계와 수집 상태를 검증한 뒤 버전 일치 업무 데이터로 상세를 구성한다.
+   * @param userId 인증한 내부 사용자 ID.
+   * @param id 선택한 사업자의 내부 ID.
+   * @param readItems 권한 확인 뒤 호출할 서버 캐시 조회 함수. 생략 시 DB에서 직접 읽는다.
+   * @returns 등록 사업자의 상세 또는 등록 관계가 없을 경우 undefined.
+   * @throws 버전 경합 이외의 조회 또는 데이터 해석 오류를 전달한다.
+   */
+  async function detailForUser(userId: string, id: number, readItems?: ReadBusinessItems) {
+    /**
+     * 등록 확인 결과와 요청 버전의 업무 행을 화면 모델로 조합한다.
+     * @param read 권한 확인 뒤 업무 행을 조회하는 함수.
+     * @returns 권한이 있는 사업자의 상세 또는 undefined.
+     * @throws 저장소 또는 업무 데이터 조회 오류를 전달한다.
+     */
+    async function load(read: ReadBusinessItems) {
+      // 관계가 없는 요청은 업무 데이터와 캐시에 접근하기 전에 종료한다.
+      const metadata = await detailMetadata(userId, id);
+      const [business] = metadata;
+      if (!business) return undefined;
+      // 캐시 키의 버전과 화면 수집 상태를 동일한 권한 조회에서 얻는다.
+      const items = await read(id, String(business.data_version));
+      const sections = Object.fromEntries(BUSINESS_API_KINDS.map((kind) => [
+        kind, { items: items[kind], status: "incomplete" },
+      ])) as Record<BusinessApi, BusinessSection>;
+      // 최신 상태는 업무 데이터 캐시를 수정하지 않고 화면에만 합친다.
+      for (const { kind, status } of metadata) {
+        if (typeof kind === "string") sections[kind as BusinessApi].status = status as DisplayStatus;
       }
-      // 페이지가 이 결과만으로 상세를 렌더링할 수 있게 반환한다.
-      return { number, sections };
-    }, false);
+      return { number: String(business.registration_number), sections };
+    }
+
+    // 일반 상세 요청은 읽기 트랜잭션 없이 캐시를 조회한다.
+    if (readItems) {
+      try {
+        return await load(readItems);
+      } catch (error) {
+        // 버전 경합만 처리하며 실제 조회 장애는 상위에서 처리하도록 전달한다.
+        if (!(error instanceof BusinessDataVersionChangedError)) throw error;
+      }
+    }
+    // 경합 시 권한과 업무 행을 일관된 DB 스냅샷에서 한 번 다시 읽는다.
+    return db.transaction(() => load(itemsForVersion), false);
   }
 
   /**
@@ -238,5 +303,5 @@ export function openBusinessInformation(db: G2bDatabase) {
   }
 
   // 등록 서비스에서 트랜잭션 경계를 조합할 수 있게 저장소 동작을 전달한다.
-  return { register, registeredNumber, removeRegistration, listForUser, detailForUser, claim, complete, fail };
+  return { register, registeredNumber, removeRegistration, listForUser, detailForUser, itemsForVersion, claim, complete, fail };
 }
