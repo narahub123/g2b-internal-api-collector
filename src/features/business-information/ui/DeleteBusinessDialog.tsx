@@ -11,11 +11,20 @@ import { Button } from "@/shared/ui/button";
 import { deleteMyBusiness } from "../actions";
 
 /**
-  * 목록 행에서 선택한 사업자만 삭제하도록 명시적 확인을 받는다.
-  * @param props 확인창에 표시할 업체명, 사업자등록번호와 내부 ID.
+  * 목록 또는 상세에서 선택한 사업자를 삭제하기 전에 명시적 확인을 받는다.
+  * @param props 확인창에 표시할 업체명, 사업자등록번호, 내부 ID와 호출 화면.
   * @returns 해당 사업자의 삭제 버튼과 상태를 표시하는 확인창.
   */
-export function DeleteBusinessDialog({ id, name, number }: { id: number; name: string | null; number: string }) {
+export function DeleteBusinessDialog({ id, name, number, source = "list" }: {
+  /** 현재 화면에서 선택한 사업자의 내부 ID. */
+  id: number;
+  /** 기본정보에서 확인한 업체명. */
+  name: string | null;
+  /** 선택한 사업자의 원본 등록번호. */
+  number: string;
+  /** 삭제 성공 후 목록으로 이동할지 결정하는 화면. */
+  source?: "list" | "detail";
+}) {
   // 확인창 표시, 삭제 처리 중 여부와 다시 시도할 때 보여줄 오류를 관리한다.
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -45,7 +54,7 @@ export function DeleteBusinessDialog({ id, name, number }: { id: number; name: s
     startTransition(async () => {
       try {
         // 서버는 표시 당시 번호와 현재 로그인 사용자의 연결을 검증한다.
-        const message = await withSessionCookieWrite(() => deleteMyBusiness(String(id), number));
+        const message = await withSessionCookieWrite(() => deleteMyBusiness(String(id), number, source));
         // 실패 시 확인창을 유지해 같은 대상으로 다시 시도할 수 있게 한다.
         if (message) {
           setError(message);
@@ -64,7 +73,7 @@ export function DeleteBusinessDialog({ id, name, number }: { id: number; name: s
   return (
     <AlertDialog open={open} onOpenChange={changeOpen}>
       <AlertDialogTrigger asChild>
-        <Button type="button" variant="outline" size="sm" aria-label={`${label} 삭제`}>삭제</Button>
+        <Button type="button" variant="destructive" size="sm" aria-label={`${label} 삭제`}>삭제</Button>
       </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogTitle className="font-semibold">사업자 등록을 삭제하시겠습니까?</AlertDialogTitle>

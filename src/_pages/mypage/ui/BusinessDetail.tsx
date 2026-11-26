@@ -7,6 +7,7 @@ import { Accordion } from "@/shared/ui/accordion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 import { DetailAccordionSection } from "@/shared/ui/g2b/DetailAccordionSection";
 import { RefreshBusinessButton } from "@/features/business-information/ui/RefreshBusinessButton";
+import { DeleteBusinessDialog } from "@/features/business-information/ui/DeleteBusinessDialog";
 import { BusinessForm } from "./BusinessForm";
 
 /** 소유 관계를 검증한 상세에서 화면에 전달하는 데이터다. */
@@ -20,6 +21,9 @@ type BusinessDetailData = NonNullable<Awaited<ReturnType<ReturnType<typeof openB
 export function BusinessDetail({ businessId, detail }: { businessId: number; detail: BusinessDetailData }) {
   // 재수집은 등록한 사업자에 실패나 미완료 유형이 있을 때만 제공한다.
   const canRetry = Object.values(detail.sections).some(({ status }) => status === "failed" || status === "incomplete");
+  // 이미 조회한 기본정보에서 표시 가능한 업체명을 선택한다.
+  const name = detail.sections.basic.items.map(({ corpNm }) =>
+    typeof corpNm === "string" ? corpNm.trim() : "").find(Boolean) ?? null;
 
   // 서버에서 가져온 결과를 아코디언 자식으로 전달해 열기 동작에 별도 요청이 필요 없게 한다.
   return (
@@ -37,6 +41,8 @@ export function BusinessDetail({ businessId, detail }: { businessId: number; det
           <div className="flex shrink-0 flex-wrap items-start justify-end gap-2">
             {/* 현재 저장 상태와 관계없이 명시적으로 7종 갱신을 요청할 수 있다. */}
             <RefreshBusinessButton id={businessId} number={detail.number} />
+            {/* 현재 상세 사업자의 등록 관계 해제를 공통 확인창에서 처리한다. */}
+            <DeleteBusinessDialog id={businessId} name={name} number={detail.number} source="detail" />
           </div>
         </CardHeader>
         <CardContent className="grid min-w-0 gap-4">

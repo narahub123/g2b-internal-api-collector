@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect, RedirectType } from "next/navigation";
 import { verifyCurrentUser } from "@/server/auth/current-user";
 import { getG2bDatabase } from "@/server/g2b/repository";
 import { openBusinessInformation } from "@/server/g2b/repository/business-information";
@@ -64,14 +65,16 @@ export async function refreshMyBusiness(businessId: string, number: string) {
  * 인증된 사용자가 확인한 사업자 등록 관계를 해제하고 목록을 갱신한다.
  * @param businessId 확인한 행의 내부 사업자 ID 문자열.
  * @param number 확인한 행의 정규화 사업자등록번호.
- * @returns 완료인 경우 빈 문자열, 실패 시 확인창에 표시할 문구.
+ * @param source 상세에서 성공 후 목록으로 복귀할지 결정하는 호출 화면.
+ * @returns 목록에서 성공하면 빈 문자열, 실패하면 확인창에 표시할 문구.
+ * @throws 상세에서 삭제를 완료하면 목록으로 이동하는 Next.js 신호를 전달한다.
  */
-export async function deleteMyBusiness(businessId: string, number: string) {
+export async function deleteMyBusiness(businessId: string, number: string, source: "list" | "detail" = "list") {
   // 브라우저가 제출한 사용자 정보 없이 현재 세션으로 삭제 권한을 확인한다.
   const auth = await verifyCurrentUser();
   if (auth.status !== "authenticated") return "로그인 상태를 확인해 주세요.";
 
-  // 목록에서 발급한 형식과 일치하는 ID 및 번호만 저장소에 전달한다.
+  // 목록과 상세에서 전달하는 형식과 일치하는 ID 및 번호만 저장소에 전달한다.
   const id = parseMyPageBusinessId(businessId);
   if (
     id === undefined ||
@@ -90,11 +93,15 @@ export async function deleteMyBusiness(businessId: string, number: string) {
     );
     revalidatePath(myPageMenuPath("business"));
     revalidatePath(myPageBusinessPath(id));
-    return "";
   } catch {
     // 내부 DB 오류는 화면에 노출하지 않고 다시 시도할 수 있도록 안내한다.
     return "삭제하지 못했습니다. 다시 시도해 주세요.";
   }
+
+  // 상세는 삭제된 주소를 탐색 기록에 남기지 않고 갱신된 목록으로 이동한다.
+  if (source === "detail") redirect(myPageMenuPath("business"), RedirectType.replace);
+  // 목록 호출은 현재 화면에서 확인창을 닫을 수 있게 완료를 돌려준다.
+  return "";
 }
 
 /**
