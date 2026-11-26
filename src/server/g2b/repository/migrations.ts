@@ -1,4 +1,5 @@
 import { businessKeySchema, businessSectionSchema } from "./business-filter";
+import { businessInformationSchema } from "./business-information-schema";
 import type { Client } from "@libsql/client";
 import { orderPlanListSchema } from "./order-plan-list-schema";
 import { nameSearchSections, numberSearchSections, type NumberSearchSection } from "./number-search-config";
@@ -832,6 +833,15 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       await transaction.execute("UPDATE auth_oauth_accounts SET link_generation = lower(hex(randomblob(16)))");
       // 컬럼 생성과 초기화가 완료된 경우에만 버전을 기록한다.
       await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (40)");
+    }
+    // 공유 사업자와 API별 수집 구조를 기존 설치 이력에 한 번만 추가한다.
+    const businessInformation = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 41");
+    // 설치와 완료 기록을 함께 반영해 실패 시 다시 적용할 수 있게 한다.
+    if (!businessInformation.rows.length) {
+      // 등록 관계, 업무 테이블, 수집 상태를 같은 트랜잭션에서 설치한다.
+      await transaction.executeMultiple(businessInformationSchema);
+      // 모든 테이블이 준비된 뒤 마이그레이션 이력을 남긴다.
+      await transaction.execute("INSERT INTO g2b_schema_migrations (version) VALUES (41)");
     }
     await transaction.commit();
   } finally {

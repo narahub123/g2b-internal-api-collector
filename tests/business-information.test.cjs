@@ -1,0 +1,252 @@
+// 격리 DB와 문서 픽스처를 실제 수집 모듈에 연결하는 테스트 의존성이다.
+const assert = require("node:assert/strict");
+const { readFileSync, readdirSync } = require("node:fs");
+const { join } = require("node:path");
+const { test } = require("node:test");
+const { createClient } = require("@libsql/client");
+require("../scripts/register-project-typescript.cjs");
+
+/** 실제 마이그레이션에서 공유 등록, 부분 실패, 재시도와 조회 계획을 검증한다. */
+test("사업자 등록과 7종 수집 결과를 사용자 간에 공유한다", async (context) => {
+  // 운영 연결 없이 실제 스키마와 등록 서비스를 준비한다.
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database");
+  const { openBusinessRegistration } = require("../src/features/business-information/server/registration");
+  const client = createClient({ url: "file::memory:" });
+  context.after(() => client.close());
+  await migrateG2bDatabase(client);
+  await client.execute("INSERT INTO auth_users(id,email,nickname) VALUES ('a','a@example.test','a'),('b','b@example.test','b')");
+
+  // 업종만 첫 시도에서 실패하도록 응답하고 나머지 호출을 추적한다.
+  const calls = [];
+  let fail = true;
+  const service = openBusinessRegistration(new G2bDatabase(client), async (kind) => {
+    calls.push(kind);
+    if (kind === "industry" && fail) throw new Error("응답 실패");
+    return kind === "basic" ? [{ corpNm: "공유 업체" }, { corpNm: "공유 업체" }] : [];
+  });
+
+  // 잘못된 번호를 거절하고 두 사용자의 동시 등록을 같은 사업자에 연결한다.
+  await assert.rejects(service.register("a", "123-45-67890"), /사업자등록번호/);
+  const [first, second] = await Promise.all([
+    service.register("a", "220-81-62517"),
+    service.register("b", "2208162517"),
+  ]);
+  assert.equal(first, second);
+  assert.equal(calls.length, 7);
+
+  // 실패 상태와 정상 빈 결과를 DB에서 구분하고 중복 업무 항목을 제거했는지 확인한다.
+  /**
+   * 격리 DB에서 검증 쿼리의 행을 읽는다.
+   * @param {string} sql 검증에 사용할 SQL.
+   * @param {Array} args SQL에 바인딩할 인자.
+   * @returns {Promise<Array>} 결과 행.
+   */
+  const read = async (sql, args = []) => (await client.execute({ sql, args })).rows;
+  assert.deepEqual((await read("SELECT status FROM business_collection WHERE kind = 'industry'"))[0].status, "failed");
+  assert.equal(JSON.parse((await read("SELECT diagnostics FROM business_collection WHERE kind = 'industry'"))[0].diagnostics).name, "Error");
+  assert.equal((await read("SELECT COUNT(*) AS count FROM business_collection WHERE status = 'succeeded'"))[0].count, 6);
+  assert.equal((await read("SELECT COUNT(*) AS count FROM business_basic"))[0].count, 1);
+
+  // 실패 유형만 다시 호출하고 성공 시 진단을 비운다.
+  fail = false;
+  await service.retry("b", first);
+  assert.deepEqual(calls.slice(7), ["industry"]);
+  assert.equal((await read("SELECT error FROM business_collection WHERE kind = 'industry'"))[0].error, null);
+  await assert.rejects(service.retry("unlinked", first), /등록/);
+
+  // 선택한 사업자의 데이터에 복합 기본 키 범위 검색을 사용하는지 확인한다.
+  for (const table of ["business_basic", "business_industry", "business_product", "business_sanction", "business_smpp", "business_collection"]) {
+    const plan = await read(`EXPLAIN QUERY PLAN SELECT * FROM ${table} WHERE business_id = ?`, [first]);
+    assert.match(plan[0].detail, /SEARCH .*\(business_id=\?\)/);
+  }
+});
+
+/** 응답 문서의 실제 JSON과 XML로 필드 보존과 요청 규약을 검증한다. */
+test("실제 응답 픽스처 7종에서 문서상 업무 값만 보존한다", async (context) => {
+  // 환경과 HTTP를 대체하여 운영 키나 DB 없이 API 요청을 확인한다.
+  const { BUSINESS_APIS } = require("../src/entities/business/model/business-apis");
+  const { collectBusinessApi } = require("../src/features/business-information/server/collect-business-api");
+  const ppsKey = "sample/pps+=";
+  const smppKey = "sample/smpp+=";
+  const previous = { PPS_USER_INFO_SERVICE_KEY: process.env.PPS_USER_INFO_SERVICE_KEY, SMPP_CERT_INFO_SERVICE_KEY: process.env.SMPP_CERT_INFO_SERVICE_KEY };
+  process.env.PPS_USER_INFO_SERVICE_KEY = encodeURIComponent(ppsKey);
+  process.env.SMPP_CERT_INFO_SERVICE_KEY = smppKey;
+  context.after(() => {
+    // 테스트 후 외부 키 설정을 원래 상태로 복원한다.
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+  // 응답 파일과 요청이 일치하도록 호출 유형마다 하나의 예제 본문을 제공한다.
+  let body;
+  let request;
+  context.mock.method(globalThis, "fetch", async (url) => {
+    // 페이지 간에 바뀌는 URL 객체를 스냅샷으로 저장한다.
+    request = new URL(url);
+    return new Response(body);
+  });
+  const counts = { basic: 1, industry: 4, product: 5, sanction: 0, directProduction: 2, women: 1, disabled: 1 };
+  const referenceDate = "20261126";
+  for (const [kind, api] of Object.entries(BUSINESS_APIS)) {
+    // 각 오퍼레이션의 실제 문서 응답을 그대로 파서 입력으로 사용한다.
+    const dir = join(__dirname, "../docs/api-responses", api.certificate ? "smpp" : "pps");
+    const file = readdirSync(dir).find((name) => name.includes(`(${api.operation})`));
+    body = readFileSync(join(dir, file), "utf8").match(/```(?:json|xml)\r?\n([\s\S]+?)```/)[1];
+    const number = api.certificate ? "2208162517" : JSON.parse(body).response.body.items?.[0]?.bizno ?? "6168122531";
+    const rows = await collectBusinessApi(kind, number, referenceDate);
+    // 업무 필드만 반환하고 원래 요청에 키와 조회 조건을 넣었는지 확인한다.
+    assert.equal(rows.length, counts[kind]);
+    assert.ok(rows.every((item) => Object.keys(item).every((key) => api.fields.includes(key))));
+    assert.equal(request.pathname.split("/").at(-1), api.operation);
+    assert.equal(request.searchParams.get(api.certificate || kind === "sanction" ? "ServiceKey" : "serviceKey"), api.certificate ? smppKey : ppsKey);
+    assert.equal(request.searchParams.get(api.certificate ? "bsnmNo" : "bizno"), number);
+    assert.equal(request.searchParams.get("stdrDate"), api.certificate ? referenceDate : null);
+    assert.equal(request.searchParams.get("inqryDiv"), api.certificate ? null : kind === "basic" ? "3" : "1");
+    if (kind === "basic") assert.equal(rows[0].hmpgAdrs, "");
+    if (kind === "industry") assert.ok(rows.some((item) => item.indstrytyCd === "0015" && item.indstrytyNm === ""));
+    if (kind === "directProduction") assert.ok(rows.every((item) => !Object.hasOwn(item, "essntlPartclrMatter")));
+  }
+});
+
+/** 두 번째 페이지의 실패와 쓰기 실패가 이전 결과에 영향을 주지 않는지 검증한다. */
+test("페이지 오류와 저장 오류를 개별 처리하고 자격 증명을 마스킹한다", async (context) => {
+  // 이전 저장본과 동시에 독립 수집이 가능한 격리 연결을 준비한다.
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database");
+  const { openBusinessRegistration } = require("../src/features/business-information/server/registration");
+  const { collectBusinessApi } = require("../src/features/business-information/server/collect-business-api");
+  const rawKey = "private+key/with=escaping";
+  const encodedKey = encodeURIComponent(rawKey);
+  const previous = process.env.PPS_USER_INFO_SERVICE_KEY;
+  process.env.PPS_USER_INFO_SERVICE_KEY = encodedKey;
+  context.after(() => {
+    // 프로세스에서 테스트용 자격 증명을 원래 설정으로 되돌린다.
+    if (previous === undefined) delete process.env.PPS_USER_INFO_SERVICE_KEY;
+    else process.env.PPS_USER_INFO_SERVICE_KEY = previous;
+  });
+  const client = createClient({ url: "file::memory:" });
+  context.after(() => client.close());
+  await migrateG2bDatabase(client);
+  await client.executeMultiple(`
+    INSERT INTO auth_users(id,email,nickname) VALUES ('a','a@example.test','a');
+    INSERT INTO businesses(id,registration_number) VALUES (1,'2208162517');
+    INSERT INTO user_businesses VALUES ('a',1);
+    INSERT INTO business_basic VALUES (1,'{"corpNm":"기존 업체"}');
+    INSERT INTO business_industry VALUES (1,'{"indstrytyCd":"0001"}');
+    CREATE TRIGGER reject_basic BEFORE INSERT ON business_basic
+      BEGIN SELECT RAISE(ABORT, '업무 저장 실패'); END;
+  `);
+
+  // 업종 1페이지에는 null과 누락을 포함하고, 2페이지는 처음에만 실패시킨다.
+  let failPage = true;
+  const pages = [];
+  const logged = [];
+  // 수집 실패 처리 중 콘솔에 기록하는 값도 저장값과 함께 검사한다.
+  for (const method of ["log", "info", "warn", "error"]) {
+    context.mock.method(console, method, (...args) => logged.push(...args));
+  }
+  context.mock.method(globalThis, "fetch", async (url) => {
+    const page = Number(url.searchParams.get("pageNo"));
+    pages.push(page);
+    if (failPage && page === 2) {
+      // 같은 키의 원문과 인코딩 값이 메시지와 중첩 예외에 포함되는 상황을 재현한다.
+      throw new Error(`네트워크 오류 ${rawKey}`, { cause: new Error(`경로: ${url} / ${encodedKey}`) });
+    }
+    const item = page === 1
+      ? { bizno: "2208162517", indstrytyCd: "0015", indstrytyNm: null }
+      : { bizno: "2208162517", indstrytyCd: "0015", indstrytyNm: "" };
+    return Response.json({ response: { header: { resultCode: "00" }, body: {
+      items: [item], pageNo: page, numOfRows: 1, totalCount: 2,
+    } } });
+  });
+  const service = openBusinessRegistration(new G2bDatabase(client), async (kind, number, date) => {
+    // 업종은 실제 HTTP 파서를 사용하고 기본정보는 DB 쓰기 오류를 유도한다.
+    if (kind === "industry") return collectBusinessApi(kind, number, date);
+    if (kind === "basic") return [{ corpNm: "갱신 업체" }];
+    return [];
+  });
+  await service.retry("a", 1);
+  // 두 실패 유형의 기존 행은 유지하고 다른 5종의 완료 상태는 기록한다.
+  const failed = (await client.execute("SELECT kind, status, error, diagnostics FROM business_collection ORDER BY kind")).rows;
+  assert.equal(failed.filter(({ status }) => status === "succeeded").length, 5);
+  const industry = failed.find(({ kind }) => kind === "industry");
+  const basic = failed.find(({ kind }) => kind === "basic");
+  assert.equal(basic.status, "failed");
+  assert.equal(JSON.parse(basic.diagnostics).step, "사업자 정보 저장");
+  assert.equal(industry.status, "failed");
+  const diagnostic = JSON.parse(industry.diagnostics);
+  assert.equal(diagnostic.step, "외부 API 요청");
+  assert.equal(diagnostic.details.page, 2);
+  assert.ok(!diagnostic.request.path.includes("?"));
+  assert.ok(!JSON.stringify(industry).includes(rawKey));
+  assert.ok(!JSON.stringify(industry).includes(encodedKey));
+  assert.ok(!JSON.stringify(logged).includes(rawKey));
+  assert.ok(!JSON.stringify(logged).includes(encodedKey));
+  assert.match(diagnostic.cause.message, /인증 정보 생략/);
+  assert.equal((await client.execute("SELECT payload FROM business_basic")).rows[0].payload, '{"corpNm":"기존 업체"}');
+  assert.equal((await client.execute("SELECT payload FROM business_industry")).rows[0].payload, '{"indstrytyCd":"0001"}');
+
+  // 장애 제거 후 실패 유형 전체를 재수집하고 구분되는 두 행과 오류 초기화를 확인한다.
+  failPage = false;
+  await client.execute("DROP TRIGGER reject_basic");
+  await service.retry("a", 1);
+  assert.deepEqual(pages, [1, 2, 1, 2]);
+  assert.equal((await client.execute("SELECT COUNT(*) AS count FROM business_collection WHERE status = 'succeeded' AND error IS NULL AND diagnostics IS NULL")).rows[0].count, 7);
+  const saved = (await client.execute("SELECT payload FROM business_industry")).rows.map(({ payload }) => JSON.parse(payload));
+  assert.deepEqual(saved.map(({ indstrytyNm }) => indstrytyNm), ["", null]);
+  assert.ok(saved.every((item) => item.indstrytyCd === "0015" && !Object.hasOwn(item, "rgstDt")));
+});
+
+/** SMPP의 명시적인 매칭 없음 응답과 같은 코드의 다른 장애를 구분한다. */
+test("SMPP 3종의 매칭 없음은 완료하고 다른 업무 오류는 실패한다", async (context) => {
+  // 동일한 결과 번호에 대한 두 문구를 가짜 HTTP 응답으로 비교한다.
+  const { collectBusinessApi } = require("../src/features/business-information/server/collect-business-api");
+  const previous = process.env.SMPP_CERT_INFO_SERVICE_KEY;
+  process.env.SMPP_CERT_INFO_SERVICE_KEY = "sample";
+  context.after(() => {
+    // 테스트 키를 제거하고 기존 프로세스 환경을 복원한다.
+    if (previous === undefined) delete process.env.SMPP_CERT_INFO_SERVICE_KEY;
+    else process.env.SMPP_CERT_INFO_SERVICE_KEY = previous;
+  });
+  let message = "매칭데이터가 존재하지 않습니다.";
+  context.mock.method(globalThis, "fetch", async () => new Response(`
+    <response><HeaderValueList><resultCode>90</resultCode><resultMsg>${message}</resultMsg></HeaderValueList></response>
+  `));
+  // 세 API 모두 현재 기준일의 정상 빈 응답으로 처리되는지 확인한다.
+  for (const kind of ["directProduction", "women", "disabled"]) {
+    assert.deepEqual(await collectBusinessApi(kind, "2208162517", "20261126"), []);
+  }
+  // 임의의 외부 장애를 정상 빈 응답으로 저장하지 않는다.
+  message = "시스템 오류";
+  await assert.rejects(collectBusinessApi("women", "2208162517", "20261126"), /업무 오류/);
+});
+
+/** 실행권 만료 전후에 오래된 요청이 결과를 반영할 수 없는지 검증한다. */
+test("만료된 실행권은 저장할 수 없으며 새 실행권으로 이어받는다", async (context) => {
+  // 격리 환경에서 실행권 시간을 이동시키면서 저장소의 상태 전환을 확인한다.
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database");
+  const { openBusinessInformation } = require("../src/server/g2b/repository/business-information");
+  const client = createClient({ url: "file::memory:" });
+  context.after(() => client.close());
+  await migrateG2bDatabase(client);
+  await client.execute("INSERT INTO businesses(id,registration_number) VALUES (1,'2208162517')");
+  const store = openBusinessInformation(new G2bDatabase(client));
+  let now = 1_000;
+  context.mock.method(Date, "now", () => now);
+  assert.equal((await store.claim(1, "old", now, 2_000, "20261126")).length, 7);
+  assert.deepEqual(await store.claim(1, "concurrent", now, 3_000, "20261126"), []);
+
+  // 실행권이 만료되면 새로운 요청이 오기 전이라도 기존 호출 결과는 반영할 수 없다.
+  now = 2_000;
+  await store.complete(1, "basic", "old", [{ corpNm: "만료된 시도" }]);
+  assert.equal((await client.execute("SELECT * FROM business_basic")).rows.length, 0);
+  assert.equal((await store.claim(1, "new", now, 3_000, "20261127")).length, 7);
+  // 이전 실패 응답도 새 실행권을 지우지 않으며 새 실행만 데이터를 저장한다.
+  await store.fail(1, "basic", "old", { name: "Error", message: "지연된 실패" });
+  await store.complete(1, "basic", "new", [{ corpNm: "새 시도" }]);
+  assert.equal((await client.execute("SELECT payload FROM business_basic")).rows[0].payload, '{"corpNm":"새 시도"}');
+  assert.equal((await client.execute("SELECT reference_date FROM business_collection WHERE kind = 'women'")).rows[0].reference_date, "20261127");
+});

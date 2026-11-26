@@ -61,7 +61,7 @@ function cleanText(value: string, limit = 500, frame = false): string {
   return text
     .replace(/\b(?:set-cookie|cookie|authorization)\s*[:=][^\r\n]*/gi, "[인증 정보 생략]")
     .replace(/\b(?:bearer|basic)\s+[^\s,;]+/gi, "[인증 정보 생략]")
-    .replace(/\b(?:session(?:id)?|jsessionid|[\w-]*(?:token|password|secret|api[_-]?key|credential)[\w-]*)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, "[인증 정보 생략]")
+    .replace(/\b(?:session(?:id)?|jsessionid|[\w-]*(?:token|password|secret|(?:api|service)[_-]?key|credential)[\w-]*)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, "[인증 정보 생략]")
     .replace(/(https?:\/\/)[^/\s@]+@/gi, "$1[인증 정보 생략]@")
     .replace(/(https?:\/\/[^\s?#]+)[?#][^\s)]+/gi, "$1")
     .slice(0, limit);
@@ -75,9 +75,32 @@ function scalar(value: unknown): string | number | undefined {
 /**
  * 중첩 예외를 SQLite와 관리자 화면에서 사용할 JSON 데이터로 변환한다.
  * @param reason 수집 실패에서 전달된 원본 예외 또는 병렬 실패 묶음.
+ * @param redact 알려진 인증 값을 문자열 길이 제한과 로그 정제 전에 제거하는 선택 함수.
  * @returns 각 예외의 호출 위치와 확인된 근거. 순환 참조나 크기 한도에 닿으면 그 지점을 표시한다.
  */
-export function describeCollectionError(reason: unknown): CollectionDiagnostic {
+export function describeCollectionError(reason: unknown, redact?: (value: string) => string): CollectionDiagnostic {
+  /**
+   * 기존 진단 정제 전에 호출자가 제공한 자격 증명 제거를 적용한다.
+   * @param text 오류 또는 허용된 진단 필드 원문.
+   * @param limit 저장할 문자열 길이 상한.
+   * @param frame 실제 호출 프레임인지 여부.
+   * @returns 마스킹과 길이 제한을 적용한 문자열.
+   */
+  function clean(text: string, limit?: number, frame?: boolean) {
+    // 길이 제한으로 키 일부가 남는 것을 막기 위해 원문에서 먼저 제거한다.
+    return cleanText(redact ? redact(text) : text, limit, frame);
+  }
+
+  /**
+   * 예외의 코드나 추가 진단 필드에서 안전한 스칼라만 추출한다.
+   * @param value 예외 또는 응답에서 추출한 값.
+   * @returns 정제된 문자열, 유한한 숫자 또는 undefined.
+   */
+  function cleanScalar(value: unknown) {
+    // 문자열은 원문에서 자격 증명을 제거하고 숫자는 기존 공통 검증을 사용한다.
+    return typeof value === "string" ? clean(value) : scalar(value);
+  }
+
   const ancestors = new Set<Error>();
   let remaining = 100;
 
@@ -89,8 +112,9 @@ export function describeCollectionError(reason: unknown): CollectionDiagnostic {
     ancestors.add(value);
     const context = contexts.get(value);
     const fields = value as Error & Record<string, unknown>;
-    const name = cleanText(value.name, 100);
-    const message = value instanceof SyntaxError ? "JSON 해석에 실패했습니다." : cleanText(value.message);
+    // 예외 제목과 메시지에 동일한 자격 증명 제거 절차를 적용한다.
+    const name = clean(value.name, 100);
+    const message = value instanceof SyntaxError ? "JSON 해석에 실패했습니다." : clean(value.message);
     const stack = typeof value.stack === "string" ? value.stack : undefined;
     const title = `${value.name}: ${value.message}`;
     // 예외 메시지에 호출 프레임처럼 생긴 문자열이 있어도 실제 스택 프레임만 저장한다.
@@ -101,28 +125,40 @@ export function describeCollectionError(reason: unknown): CollectionDiagnostic {
       name,
       message,
       // 메시지가 여러 줄이어도 원문 대신 정리한 제목과 호출 프레임만 사용한다.
-      stack: stack ? [`${name}: ${message}`, ...(frames ?? []).map((line) => cleanText(line, 500, true))].join("\n").slice(0, 4000) : undefined,
-      code: scalar(fields.code),
-      errno: scalar(fields.errno),
-      syscall: typeof fields.syscall === "string" ? cleanText(fields.syscall) : undefined,
+      stack: stack ? [`${name}: ${message}`, ...(frames ?? []).map((line) => clean(line, 500, true))].join("\n").slice(0, 4000) : undefined,
+      code: cleanScalar(fields.code),
+      errno: cleanScalar(fields.errno),
+      syscall: typeof fields.syscall === "string" ? clean(fields.syscall) : undefined,
       errcode: typeof fields.errcode === "number" ? fields.errcode :
         typeof fields.rawCode === "number" ? fields.rawCode : undefined,
-      errstr: typeof fields.errstr === "string" ? cleanText(fields.errstr) :
-        typeof fields.extendedCode === "string" ? cleanText(fields.extendedCode) : undefined,
+      errstr: typeof fields.errstr === "string" ? clean(fields.errstr) :
+        typeof fields.extendedCode === "string" ? clean(fields.extendedCode) : undefined,
       cause: value.cause === undefined ? undefined : visit(value.cause, depth + 1),
       errors: value instanceof AggregateError ? value.errors.slice(0, Math.max(remaining, 1)).map((error) => visit(error, depth + 1)) : undefined,
     };
+    // 알려진 서버 자격 증명을 받는 진단에서는 요청 정보도 저장하기 전에 정제한다.
+    if (redact && context?.request) {
+      // 쿼리는 상대 경로 형식에서도 통째로 제외하고 내부 추적 키는 별도로 정제한다.
+      diagnostic.request = {
+        path: clean(context.request.path.split(/[?#]/, 1)[0]),
+        submissionId: context.request.submissionId && clean(context.request.submissionId),
+        timeoutMs: context.request.timeoutMs,
+      };
+    }
     if (context?.response) {
       const { status, contentType, errorCode, errorMessage } = context.response;
       diagnostic.response = {
         status,
-        contentType: contentType && cleanText(contentType),
-        errorCode: scalar(errorCode),
-        errorMessage: errorMessage && cleanText(errorMessage),
+        contentType: contentType && clean(contentType),
+        errorCode: cleanScalar(errorCode),
+        errorMessage: errorMessage && clean(errorMessage),
       };
     }
     if (context?.details) {
-      diagnostic.details = Object.fromEntries(Object.entries(context.details).map(([key, detail]) => [key, scalar(detail) ?? "확인 불가"]));
+      // 호출자가 준 비밀 값이 진단 항목명이나 값에 들어 있어도 그대로 저장하지 않는다.
+      diagnostic.details = Object.fromEntries(Object.entries(context.details).map(([key, detail]) => [
+        redact ? redact(key) : key, cleanScalar(detail) ?? "확인 불가",
+      ]));
     }
     ancestors.delete(value);
     return diagnostic;
