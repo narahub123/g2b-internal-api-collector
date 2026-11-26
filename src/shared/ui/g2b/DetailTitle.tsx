@@ -40,7 +40,7 @@ export function DetailTitle({
   const Heading = headingLevel;
 
   return (
-    <header className="flex min-w-0 items-start gap-2">
+    <header className="flex min-w-0 items-center gap-2">
       {/* 기존 제목과 작업 영역을 하나로 묶어 별 버튼을 화면 크기와 관계없이 가장 오른쪽에 둔다. */}
       <div className="grid min-w-0 flex-1 gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
         <div className="min-w-0">

@@ -16,6 +16,22 @@ import {
 } from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { ListView } from "@/shared/ui/list-controls/ListView";
+import { Label } from "@/shared/ui/label";
+import { Input } from "@/shared/ui/input";
+import { Badge } from "@/shared/ui/badge";
+
+/**
+ * 나라장터 업무 단계별 배지 색상.
+ * 라이트 모드와 다크 모드에서의 가독성을 고려하여 글자 색상을 구분한다.
+ */
+const G2B_SECTION_COLORS = {
+  "order-plans": "bg-slate-500/15 text-slate-600 dark:text-slate-300",
+  "contract-requests": "bg-orange-500/15 text-orange-600 dark:text-orange-400",
+  "prior-specs": "bg-purple-500/15 text-purple-600 dark:text-purple-400",
+  "notices": "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+  "opening-results": "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  "contracts": "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400",
+};
 
 /**
  * 필터와 페이지를 관심 목록 주소로 변환한다.
@@ -143,10 +159,10 @@ export function InterestList({ items, type, page, totalPages, requestedPage }: I
             <>
               {/* 현재 페이지에 항목이 있을 때 선택과 일괄 삭제를 제공한다. */}
               <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={allSelected} disabled={pending} onChange={toggleAll} />
+                <Label className="flex items-center gap-2 text-sm">
+                  <Input type="checkbox" className="size-4" checked={allSelected} disabled={pending} onChange={toggleAll} />
                   전체 선택
-                </label>
+                </Label>
                 <AlertDialogTrigger asChild>
                   <Button type="button" variant="destructive" size="sm" disabled={!targets.length || pending}>
                     선택 삭제
@@ -161,15 +177,18 @@ export function InterestList({ items, type, page, totalPages, requestedPage }: I
                   // 원본 조회 없이 업무 키로 회원용 상세 주소를 만든다.
                   const href = userDetailPath(item.type, item);
                   return (
-                    <li key={id} className="flex min-w-0 items-center gap-3 p-3">
-                      <input type="checkbox" checked={selected.includes(id)} disabled={pending}
-                        aria-label={`${title} 선택`} onChange={() => toggleItem(id)} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs text-muted-foreground">{G2B_SECTIONS[item.type]}</p>
-                        <Link href={href} prefetch={false} className="wrap-anywhere font-medium hover:underline">{title}</Link>
-                      </div>
+                  <li key={id} className="relative flex min-w-0 items-center gap-3 p-3 hover:bg-accent">
+                    <Input type="checkbox" className="relative z-10 size-4" checked={selected.includes(id)} disabled={pending}
+                      aria-label={`${title} 선택`} onChange={() => toggleItem(id)} />
+                    <Link href={href} prefetch={false} className="min-w-0 flex-1 flex gap-2 items-center wrap-anywhere font-medium">
+                      <span className="absolute inset-0" />
+                      <Badge className={G2B_SECTION_COLORS[item.type]}>{G2B_SECTIONS[item.type]}</Badge>
+                      <span>{title}</span>
+                    </Link>
+                    <div className="relative z-10">
                       <InterestButton item={item} subscribed disabled={pending || confirming} />
-                    </li>
+                    </div>
+                  </li>
                   );
                 })}
               </ul>
