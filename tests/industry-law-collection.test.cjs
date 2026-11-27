@@ -14,9 +14,36 @@ const { runCollection } = require('../scripts/collect-g2b-industry-law.cjs');
  */
 async function verifyCollection() {
   // 실행 간에 실제 파일을 공유하되 운영 데이터와 분리한다.
-  const directory = await fs.mkdtemp(join(tmpdir(), 'industry-law-'));
+  const directory = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'industry-law-')));
   // 저장 실패를 주입할 때도 같은 출력 경로를 사용한다.
   const output = join(directory, 'snapshot.json');
+  // 수집 함수의 실제 JSON 읽기와 쓰기를 기록한다.
+  const reads = [];
+  const writes = [];
+  const io = {
+    ...fs,
+    /**
+     * 저장 계층에서 읽는 경로를 기록한다.
+     * @param {string} path 읽을 파일.
+     * @param {string} encoding 파일 인코딩.
+     * @returns {Promise<string>} 파일 내용.
+     */
+    readFile(path, encoding) {
+      reads.push(path);
+      return fs.readFile(path, encoding);
+    },
+    /**
+     * 저장 계층에서 쓰는 파일의 용도를 기록한다.
+     * @param {string} path 쓸 파일.
+     * @param {string} content 직렬화한 목록이나 메타데이터.
+     * @param {object} options 파일 생성과 기록 옵션.
+     * @returns {Promise<void>} 기록 완료.
+     */
+    writeFile(path, content, options) {
+      writes.push(content.startsWith('[') ? 'rows' : 'metadata');
+      return fs.writeFile(path, content, options);
+    },
+  };
   // 새 버전과 잘못된 행 수를 각 실행에 주입한다.
   let version = '26-11-27 오후 1:1:2';
   let expectedRows = 2;
@@ -70,37 +97,71 @@ async function verifyCollection() {
   }
   try {
     // 최초 수집에서 모든 요청이 진행되며 두 행이 유지된다.
-    assert.equal((await runCollection({ output, fetchImpl: fetchReport })).status, 'created');
+    assert.equal((await runCollection({ output, io, fetchImpl: fetchReport })).status, 'created');
     assert.equal(calls.length, 5);
     const first = await fs.readFile(output, 'utf8');
     const snapshot = JSON.parse(first);
-    assert.equal(snapshot.rows[0].industryCode, '0001');
-    assert.equal(snapshot.rows[0].relatedRules, '본문, 첫 줄\r\n둘째 줄');
-    assert.deepEqual(snapshot.rows[0], snapshot.rows[1]);
+    const rows = JSON.parse(await fs.readFile(join(directory, snapshot.listFile), 'utf8'));
+    assert.equal(rows[0].industryCode, '0001');
+    assert.equal(rows[0].relatedRules, '본문, 첫 줄\r\n둘째 줄');
+    assert.deepEqual(rows[0], rows[1]);
     // 같은 버전은 내보내기 요청을 생략한다.
     calls.length = 0;
-    assert.equal((await runCollection({ output, fetchImpl: fetchReport })).status, 'unchanged');
+    reads.length = writes.length = 0;
+    assert.equal((await runCollection({ output, io, fetchImpl: fetchReport })).status, 'unchanged');
     assert.equal(calls.length, 3);
+    assert.deepEqual(reads, [output]);
+    assert.deepEqual(writes, []);
     // 다른 버전의 잘못된 데이터 및 저장 오류는 기존 파일을 보존한다.
     version = '26-11-28 오후 1:1:2';
     failPrompt = true;
-    await assert.rejects(runCollection({ output, fetchImpl: fetchReport }), /검색조건 XML: HTTP 응답 실패/);
+    await assert.rejects(runCollection({ output, io, fetchImpl: fetchReport }), /검색조건 XML: HTTP 응답 실패/);
     assert.equal(await fs.readFile(output, 'utf8'), first);
     failPrompt = false;
     expectedRows = 3;
-    await assert.rejects(runCollection({ output, fetchImpl: fetchReport }), /행 수/);
+    await assert.rejects(runCollection({ output, io, fetchImpl: fetchReport }), /행 수/);
     assert.equal(await fs.readFile(output, 'utf8'), first);
     expectedRows = 2;
     delimiter = '\t';
-    await assert.rejects(runCollection({ output, fetchImpl: fetchReport, rename: async () => {
+    await assert.rejects(runCollection({ output, io, fetchImpl: fetchReport, rename: async () => {
       // 원자 교체 단계의 오류를 재현한다.
       throw new Error('모의 교체 실패');
     } }), /모의 교체 실패/);
     assert.equal(await fs.readFile(output, 'utf8'), first);
-    assert.deepEqual(await fs.readdir(directory), ['snapshot.json']);
+    assert.deepEqual((await fs.readdir(directory)).sort(), ['snapshot.json', snapshot.listFile].sort());
     // 탭 구분 데이터는 정상적으로 새 버전을 저장한다.
-    assert.equal((await runCollection({ output, fetchImpl: fetchReport })).status, 'updated');
-    assert.equal(JSON.parse(await fs.readFile(output, 'utf8')).rows.length, 2);
+    assert.equal((await runCollection({ output, io, fetchImpl: fetchReport })).status, 'updated');
+    const latest = JSON.parse(await fs.readFile(output, 'utf8'));
+    assert.equal(latest.totalRows, 2);
+    assert.deepEqual((await fs.readdir(directory)).sort(), ['snapshot.json', latest.listFile].sort());
+    // 정리 실패가 적용을 되돌리지 않고 다음 실행에서 정리되는지 확인한다.
+    version = '26-11-29 오후 1:1:2';
+    const delayedCleanup = {
+      ...io,
+      /**
+       * 이전 세대 삭제에만 일시적인 오류를 주입한다.
+       * @param {string} path 삭제할 파일 경로.
+       * @param {object} options 파일 삭제 옵션.
+       * @returns {Promise<void>} 삭제 완료.
+       */
+      async rm(path, options) {
+        if (path === join(directory, latest.listFile)) throw new Error('모의 정리 실패');
+        await fs.rm(path, options);
+      },
+    };
+    assert.equal((await runCollection({ output, io: delayedCleanup, fetchImpl: fetchReport })).status, 'updated');
+    await fs.stat(join(directory, latest.listFile));
+    const committed = JSON.parse(await fs.readFile(output, 'utf8'));
+    assert.equal((await runCollection({ output, io, fetchImpl: fetchReport })).status, 'unchanged');
+    assert.deepEqual((await fs.readdir(directory)).sort(), ['snapshot.json', committed.listFile].sort());
+    // 기존 형식에서 행과 기준을 그대로 옮긴다.
+    version = '26-11-28 오후 1:1:2';
+    await fs.writeFile(output, JSON.stringify({ reportId: latest.reportId, lastUpdate: latest.lastUpdate, rows }));
+    assert.equal((await runCollection({ output, io, fetchImpl: fetchReport })).status, 'unchanged');
+    const migrated = JSON.parse(await fs.readFile(output, 'utf8'));
+    assert.equal(migrated.codes, 1);
+    assert.equal(migrated.lastUpdate, latest.lastUpdate);
+    assert.deepEqual(JSON.parse(await fs.readFile(join(directory, migrated.listFile), 'utf8')), rows);
   } finally {
     // 테스트가 소유한 파일을 정리한다.
     for (const name of await fs.readdir(directory)) await fs.unlink(join(directory, name));

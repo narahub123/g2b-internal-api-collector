@@ -31,6 +31,18 @@ type Progress = {
   bytes?: number;
 };
 
+/** 전체자료 변환 중에 계산한 행과 상태별 집계다. */
+type DistrictDownload = {
+  /** 원본 순서를 보존한 행 목록. */
+  rows: LegalDistrict[];
+  /** 전체 법정동 수. */
+  total: number;
+  /** 현존 법정동 수. */
+  active: number;
+  /** 폐지 법정동 수. */
+  abolished: number;
+};
+
 /**
  * 로컬 실행 시각을 한국 표준시의 날짜로 변환한다.
  * @param now 실행 시작 시각.
@@ -87,22 +99,28 @@ function* periods(start: string, end: string) {
  */
 function readCount(html: string, start: string, end: string): number {
   // 속성 순서와 따옴표 형식에 관계없이 입력의 속성을 수집한다.
-  const inputs = [];
+  const dates = new Map([['stdate', start], ['enddate', end]]);
+  // 중복 날짜와 복수 선택을 검증하기 위한 상태다.
+  const seen = new Set<string>();
+  let selected = false;
   for (const [tag] of html.matchAll(/<input\b[^>]*>/gi)) {
     const attributes = new Map<string, string>();
     for (const [, key, double, single, bare] of tag.slice(6, -1).matchAll(/\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
       attributes.set(key.toLowerCase(), double ?? single ?? bare ?? '');
     }
-    inputs.push(attributes);
+    // 입력을 별도 배열에 저장하지 않고 읽는 시점에 요청 조건과 대조한다.
+    const key = attributes.get('name');
+    if (dates.has(key)) {
+      if (seen.has(key) || attributes.get('value') !== dates.get(key)) throw new Error('변경 조회 조건 불일치: ' + key);
+      seen.add(key);
+    }
+    if (key === 'disuseAt' && attributes.get('type') === 'radio' && attributes.has('checked')) {
+      if (selected || attributes.get('value') !== 'ALL') throw new Error('변경 조회 조건 불일치: disuseAt');
+      selected = true;
+    }
   }
-  // 정확히 한 입력이 해당 날짜를 반영하는지 확인한다.
-  for (const [key, expected] of [['stdate', start], ['enddate', end]]) {
-    const matches = inputs.filter(input => input.get('name') === key);
-    if (matches.length !== 1 || matches[0].get('value') !== expected) throw new Error('변경 조회 조건 불일치: ' + key);
-  }
-  // 전체 선택만 활성화된 라디오 응답을 받아들인다.
-  const selected = inputs.filter(input => input.get('name') === 'disuseAt' && input.get('type') === 'radio' && input.has('checked'));
-  if (selected.length !== 1 || selected[0].get('value') !== 'ALL') throw new Error('변경 조회 조건 불일치: disuseAt');
+  // 어떤 필수 조건도 누락된 상태로 집계를 사용하지 않는다.
+  if (seen.size !== dates.size || !selected) throw new Error('변경 조회 필수 조건 누락');
   // 전체 건수는 수정 함수의 첫 선언에 있다. 선택 건수를 다루는 별도 함수의 cnt는 제외한다.
   const counts = [...html.matchAll(/\bfunction\s+func_modi\s*\(\s*\)\s*\{\s*var\s+cnt\s*=\s*([^;\r\n]+)\s*;/g)];
   const raw = counts[0]?.[1].trim();
@@ -114,37 +132,40 @@ function readCount(html: string, start: string, end: string): number {
 /**
  * 전체자료 ZIP 안의 TXT를 검증하고 변환한다.
  * @param bytes 다운로드 응답의 바이트.
- * @returns 원본 순서대로 변환한 코드 목록.
+ * @returns 원본 순서대로 변환한 코드 목록과 상태별 건수.
  * @throws ZIP, 인코딩, 헤더 또는 행이 예상 형식과 다를 때.
  */
-function convertZip(bytes: Buffer): LegalDistrict[] {
+function convertZip(bytes: Buffer): DistrictDownload {
   // 디렉터리 항목을 제외하고 전체자료 TXT 한 개를 확인한다.
   const entries = new Zip(bytes).getEntries().filter(entry => !entry.isDirectory);
   if (entries.length !== 1 || !/\.txt$/i.test(entries[0].entryName)) throw new Error('전체자료 ZIP의 TXT 구성 오류');
   // 다운로드 파일은 CP949이며 탭을 기준으로 세 열을 구분한다.
   const text = new TextDecoder('euc-kr', { fatal: true }).decode(entries[0].getData());
-  const [header, ...lines] = text.split(/\r?\n/);
-  if (header !== '법정동코드\t법정동명\t폐지여부') throw new Error('법정동 TXT 헤더 오류');
+  const lines = text.split(/\r?\n/);
+  if (lines[0] !== '법정동코드\t법정동명\t폐지여부') throw new Error('법정동 TXT 헤더 오류');
   // 마지막 빈 줄만 제거하고 빈 행이나 중복 코드는 거부한다.
   if (lines.at(-1) === '') lines.pop();
   const codes = new Set<string>();
   const rows: LegalDistrict[] = [];
-  for (const line of lines) {
-    const fields = line.split('\t');
+  // 각 행을 파싱할 때 상태별 건수도 계산한다.
+  let active = 0;
+  for (let index = 1; index < lines.length; index++) {
+    const fields = lines[index].split('\t');
     const [code, name, status] = fields;
     if (fields.length !== 3 || !/^\d{10}$/.test(code) || !name.trim() ||
         (status !== '존재' && status !== '폐지') || codes.has(code)) throw new Error('법정동 TXT 행 오류: ' + (rows.length + 2));
     codes.add(code);
     rows.push({ code, name, status });
+    if (status === '존재') active++;
   }
   if (rows.length === 0) throw new Error('법정동 TXT 데이터 없음');
-  return rows;
+  return { rows, total: rows.length, active, abolished: rows.length - active };
 }
 
 /**
  * 변경 구간을 확인하고 새 자료가 필요한 경우 ZIP을 변환한다.
  * @param options 요청 날짜, 저장 날짜와 HTTP 연결 설정.
- * @returns 변경 없음이면 undefined, 최초 또는 갱신이면 행 목록.
+ * @returns 변경 없음이면 undefined, 최초 또는 갱신이면 행과 집계.
  * @throws 네트워크, 응답 조건 또는 변환 검증 실패.
  */
 export async function collectLegalDistricts(options: {
@@ -156,7 +177,7 @@ export async function collectLegalDistricts(options: {
   fetchImpl?: typeof fetch;
   /** 조회 건수와 다운로드 크기를 전달한다. */
   onProgress?: (progress: Progress) => void;
-}): Promise<LegalDistrict[] | undefined> {
+}): Promise<DistrictDownload | undefined> {
   // 실제 실행과 모의 테스트에서 동일한 호출 흐름을 사용한다.
   const { previousDate, requestDate, fetchImpl = fetch, onProgress } = options;
   let download = previousDate === undefined;
@@ -184,9 +205,9 @@ export async function collectLegalDistricts(options: {
     codeseId: '법정동코드', disuseAt: '0', stdate: '', enddate: '',
   });
   const bytes = Buffer.from(await response.arrayBuffer());
-  const rows = convertZip(bytes);
+  const result = convertZip(bytes);
   onProgress?.({ bytes: bytes.length });
-  return rows;
+  return result;
 
   /**
    * 같은 출처에 폼을 제출하고 정상 HTTP 응답만 전달한다.

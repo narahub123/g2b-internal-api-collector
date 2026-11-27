@@ -47,6 +47,8 @@ type ReportState = FormState & {
  * 검증을 마친 CSV의 변환 결과다.
  */
 type DownloadResult = {
+  /** 변환 중 확인한 고유 업종코드 수. */
+  codes: number;
   /** 인코딩된 CSV의 응답 바이트 수. */
   bytes: number;
   /** 원본 순서와 반복을 유지하는 행 목록. */
@@ -124,10 +126,10 @@ function readFormState(html: string, name: string): FormState {
  * CSV 제목과 데이터 구분자를 찾고 전체 행을 순서대로 변환한다.
  * @param {ArrayBuffer} bytes 서버가 반환한 UTF-16LE 바이트열.
  * @param {number} totalRows 보고서에서 확인한 전체 행 수.
- * @returns {Array<Record<string,string>>} 원본 순서와 반복을 유지한 행 배열.
+ * @returns 원본 순서와 반복을 유지한 행 및 고유 업종코드 수.
  * @throws 디코딩, 헤더, 필드 구문 또는 행 수가 예상 형식과 다를 때.
  */
-function parseCsv(bytes: ArrayBuffer, totalRows: number): IndustryLawRow[] {
+function parseCsv(bytes: ArrayBuffer, totalRows: number): Omit<DownloadResult, 'bytes'> {
   // 손상된 바이트가 조용히 대체 문자로 변경되지 않도록 검사한다.
   const csv = new TextDecoder('utf-16le', { fatal: true }).decode(bytes);
   // 안내문 뒤에 나오는 헤더에서 콤마 또는 탭을 식별한다.
@@ -141,6 +143,8 @@ function parseCsv(bytes: ArrayBuffer, totalRows: number): IndustryLawRow[] {
   let headerRead = false;
   let values: string[] = [];
   const rows: IndustryLawRow[] = [];
+  // 원본 행은 그대로 두고 표시용으로만 고유 코드를 센다.
+  const codes = new Set<string>();
   while (field.lastIndex < csv.length || values.length > 0) {
     // 현재 레코드에 연속되는 필드가 없으면 파일이 잘린 것으로 판단한다.
     const match = field.exec(csv);
@@ -162,13 +166,14 @@ function parseCsv(bytes: ArrayBuffer, totalRows: number): IndustryLawRow[] {
       const entries = columns.map((column, index) => [column, values[index]]);
       const row = Object.fromEntries(entries) as IndustryLawRow;
       rows.push(row);
+      codes.add(row.industryCode);
     }
     // 다음 레코드의 열을 모을 초기 상태로 돌아간다.
     values = [];
   }
   // 일부 행만 반환되면 현재 저장본을 교체할 수 없다.
   if (rows.length !== totalRows) throw new Error('CSV 행 수 불일치: ' + rows.length + ' / ' + totalRows);
-  return rows;
+  return { rows, codes: codes.size };
 
   /**
    * 현재 헤더 열의 표시 이름을 확인한다.
@@ -391,7 +396,7 @@ export async function collectIndustryLaw({ appliedLastUpdate, fetchImpl = fetch,
   async function readDownload(response: Response): Promise<StepResult<DownloadResult>> {
     if (!response.headers.get('content-type')?.includes('csv')) throw new Error('CSV 응답이 아님');
     const bytes = await response.arrayBuffer();
-    return { value: { bytes: bytes.byteLength, rows: parseCsv(bytes, report.totalRows) } };
+    return { value: { bytes: bytes.byteLength, ...parseCsv(bytes, report.totalRows) } };
   }
 }
 

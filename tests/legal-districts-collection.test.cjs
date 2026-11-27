@@ -12,9 +12,36 @@ const { runCollection } = require('../scripts/collect-legal-districts.cjs');
  */
 async function verifyCollection() {
   // 테스트용 저장 공간과 응답 상태를 준비한다.
-  const directory = await fs.mkdtemp(join(tmpdir(), 'legal-districts-'));
+  const directory = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'legal-districts-')));
   const output = join(directory, 'latest.json');
   const calls = [];
+  // 수집 함수의 실제 JSON 읽기와 쓰기를 기록한다.
+  const reads = [];
+  const writes = [];
+  const io = {
+    ...fs,
+    /**
+     * 저장 계층에서 읽는 경로를 기록한다.
+     * @param {string} path 읽을 파일.
+     * @param {string} encoding 파일 인코딩.
+     * @returns {Promise<string>} 파일 내용.
+     */
+    readFile(path, encoding) {
+      reads.push(path);
+      return fs.readFile(path, encoding);
+    },
+    /**
+     * 저장 계층에서 쓰는 파일의 용도를 기록한다.
+     * @param {string} path 쓸 파일.
+     * @param {string} content 직렬화한 목록이나 메타데이터.
+     * @param {object} options 파일 생성과 기록 옵션.
+     * @returns {Promise<void>} 기록 완료.
+     */
+    writeFile(path, content, options) {
+      writes.push(content.startsWith('[') ? 'rows' : 'metadata');
+      return fs.writeFile(path, content, options);
+    },
+  };
   let count = 0;
   let fault;
   let code = '0000000001';
@@ -63,7 +90,7 @@ async function verifyCollection() {
    * @returns {Promise<object>} 수집 결과.
    */
   function run(date, options = {}) {
-    return runCollection({ output, now: new Date(date + 'T00:01:00+09:00'), fetchImpl, ...options });
+    return runCollection({ output, now: new Date(date + 'T00:01:00+09:00'), fetchImpl, io, ...options });
   }
 
   try {
@@ -71,13 +98,20 @@ async function verifyCollection() {
     assert.equal((await run('2024-02-29')).status, 'created');
     assert.deepEqual(calls.splice(0), ['download']);
     const first = JSON.parse(await fs.readFile(output, 'utf8'));
-    assert.deepEqual(first.rows[0], { code, name: '서울', status: '존재' });
+    const firstRows = JSON.parse(await fs.readFile(join(directory, first.listFile), 'utf8'));
+    assert.deepEqual(firstRows[0], { code, name: '서울', status: '존재' });
+    reads.length = writes.length = 0;
     assert.equal((await run('2025-03-01')).status, 'unchanged');
     assert.deepEqual(calls.splice(0), [['2024-02-29', '2025-02-28'], ['2025-02-28', '2025-03-01']]);
     const stored = await fs.readFile(output, 'utf8');
-    assert.deepEqual(JSON.parse(stored), { lastSuccessfulDate: '2025-03-01', rows: first.rows });
+    assert.deepEqual(JSON.parse(stored), { ...first, lastSuccessfulDate: '2025-03-01' });
+    assert.deepEqual(reads, [output]);
+    assert.deepEqual(writes, ['metadata']);
+    reads.length = writes.length = 0;
     await run('2025-03-01');
     assert.deepEqual(calls.splice(0), [['2025-03-01', '2025-03-01']]);
+    assert.deepEqual(reads, [output]);
+    assert.deepEqual(writes, []);
     // 조회 검증과 변환 오류 후 파일 바이트가 유지되어야 한다.
     for (const value of ['start', 'end', 'status', 'count', 'zip', 'txt']) {
       fault = value;
@@ -90,14 +124,31 @@ async function verifyCollection() {
     // 변경 없음 경로에서도 교체가 실패하면 성공일을 보존한다.
     await assert.rejects(run('2025-03-02', { rename: async () => { throw Error('모의 저장 실패'); } }), /모의 저장 실패/);
     assert.equal(await fs.readFile(output, 'utf8'), stored);
-    assert.deepEqual(await fs.readdir(directory), ['latest.json']);
+    assert.deepEqual((await fs.readdir(directory)).sort(), ['latest.json', first.listFile].sort());
     // 양수 결과에서는 기존 행과 성공일을 함께 교체한다.
     count = 1;
     code = '0000000002';
     assert.equal((await run('2025-03-02')).status, 'updated');
     const latest = JSON.parse(await fs.readFile(output, 'utf8'));
     assert.equal(latest.lastSuccessfulDate, '2025-03-02');
-    assert.equal(latest.rows[0].code, code);
+    assert.equal(JSON.parse(await fs.readFile(join(directory, latest.listFile), 'utf8'))[0].code, code);
+    assert.deepEqual((await fs.readdir(directory)).sort(), ['latest.json', latest.listFile].sort());
+    // 기존 형식의 전환이 실패하면 이전 단일 파일이 그대로 남는다.
+    const legacy = JSON.stringify({ lastSuccessfulDate: '2025-03-02', rows: firstRows });
+    await fs.writeFile(output, legacy);
+    count = 0;
+    await assert.rejects(run('2025-03-02', { rename: async () => { throw Error('전환 실패'); } }), /전환 실패/);
+    assert.equal(await fs.readFile(output, 'utf8'), legacy);
+    assert.equal((await run('2025-03-02')).status, 'unchanged');
+    const migrated = JSON.parse(await fs.readFile(output, 'utf8'));
+    assert.equal(migrated.lastSuccessfulDate, '2025-03-02');
+    assert.deepEqual(JSON.parse(await fs.readFile(join(directory, migrated.listFile), 'utf8')), firstRows);
+    // 잠금이 있거나 참조 목록이 없으면 수집을 시작하지 않는다.
+    await fs.writeFile(output + '.lock', '');
+    await assert.rejects(run('2025-03-02'), /수집 잠금/);
+    await fs.unlink(output + '.lock');
+    await fs.unlink(join(directory, migrated.listFile));
+    await assert.rejects(run('2025-03-02'), { code: 'ENOENT' });
   } finally {
     // 이번 테스트가 생성한 파일만 정리한다.
     for (const name of await fs.readdir(directory)) await fs.unlink(join(directory, name));

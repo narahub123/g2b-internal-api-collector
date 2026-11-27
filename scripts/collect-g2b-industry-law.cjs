@@ -1,9 +1,6 @@
-// 로컬 저장본과 같은 디렉터리에서 임시 파일을 관리한다.
-const fs = require('node:fs/promises');
-const { dirname, basename, resolve, join } = require('node:path');
-// 실행 간 임시 파일 이름 충돌을 막는다.
-const { randomUUID } = require('node:crypto');
-// CLI 인자의 유효성을 확인한다.
+const { resolve } = require('node:path');
+// 두 수집 CLI에서 같은 잠금과 파일 교체를 사용한다.
+const { withCollectionStore } = require('./local-collection-store.cjs');
 const { parseArgs } = require('node:util');
 // 기존 워커와 같은 로더로 TypeScript 수집 모듈을 실행한다.
 require('./register-project-typescript.cjs');
@@ -14,96 +11,60 @@ const { collectIndustryLaw, reportId } = require('../src/shared/api/g2b/industry
 const defaultOutput = resolve(__dirname, '../.data/g2b/industry-law.json');
 
 /**
- * 현재 파일을 읽고 이 보고서에 적용된 스냅샷인지 검증한다.
- * @param {string} output 현재 JSON 저장 경로.
- * @returns {Promise<object|undefined>} 저장본 또는 파일이 없을 때 undefined.
- * @throws 읽을 수 없거나 잘못된 저장본일 때.
+ * 업종 보고서 식별자, 수정 기준과 집계를 검증한다.
+ * @param {object} data 저장된 메타데이터.
+ * @returns {boolean} 비교와 진단에 사용할 수 있는지 여부.
  */
-async function readSnapshot(output) {
-  // 파일 부재만 최초 수집으로 취급한다.
-  let content;
-  try {
-    content = await fs.readFile(output, 'utf8');
-  } catch (error) {
-    if (error.code === 'ENOENT') return undefined;
-    throw error;
-  }
-  // 파싱 오류에 포함될 수 있는 원본 문구는 출력하지 않는다.
-  let snapshot;
-  try {
-    snapshot = JSON.parse(content);
-  } catch {
-    throw new Error('기존 저장본 JSON 형식 오류');
-  }
-  if (snapshot?.reportId !== reportId || typeof snapshot.lastUpdate !== 'string' ||
-      !snapshot.lastUpdate.trim() || !Array.isArray(snapshot.rows)) {
-    throw new Error('기존 저장본의 보고서 정보 또는 행 목록 오류');
-  }
-  return snapshot;
+function validate(data) {
+  return data.reportId === reportId && typeof data.lastUpdate === 'string' && Boolean(data.lastUpdate.trim()) &&
+    Number.isSafeInteger(data.totalRows) && data.totalRows > 0 &&
+    Number.isSafeInteger(data.codes) && data.codes > 0 && data.codes <= data.totalRows;
 }
 
 /**
- * 한 출력에 대한 실행권을 확보하고 검증된 새 스냅샷만 교체한다.
- * @param {object} [options] 출력 경로, 요청 및 검증 설정.
- * @param {string} [options.output] 스냅샷을 관리할 파일 경로.
- * @param {typeof fetch} [options.fetchImpl] HTTP 요청 함수.
- * @param {Function} [options.onStep] 진행 결과를 전달할 함수.
- * @param {typeof fs.rename} [options.rename] 파일 교체 함수.
- * @returns {Promise<object>} 수집 상태, 버전 및 건수와 다운로드 크기.
- * @throws 실행 중복, 요청·변환 오류 또는 저장 실패.
+ * 단일 파일에 저장된 업종 목록에서 메타데이터를 계산한다.
+ * @param {object} snapshot 이전 형식의 저장본.
+ * @returns {object} 이전에 적용된 수정 기준과 집계.
+ * @throws 원본 형식이 올바르지 않은 경우.
  */
-async function runCollection({ output = defaultOutput, fetchImpl, onStep, rename = fs.rename } = {}) {
-  // 디렉터리를 실제 경로로 통일해 별칭 경로에서 중복 실행을 방지한다.
-  const path = resolve(output);
-  await fs.mkdir(dirname(path), { recursive: true });
-  const target = join(await fs.realpath(dirname(path)), basename(path));
-  // 출력마다 배타적으로 생성되는 파일을 실행권으로 사용한다.
-  const lockPath = target + '.lock';
-  let lock;
-  try {
-    lock = await fs.open(lockPath, 'wx');
-  } catch (error) {
-    if (error.code === 'EEXIST') throw new Error('같은 출력 경로에 수집 잠금이 있습니다: ' + lockPath);
-    throw error;
+function migrate(snapshot) {
+  // 전환 시 기존 행은 그대로 보존하고 출력에 필요한 코드만 집계한다.
+  const codes = new Set();
+  for (const row of snapshot.rows) {
+    if (typeof row?.industryCode !== 'string' || !row.industryCode.trim()) throw new Error('기존 업종코드 행 형식 오류');
+    codes.add(row.industryCode);
   }
-  // 실패 시 정리할 이 실행의 임시 파일 이름이다.
-  let temp;
-  try {
-    // 조회·비교·저장을 같은 실행권 아래에서 수행한다.
-    const current = await readSnapshot(target);
-    const collected = await collectIndustryLaw({
-      appliedLastUpdate: current?.lastUpdate,
-      fetchImpl,
-      onStep,
-    });
-    // unchanged에서는 기존 배열의 고유 코드 수만 요약에 사용한다.
-    const rows = collected.rows ?? current.rows;
-    const codes = new Set();
-    for (const row of rows) codes.add(row.industryCode);
-    const summary = {
+  const metadata = { reportId: snapshot.reportId, lastUpdate: snapshot.lastUpdate, totalRows: snapshot.rows.length, codes: codes.size };
+  if (!validate(metadata)) throw new Error('기존 업종 저장본 형식 오류');
+  return metadata;
+}
+
+/**
+ * 저장된 수정 기준으로 보고서를 조회하고 바뀐 목록만 저장한다.
+ * @param {object} [options] 출력 경로와 요청·저장 설정.
+ * @returns {Promise<object>} 실행 분기와 업종 집계.
+ * @throws 수집 또는 저장에 실패하거나 출력이 잠겼을 때.
+ */
+async function runCollection({ output = defaultOutput, fetchImpl, onStep, rename, io } = {}) {
+  return withCollectionStore({ output, validate, migrate, rename, io }, collect);
+
+  /**
+   * 기존 기준과 조회 버전을 비교해 변경된 자료만 적용한다.
+   * @param {object|undefined} current 기존 메타데이터.
+   * @param {Function} save 새 메타데이터와 행을 적용하는 함수.
+   * @returns {Promise<object>} 적용 분기와 진단 값.
+   */
+  async function collect(current, save) {
+    const collected = await collectIndustryLaw({ appliedLastUpdate: current?.lastUpdate, fetchImpl, onStep });
+    // 동일 버전에서는 기존 집계만 사용하며 저장을 생략한다.
+    const metadata = collected.rows
+      ? { reportId, lastUpdate: collected.lastUpdate, totalRows: collected.totalRows, codes: collected.codes }
+      : current;
+    if (collected.rows) await save(metadata, collected.rows);
+    return {
       status: collected.rows ? (current ? 'updated' : 'created') : 'unchanged',
-      lastUpdate: collected.lastUpdate,
-      totalRows: collected.totalRows,
-      codes: codes.size,
-      bytes: collected.bytes,
+      lastUpdate: metadata.lastUpdate, totalRows: metadata.totalRows, codes: metadata.codes, bytes: collected.bytes,
     };
-    if (collected.rows) {
-      // 버전과 데이터를 하나의 파일로 준비한 뒤 같은 디렉터리에서 교체한다.
-      temp = target + '.' + randomUUID() + '.tmp';
-      const snapshot = { reportId, lastUpdate: collected.lastUpdate, rows };
-      await fs.writeFile(temp, JSON.stringify(snapshot, null, 2) + '\n', { flag: 'wx', flush: true });
-      await rename(temp, target);
-      temp = undefined;
-    }
-    return summary;
-  } finally {
-    // 임시 저장 실패가 발생해도 실행권 해제를 시도한다.
-    try {
-      if (temp) await fs.rm(temp, { force: true });
-    } finally {
-      await lock.close();
-      await fs.unlink(lockPath);
-    }
   }
 }
 
