@@ -21,7 +21,22 @@ const stages = { 1: 'SSO', 2: '검색조건 XML', 3: '보고서 조회', 4: 'CSV
 /**
  * CSV의 11개 항목을 문자열 그대로 보존하는 한 행이다.
  */
-type IndustryLawRow = Record<(typeof columns)[number], string>;
+export type IndustryLawRow = Record<(typeof columns)[number], string>;
+
+/**
+ * 저장된 업종 행이 변환 결과와 같은 문자열 필드를 가지는지 확인한다.
+ * @param value 저장 목록에서 읽은 행.
+ * @returns 업종코드와 전체 필드가 유효한지 여부.
+ */
+export function isIndustryLawRow(value: unknown): value is IndustryLawRow {
+  // 열 목록을 변환기와 공유해 저장본 검증 기준을 일치시킨다.
+  const row = value as Partial<IndustryLawRow> | null;
+  if (typeof row?.industryCode !== 'string' || !row.industryCode.trim()) return false;
+  for (const column of columns) {
+    if (typeof row[column] !== 'string') return false;
+  }
+  return true;
+}
 
 /**
  * MicroStrategy 폼이 후속 요청에 전달하는 상태다.

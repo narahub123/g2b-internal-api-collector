@@ -7,7 +7,8 @@ const fs = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 // CLI와 같은 수집 및 저장 진입점을 검사한다.
-const { runCollection } = require('../scripts/collect-g2b-industry-law.cjs');
+require('../scripts/register-project-typescript.cjs');
+const { runIndustryLawCollection: runCollection } = require('../src/server/collections/industry-law.ts');
 
 /**
  * 쿠키·폼 전달과 CSV 왕복, 다운로드 생략, 실패 복구를 검증한다.

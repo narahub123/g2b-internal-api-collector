@@ -5,7 +5,8 @@ const fs = require('node:fs/promises');
 const { join } = require('node:path');
 const { tmpdir } = require('node:os');
 const Zip = require('adm-zip');
-const { runCollection } = require('../scripts/collect-legal-districts.cjs');
+require('../scripts/register-project-typescript.cjs');
+const { runLegalDistrictCollection: runCollection } = require('../src/server/collections/legal-districts.ts');
 
 /**
  * 최초 저장과 날짜 갱신, 기간 경계, 실패 복구를 검증한다.
