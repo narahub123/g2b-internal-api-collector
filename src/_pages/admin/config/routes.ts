@@ -3,6 +3,9 @@ import { revisionRoute, type NumberWithRevision } from "@/shared/lib/g2b/revisio
 /** 관리자 대시보드와 나라장터 하위 경로의 기준 주소. */
 export const ADMIN_HOME_PATH = "/admin";
 export const ADMIN_G2B_PATH = `${ADMIN_HOME_PATH}/g2b`;
+// 관리 기능과 사전 목록 화면의 기준 경로다.
+export const ADMIN_MANAGE_PATH = `${ADMIN_HOME_PATH}/manage`;
+export const ADMIN_DICTIONARIES_PATH = `${ADMIN_MANAGE_PATH}/dictionaries`;
 export const NOTICE_QUEUE_PATH = `${ADMIN_G2B_PATH}/notice-queue`;
 export const NOTICE_LIST_PATH = `${ADMIN_G2B_PATH}/notices`;
 
