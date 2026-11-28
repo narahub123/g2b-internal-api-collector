@@ -16,7 +16,7 @@ export type CollectionStore<M, R> = {
 /** 메타데이터와 선택적 새 목록을 함께 적용하는 함수다. */
 type SaveCollection<M, R> = (metadata: M, rows?: R[]) => Promise<void>;
 /** 현재 메타데이터를 사용해 수집 결과를 반환하는 함수다. */
-type CollectionRunner<M, R, T> = (current: M | undefined, save: SaveCollection<M, R>) => Promise<T>;
+export type CollectionRunner<M, R, T> = (current: M | undefined, save: SaveCollection<M, R>, signal?: AbortSignal) => Promise<T>;
 
 /** 로컬 저장 경로와 테스트용 파일 연산 설정이다. */
 export type LocalCollectionOptions = {
@@ -29,7 +29,7 @@ export type LocalCollectionOptions = {
 };
 
 /** 저장 방식의 세부 정보와 업무 자료를 연결하는 로컬 형식 검증이다. */
-type CollectionFormat<M, R> = {
+export type CollectionFormat<M, R> = {
   /** 저장 원본을 검증하고 공개할 메타데이터 필드만 반환한다. */
   readMetadata: (data: Record<string, unknown>) => M;
   /** 이전 저장본에서 메타데이터와 목록을 복원한다. */
@@ -55,12 +55,20 @@ type StoredMetadata<M> = {
  */
 export function createLocalCollectionStore<M extends Record<string, unknown>, R>(
   options: LocalCollectionOptions & { output: string; format: CollectionFormat<M, R> },
-): CollectionStore<M, R> {
+): CollectionStore<M, R> & { getSnapshot(): Promise<{ metadata: M; rows?: R[] } | undefined> } {
   // 생성 단계에서는 디렉터리나 파일을 만들지 않는다.
   const { output, io = fs, rename = io.rename, format: config } = options;
   const path = resolve(output);
   const prefix = basename(path) + '.rows-';
-  return { getMetadata, getRows, run: withCollectionStore };
+  return { getMetadata, getRows, getSnapshot, run: withCollectionStore };
+
+  /**
+   * 이전 명령에 같은 세대의 메타데이터와 행을 제공한다.
+   * @returns 존재하는 로컬 스냅샷 또는 미수집 상태.
+   */
+  function getSnapshot() {
+    return readCurrent(true);
+  }
 
   /**
    * 이 출력에 속하는 세대 파일명인지 검사한다.

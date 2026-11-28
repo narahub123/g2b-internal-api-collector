@@ -30,6 +30,20 @@
 
 Node.js 24 이상과 npm으로 실행합니다. Turso Cloud의 SQLite(libSQL) DB를 생성하고 DB URL과 읽기·쓰기 토큰을 `.env.local`의 `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`에 설정합니다. 최초 실행 전에 `npm run db:migrate`를 실행합니다. Next.js 서버에서 `selectItemAnncMngV.do`를 HTTP POST로 호출해 물품 공고 상세를 수집합니다.
 
+### 업종 및 법정동 사전 저장소
+
+관리자 사전 화면과 두 로컬 수집 명령은 연결된 Private Vercel Blob을 사용합니다. 로컬 CLI는 프로젝트 루트의 `.env.local`에서 연결 설정을 읽습니다. 기본 접두사는 `dictionaries`이며, 검증 환경은 선택 변수 `DICTIONARY_BLOB_PREFIX`에 별도 접두사를 설정합니다. 같은 사전 데이터를 공유할 환경에는 같은 저장소와 접두사를 사용합니다.
+
+```powershell
+node scripts/migrate-dictionaries-to-blob.cjs
+node scripts/collect-g2b-industry-law.cjs
+node scripts/collect-legal-districts.cjs
+```
+
+이전 명령은 Blob에 해당 사전이 비어 있을 때만 기존 로컬 자료를 옮기고 다시 읽어 대조합니다. 원본 위치가 기본값과 다르면 이전 명령에서 `--industry` 또는 `--districts`로 지정합니다. 전환 후 수집과 조회는 Blob에서 수행합니다. 이전 결과를 검증한 뒤 로컬 사전 JSON을 별도로 정리할 수 있습니다.
+
+이전 세대의 정리 지연이 기록되면 해당 접두사의 수집이 끝난 뒤 현재 `metadata.json`의 `listFile`을 확인합니다. 정리 작업에서는 해당 사전의 `rows/` 아래에서 현재 참조가 없는 세대만 대상으로 삼습니다.
+
 ### Google 회원가입·로그인 개발 검증
 
 검증용 DB에 마이그레이션 19를 적용하고 `.env.local`에 `AUTH_SECRET`, `AUTH_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`을 설정합니다. `AUTH_URL`은 브라우저에서 여는 서비스 origin입니다. Google Cloud의 웹 애플리케이션 OAuth 클라이언트에 `AUTH_URL`과 `/auth/google/callback`을 결합한 콜백 URL을 등록합니다. 로컬 예시는 `http://127.0.0.1:3000/auth/google/callback`입니다.

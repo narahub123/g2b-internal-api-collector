@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { checkAdminAction } from "@/server/auth/business-access";
+import { CollectionBusyError } from "@/server/collections/blob-collection-store";
 import { ADMIN_DICTIONARIES_PATH, ADMIN_MANAGE_PATH } from "../config/routes";
 import { dictionaries, type DictionaryCollectionResult } from "./dictionaries";
 import { dictionaryServer, isDictionaryId } from "./dictionary-server";
@@ -29,7 +30,7 @@ export async function collectDictionaries(target: unknown) {
       results.push({ id, status });
       refreshedPaths.push(href);
     } catch (error) {
-      const busy = error instanceof Error && error.message.startsWith("같은 출력 경로에 수집 잠금이 있습니다:");
+      const busy = error instanceof CollectionBusyError;
       if (!busy) console.error("[사전 수집]", id, error);
       results.push({ id, status: busy ? "busy" : "failed" });
     }

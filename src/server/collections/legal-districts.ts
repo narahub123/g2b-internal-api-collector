@@ -1,5 +1,7 @@
 // 원본 수집과 저장을 연결하는 Node.js 서버 모듈이다.
-import { resolve } from 'node:path';
+import { createBlobCollectionStore } from './blob-collection-store';
+import { collectionFetch } from './collection-fetch';
+import { importLocalCollection } from './import-local-collection';
 import { collectLegalDistricts, isDate, koreanDate, type LegalDistrict } from '../../shared/api/code/legal-districts-collection';
 import { createLocalCollectionStore, type CollectionStore, type LocalCollectionOptions } from './local-collection-store';
 
@@ -19,7 +21,7 @@ export type LegalDistrictMetadata = {
 };
 
 /** 로컬 경로 또는 교체 가능한 저장 구현이다. */
-export type LegalDistrictStorageOptions = LocalCollectionOptions & {
+export type LegalDistrictStorageOptions = {
   /** 기본은 로컬 구현이며 별도 저장소를 사용할 때만 지정한다. */
   store?: CollectionStore<LegalDistrictMetadata, LegalDistrict>;
 };
@@ -101,8 +103,8 @@ export async function runLegalDistrictCollection(options: LegalDistrictCollectio
    * @param {Function} save 메타데이터와 선택적인 목록을 적용하는 함수.
    * @returns {Promise<object>} 실행 결과와 출력용 건수.
    */
-  async function collect(previous: LegalDistrictMetadata | undefined, save: (metadata: LegalDistrictMetadata, rows?: LegalDistrict[]) => Promise<void>) {
-    const downloaded = await collectLegalDistricts({ previousDate: previous?.lastSuccessfulDate, requestDate, fetchImpl, onProgress });
+  async function collect(previous: LegalDistrictMetadata | undefined, save: (metadata: LegalDistrictMetadata, rows?: LegalDistrict[]) => Promise<void>, signal?: AbortSignal) {
+    const downloaded = await collectLegalDistricts({ previousDate: previous?.lastSuccessfulDate, requestDate, fetchImpl: collectionFetch(fetchImpl, signal), onProgress });
     // 다운로드를 생략하면 기존 목록을 열지 않고 집계값도 재사용한다.
     const totals = downloaded ?? previous;
     if (!totals) throw new Error('법정동 수집 결과 누락');
@@ -121,9 +123,19 @@ export async function runLegalDistrictCollection(options: LegalDistrictCollectio
  * @returns 이 데이터셋의 저장 계약.
  */
 function getStore(options: LegalDistrictStorageOptions): CollectionStore<LegalDistrictMetadata, LegalDistrict> {
-  return options.store ?? createLocalCollectionStore({
+  if (options.store) return options.store;
+  return createBlobCollectionStore('legal-districts', { readMetadata, readRows });
+}
+
+/**
+ * 이전 작업과 로컬 저장 계약 테스트에만 사용할 읽기 원본을 구성한다.
+ * @param options 로컬 경로와 선택적 파일 연산.
+ * @returns 로컬 파일 저장소.
+ */
+export function createLegalDistrictLocalSource(options: LocalCollectionOptions) {
+  return createLocalCollectionStore({
     ...options,
-    output: options.output ?? resolve(legalDistrictOutput),
+    output: options.output ?? legalDistrictOutput,
     format: { readMetadata, migrate, readRows },
   });
 }
@@ -170,4 +182,14 @@ export function getLegalDistrictMetadata(options: LegalDistrictStorageOptions = 
  */
 export function getLegalDistrictRows(options: LegalDistrictStorageOptions = {}): Promise<LegalDistrict[] | undefined> {
   return getStore(options).getRows();
+}
+
+/**
+ * 로컬 자료를 최초 한 번 Blob에 적용하고 적용한 자료를 원본과 대조한다.
+ * @param output 기존 로컬 저장본의 경로이며 생략하면 프로젝트 기본 경로를 사용한다.
+ * @returns 완료 여부와 이전에 적용한 자료가 있을 경우의 건수.
+ */
+export async function migrateLegalDistrictToBlob(output = legalDistrictOutput) {
+  const store = createBlobCollectionStore('legal-districts', { readMetadata, readRows });
+  return importLocalCollection(store, () => createLegalDistrictLocalSource({ output }).getSnapshot());
 }

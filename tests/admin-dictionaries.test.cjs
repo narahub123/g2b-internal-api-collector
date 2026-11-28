@@ -50,13 +50,14 @@ async function verifyActions() {
   require.cache[authModule] = { exports: { checkAdminAction: async () => denied ? { error: "권한 없음" } : null } };
   require.cache[nextCache] = { exports: { revalidatePath: (path) => revalidated.push(path) } };
   const { dictionaryServer } = require("../src/_pages/admin/manage/dictionary-server.ts");
+  const { CollectionBusyError } = require("../src/server/collections/blob-collection-store.ts");
   const industry = dictionaryServer["industry-law"].collect;
   const districts = dictionaryServer["legal-districts"].collect;
   try {
     // 업종이 잠금으로 중단되어도 법정동은 정상적으로 이어서 실행된다.
     dictionaryServer["industry-law"].collect = async () => {
       calls.push("industry-law");
-      throw new Error("같은 출력 경로에 수집 잠금이 있습니다: 테스트");
+      throw new CollectionBusyError();
     };
     dictionaryServer["legal-districts"].collect = async () => {
       calls.push("legal-districts");

@@ -1,11 +1,11 @@
 // 실행 인자와 CLI 기준 기본 출력 경로를 처리한다.
 const { resolve } = require('node:path');
 const { parseArgs } = require('node:util');
+// Next.js 개발 서버와 같은 프로젝트 환경변수를 불러온다.
+require('@next/env').loadEnvConfig(resolve(__dirname, '..'), true);
 // 기존 워커와 같은 TypeScript 로더로 서버 수집 함수를 실행한다.
 require('./register-project-typescript.cjs');
-const { runIndustryLawCollection, industryLawOutput } = require('../src/server/collections/industry-law.ts');
-// CLI는 명령 실행 디렉터리와 관계없이 프로젝트의 기본 경로를 사용한다.
-const defaultOutput = resolve(__dirname, '..', industryLawOutput);
+const { runIndustryLawCollection } = require('../src/server/collections/industry-law.ts');
 
 /**
  * 단계 번호, 결과와 소요 시간만 공개한다.
@@ -26,9 +26,9 @@ async function main() {
   // 전체 시간을 성공과 실패 모두에 표시한다.
   const start = performance.now();
   try {
-    // 새 파일을 쓰는 실측과 기존 파일 재수집을 같은 명령으로 검증한다.
-    const { values } = parseArgs({ options: { output: { type: 'string' } } });
-    const summary = await runIndustryLawCollection({ output: values.output ?? defaultOutput, onStep: logStep });
+    // 정상 수집은 연결한 Blob의 현재 자료를 사용한다.
+    parseArgs();
+    const summary = await runIndustryLawCollection({ onStep: logStep });
     const labels = { created: '최초 저장', updated: '갱신', unchanged: '변경 없음' };
     console.log(`${labels[summary.status]} | lastUpdate ${summary.lastUpdate} | ${summary.totalRows}행 | 업종코드 ${summary.codes}개 | 다운로드 ${summary.bytes}바이트`);
   } catch (error) {

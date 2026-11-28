@@ -8,7 +8,16 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 // CLI와 같은 수집 및 저장 진입점을 검사한다.
 require('../scripts/register-project-typescript.cjs');
-const { runIndustryLawCollection: runCollection } = require('../src/server/collections/industry-law.ts');
+const { runIndustryLawCollection, createIndustryLawLocalSource } = require('../src/server/collections/industry-law.ts');
+
+/**
+ * 공용 수집기에 명시적인 로컬 테스트 저장소를 주입한다.
+ * @param {object} options 기존 파일 및 모의 요청 설정.
+ * @returns {Promise<object>} 공용 수집 결과.
+ */
+function runCollection({ output, io, rename, ...options }) {
+  return runIndustryLawCollection({ ...options, store: createIndustryLawLocalSource({ output, io, rename }) });
+}
 
 /**
  * 쿠키·폼 전달과 CSV 왕복, 다운로드 생략, 실패 복구를 검증한다.

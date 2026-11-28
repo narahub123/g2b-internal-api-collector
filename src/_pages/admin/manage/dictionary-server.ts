@@ -1,4 +1,5 @@
 import { getIndustryLawMetadata, getIndustryLawRows, runIndustryLawCollection } from "@/server/collections/industry-law";
+import { cache } from "react";
 import { getLegalDistrictMetadata, getLegalDistrictRows, runLegalDistrictCollection } from "@/server/collections/legal-districts";
 import { dictionaries, type DictionaryId } from "./dictionaries";
 
@@ -12,9 +13,9 @@ export const dictionaryServer = {
  * 사전별 메타데이터를 개별적으로 읽어 정상 카드가 다른 카드의 장애에 영향을 받지 않게 한다.
  * @returns 카드와 해당 사전의 조회 상태, 건수 및 보조 표시값.
  */
-export function getDictionaryCards() {
+export const getDictionaryCards = cache(async function getDictionaryCards() {
   return Promise.all(dictionaries.map(readCard));
-}
+});
 
 /**
  * 사전 하나의 카드에 필요한 메타데이터만 읽는다.

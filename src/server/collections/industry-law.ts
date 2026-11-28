@@ -1,5 +1,7 @@
 // 원본 수집과 저장을 연결하는 Node.js 서버 모듈이다.
-import { resolve } from 'node:path';
+import { createBlobCollectionStore } from './blob-collection-store';
+import { collectionFetch } from './collection-fetch';
+import { importLocalCollection } from './import-local-collection';
 import { collectIndustryLaw, isIndustryLawRow, reportId, type IndustryLawRow } from '../../shared/api/g2b/industry-law-collection';
 import { createLocalCollectionStore, type CollectionStore, type LocalCollectionOptions } from './local-collection-store';
 
@@ -19,7 +21,7 @@ export type IndustryLawMetadata = {
 };
 
 /** 로컬 경로 또는 교체 가능한 저장 구현이다. */
-export type IndustryLawStorageOptions = LocalCollectionOptions & {
+export type IndustryLawStorageOptions = {
   /** 기본은 로컬 구현이며 별도 저장소를 사용할 때만 지정한다. */
   store?: CollectionStore<IndustryLawMetadata, IndustryLawRow>;
 };
@@ -80,8 +82,8 @@ export async function runIndustryLawCollection(options: IndustryLawCollectionOpt
    * @param {Function} save 새 메타데이터와 행을 적용하는 함수.
    * @returns {Promise<object>} 적용 분기와 진단 값.
    */
-  async function collect(current: IndustryLawMetadata | undefined, save: (metadata: IndustryLawMetadata, rows?: IndustryLawRow[]) => Promise<void>) {
-    const collected = await collectIndustryLaw({ appliedLastUpdate: current?.lastUpdate, fetchImpl, onStep });
+  async function collect(current: IndustryLawMetadata | undefined, save: (metadata: IndustryLawMetadata, rows?: IndustryLawRow[]) => Promise<void>, signal?: AbortSignal) {
+    const collected = await collectIndustryLaw({ appliedLastUpdate: current?.lastUpdate, fetchImpl: collectionFetch(fetchImpl, signal), onStep });
     // 동일 버전에서는 기존 집계만 사용하며 저장을 생략한다.
     const metadata = collected.rows
       ? { reportId, lastUpdate: collected.lastUpdate, totalRows: collected.totalRows, codes: collected.codes }
@@ -102,9 +104,19 @@ export async function runIndustryLawCollection(options: IndustryLawCollectionOpt
  * @returns 이 데이터셋의 저장 계약.
  */
 function getStore(options: IndustryLawStorageOptions): CollectionStore<IndustryLawMetadata, IndustryLawRow> {
-  return options.store ?? createLocalCollectionStore({
+  if (options.store) return options.store;
+  return createBlobCollectionStore('industry-law', { readMetadata, readRows });
+}
+
+/**
+ * 이전 작업과 로컬 저장 계약 테스트에만 사용할 읽기 원본을 구성한다.
+ * @param options 로컬 경로와 선택적 파일 연산.
+ * @returns 로컬 파일 저장소.
+ */
+export function createIndustryLawLocalSource(options: LocalCollectionOptions) {
+  return createLocalCollectionStore({
     ...options,
-    output: options.output ?? resolve(industryLawOutput),
+    output: options.output ?? industryLawOutput,
     format: { readMetadata, migrate, readRows },
   });
 }
@@ -151,4 +163,14 @@ export function getIndustryLawMetadata(options: IndustryLawStorageOptions = {}):
  */
 export function getIndustryLawRows(options: IndustryLawStorageOptions = {}): Promise<IndustryLawRow[] | undefined> {
   return getStore(options).getRows();
+}
+
+/**
+ * 로컬 자료를 최초 한 번 Blob에 적용하고 적용한 자료를 원본과 대조한다.
+ * @param output 기존 로컬 저장본의 경로이며 생략하면 프로젝트 기본 경로를 사용한다.
+ * @returns 완료 여부와 이전에 적용한 자료가 있을 경우의 건수.
+ */
+export async function migrateIndustryLawToBlob(output = industryLawOutput) {
+  const store = createBlobCollectionStore('industry-law', { readMetadata, readRows });
+  return importLocalCollection(store, () => createIndustryLawLocalSource({ output }).getSnapshot());
 }

@@ -1,11 +1,11 @@
 // 실행 인자와 CLI 기준 기본 출력 경로를 처리한다.
 const { resolve } = require('node:path');
 const { parseArgs } = require('node:util');
+// Next.js 개발 서버와 같은 프로젝트 환경변수를 불러온다.
+require('@next/env').loadEnvConfig(resolve(__dirname, '..'), true);
 // 기존 워커와 같은 TypeScript 로더로 서버 수집 함수를 실행한다.
 require('./register-project-typescript.cjs');
-const { runLegalDistrictCollection, legalDistrictOutput } = require('../src/server/collections/legal-districts.ts');
-// CLI는 명령 실행 디렉터리와 관계없이 프로젝트의 기본 경로를 사용한다.
-const defaultOutput = resolve(__dirname, '..', legalDistrictOutput);
+const { runLegalDistrictCollection } = require('../src/server/collections/legal-districts.ts');
 
 /**
  * 검증된 조회 조건과 다운로드 크기를 출력한다.
@@ -28,8 +28,8 @@ async function main() {
   // 성공과 실패 모두 소요 시간을 기록한다.
   const started = performance.now();
   try {
-    const { values } = parseArgs({ options: { output: { type: 'string' } } });
-    const summary = await runLegalDistrictCollection({ output: values.output ?? defaultOutput, onProgress: logProgress });
+    parseArgs();
+    const summary = await runLegalDistrictCollection({ onProgress: logProgress });
     const labels = { created: '최초 저장', updated: '전체자료 갱신', unchanged: '변경 없음, 다운로드 생략' };
     console.log(`${labels[summary.status]} | ${summary.requestDate} | 전체 ${summary.total}건 | 존재 ${summary.active}건 | 폐지 ${summary.abolished}건`);
   } catch (error) {

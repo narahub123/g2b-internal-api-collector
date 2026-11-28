@@ -6,7 +6,16 @@ const { join } = require('node:path');
 const { tmpdir } = require('node:os');
 const Zip = require('adm-zip');
 require('../scripts/register-project-typescript.cjs');
-const { runLegalDistrictCollection: runCollection } = require('../src/server/collections/legal-districts.ts');
+const { runLegalDistrictCollection, createLegalDistrictLocalSource } = require('../src/server/collections/legal-districts.ts');
+
+/**
+ * 공용 수집기에 명시적인 로컬 테스트 저장소를 주입한다.
+ * @param {object} options 기존 파일 및 모의 요청 설정.
+ * @returns {Promise<object>} 공용 수집 결과.
+ */
+function runCollection({ output, io, rename, ...options }) {
+  return runLegalDistrictCollection({ ...options, store: createLegalDistrictLocalSource({ output, io, rename }) });
+}
 
 /**
  * 최초 저장과 날짜 갱신, 기간 경계, 실패 복구를 검증한다.
