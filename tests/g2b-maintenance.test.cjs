@@ -31,6 +31,26 @@ const aliasHook = registerHooks({
 // Next.js 요청 컨텍스트 없이 기존 업무 및 화면 동작을 검증한다.
 require("./mock-business-session.cjs").mockBusinessSession();
 
+// 관심 기능이 상세 화면에서 직접 사용하는 사용자 확인 모듈의 캐시 키를 찾는다.
+const currentUserFilename = require.resolve('../src/server/auth/current-user.ts');
+
+/**
+ * Next.js 요청 없이 상세 화면을 렌더링할 때 현재 사용자 상태를 제공한다.
+ * @returns 요청 세션이 없는 상태로 완료되는 Promise. 관심 상태 DB 조회를 건너뛴다.
+ */
+async function verifyCurrentUserWithoutRequest() {
+  // 상세 테스트는 수집 결과와 링크를 검증하므로 사용자별 관심 상태는 조회하지 않는다.
+  return { status: 'unauthenticated' };
+}
+
+// 상세 UI를 불러오기 전에 사용자 확인 모듈을 대체해 실제 세션 로딩을 막는다.
+require.cache[currentUserFilename] = {
+  id: currentUserFilename,
+  filename: currentUserFilename,
+  loaded: true,
+  exports: { verifyCurrentUser: verifyCurrentUserWithoutRequest },
+};
+
 const { createClient } = require('@libsql/client');
 const { G2bDatabase } = require('../src/server/g2b/repository/database');
 const { migrateG2bDatabase } = require('../src/server/g2b/repository/migrations');
