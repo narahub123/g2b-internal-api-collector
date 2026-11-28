@@ -32,6 +32,24 @@ const blobTimeout = 15_000;
 const generation = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/;
 // 프로세스당 각 사전에 최근 한 세대만 유지하고 검증에 실패한 읽기는 재사용하지 않는다.
 const rowsCache = new Map<string, { listFile: string; promise: Promise<unknown[]> }>();
+// 표시용 조회에만 적용하는 사전별 캐시 수명이다.
+const metadataTtl = 30_000;
+
+/** 화면 요청이 공유하는 진행 중 조회 또는 유효기간이 있는 표시값이다. */
+type MetadataCacheEntry =
+  | {
+      /** 중복 요청을 합칠 진행 중 조회. */
+      pending: Promise<unknown>;
+    }
+  | {
+      /** 검증된 메타데이터 또는 미수집 상태. */
+      metadata: unknown;
+      /** 성공 처리 후 계산한 만료 시각. */
+      expiresAt: number;
+    };
+
+// 목록 본문은 이 캐시에 저장하지 않는다.
+const metadataCache = new Map<string, MetadataCacheEntry>();
 
 /**
  * 관리 화면과 CLI가 공유하는 Private Blob 저장소를 구성한다.
@@ -99,9 +117,46 @@ export function createBlobCollectionStore<M, R>(
       commitId: typeof data.commitId === 'string' ? data.commitId : undefined };
   }
 
-  /** 목록을 읽지 않고 최신 업무 메타데이터만 반환한다. */
-  async function getMetadata() {
+  /**
+   * 목록을 열지 않고 유효한 표시 메타데이터를 반환한다.
+   * @returns 검증한 메타데이터 또는 미수집 상태.
+   * @throws Blob 조회나 메타데이터 검증에 실패한 경우.
+   */
+  async function getMetadata(): Promise<M | undefined> {
+    // 같은 사전의 진행 중 조회는 합치고 성공한 값만 유효기간 동안 사용한다.
+    const cached = metadataCache.get(cacheKey);
+    if (cached) {
+      if ('pending' in cached) return cached.pending as Promise<M | undefined>;
+      if (cached.expiresAt > Date.now()) return cached.metadata as M | undefined;
+    }
+
+    // 항목의 객체 참조를 비교해 수집 전 조회가 새 상태를 덮어쓰지 못하게 한다.
+    const entry = { pending: loadMetadata() };
+    metadataCache.set(cacheKey, entry);
+    try {
+      const metadata = await entry.pending;
+      if (metadataCache.get(cacheKey) === entry) rememberMetadata(metadata);
+      return metadata;
+    } catch (error) {
+      if (metadataCache.get(cacheKey) === entry) metadataCache.delete(cacheKey);
+      throw error;
+    }
+  }
+
+  /**
+   * 표시값이 없거나 만료됐을 때 최신 메타데이터를 읽는다.
+   * @returns 적용된 업무 메타데이터 또는 미수집 상태.
+   */
+  async function loadMetadata() {
     return (await readManifest())?.metadata;
+  }
+
+  /**
+   * 성공한 조회의 표시값과 새 만료 시각을 기록한다.
+   * @param metadata 업무 메타데이터 또는 확인된 미수집 상태.
+   */
+  function rememberMetadata(metadata: M | undefined) {
+    metadataCache.set(cacheKey, { metadata, expiresAt: Date.now() + metadataTtl });
   }
 
   /** 적용 목록이 교체 도중 제거된 경우 새 참조로 한 번 다시 읽는다. */
@@ -214,7 +269,11 @@ export function createBlobCollectionStore<M, R>(
     let current: Manifest<M> | undefined;
     try {
       current = await readManifest(signal);
-      return await collect(current?.metadata, save, signal);
+      // 저장이 없었어도 성공하면 원본 확인에 사용한 최신 기준으로 표시값을 갱신한다.
+      const initial = current;
+      const result = await collect(current?.metadata, save, signal);
+      if (current === initial) rememberMetadata(current?.metadata);
+      return result;
     } finally {
       await cleanup(leasePath, leaseEtag);
     }
@@ -264,6 +323,8 @@ export function createBlobCollectionStore<M, R>(
         etag = latest.etag;
       }
       current = { listFile, metadata, etag, commitId };
+      // 적용이 확인된 뒤에만 다음 표시 조회가 최신 Blob을 읽도록 한다.
+      metadataCache.delete(cacheKey);
       if (previous && previous.listFile !== listFile) await cleanup(previous.listFile);
     }
 

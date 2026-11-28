@@ -29,6 +29,8 @@ function setup() {
       reads.push([path, options.useCache]);
       if (fault.beforeRead) fault.beforeRead(path);
       const stored = objects.get(path);
+      // 읽은 버전이 이후 갱신보다 늦게 도착하는 상황을 재현한다.
+      if (fault.afterRead) await fault.afterRead(path);
       return stored ? { statusCode: 200, stream: new Response(stored.body).body, blob: stored } : null;
     },
     /**
@@ -105,9 +107,80 @@ async function verifyStore() {
   // 커밋 요청의 응답이 유실돼도 적용본 확인 후 정상 결과를 반환한다.
   fault.lostResponse = true;
   await store.run(async (_, save) => save({ version: 3 }, ['second']));
+  assert.deepEqual(await store.getMetadata(), { version: 3 });
   reads.length = 0;
   assert.deepEqual(await Promise.all([store.getRows(), store.getRows()]), [['second'], ['second']]);
   assert.equal(reads.filter(([path, cache]) => path.includes('/rows/') && cache).length, 1);
+}
+
+/**
+ * 사전 메타데이터의 수명, 중복 조회 및 실패 재시도를 검증한다.
+ * @param {import('node:test').TestContext} env 시계를 수동으로 이동시킬 테스트 환경.
+ */
+async function verifyMetadataCache(env) {
+  // 실제 대기 시간 없이 만료 전후의 조회 호출 수를 비교한다.
+  env.mock.timers.enable({ apis: ['Date'], now: 0 });
+  const { store, objects, reads, fault, base } = setup();
+  const path = base + '/metadata.json';
+  assert.deepEqual(await Promise.all([store.getMetadata(), store.getMetadata()]), [undefined, undefined]);
+  assert.equal(reads.length, 1);
+  assert.equal(await store.getMetadata(), undefined);
+  assert.equal(reads.length, 1);
+
+  // 최초 저장 이후 다른 인스턴스가 바꾼 값은 만료 뒤 조회에서 나타난다.
+  await store.run(async (_, save) => save({ version: 1 }, ['first']));
+  const manifest = JSON.parse(objects.get(path).body);
+  assert.deepEqual(await store.getMetadata(), { version: 1 });
+  objects.set(path, { body: JSON.stringify({ ...manifest, version: 2 }), etag: 'external' });
+  reads.length = 0;
+  env.mock.timers.tick(29_999);
+  assert.deepEqual(await store.getMetadata(), { version: 1 });
+  assert.equal(reads.length, 0);
+  env.mock.timers.tick(1);
+  fault.beforeRead = () => { throw new Error('모의 읽기 실패'); };
+  await assert.rejects(store.getMetadata(), /모의 읽기 실패/);
+  fault.beforeRead = undefined;
+  assert.deepEqual(await Promise.all([store.getMetadata(), store.getMetadata()]), [{ version: 2 }, { version: 2 }]);
+  assert.deepEqual(reads, [[path, false], [path, false]]);
+
+  // 화면 값이 남아 있어도 상세의 세대 확인과 수집은 원본 메타데이터를 다시 읽는다.
+  const next = base + '/rows/' + randomUUID() + '.json';
+  objects.set(next, { body: '["latest"]', etag: 'rows-next' });
+  objects.set(path, { body: JSON.stringify({ ...manifest, listFile: next, version: 3 }), etag: 'external-next' });
+  assert.deepEqual(await store.getRows(), ['latest']);
+  await assert.rejects(store.run(async () => { throw new Error('모의 수집 실패'); }), /모의 수집 실패/);
+  assert.deepEqual(await store.getMetadata(), { version: 2 });
+  await store.run(async (current) => assert.deepEqual(current, { version: 3 }));
+  reads.length = 0;
+  assert.deepEqual(await store.getMetadata(), { version: 3 });
+  assert.equal(reads.length, 0);
+
+  // 성공일만 저장하는 경로에서도 표시용 캐시가 무효화된다.
+  await store.run(async (_, save) => save({ version: 4 }));
+  reads.length = 0;
+  assert.deepEqual(await store.getMetadata(), { version: 4 });
+  assert.deepEqual(reads, [[path, false]]);
+}
+
+/** 이전 표시 응답이 수집 후 도착해도 새 캐시를 덮어쓰지 않는지 확인한다. */
+async function verifyMetadataRace() {
+  const { store, reads, fault, base } = setup();
+  const path = base + '/metadata.json';
+  const held = Promise.withResolvers();
+  // 첫 조회만 이전 미수집 상태를 확보한 채로 대기한다.
+  fault.afterRead = async (requested) => {
+    if (requested !== path) return;
+    fault.afterRead = undefined;
+    await held.promise;
+  };
+  const old = store.getMetadata();
+  await store.run(async (_, save) => save({ version: 1 }, ['new']));
+  assert.deepEqual(await store.getMetadata(), { version: 1 });
+  held.resolve();
+  assert.equal(await old, undefined);
+  reads.length = 0;
+  assert.deepEqual(await store.getMetadata(), { version: 1 });
+  assert.equal(reads.length, 0);
 }
 
 /** 실행 중 잠금 충돌과 만료 잠금의 회수를 확인한다. */
@@ -146,3 +219,5 @@ async function verifyRace() {
 test('Blob 이전, 캐시, 무변경 및 조건부 교체', verifyStore);
 test('Blob 잠금 충돌 및 만료 회수', verifyLock);
 test('Blob 조회 중 세대 교체', verifyRace);
+test('표시 메타데이터 만료, 요청 공유, 수집 후 반영', verifyMetadataCache);
+test('수집 전 지연된 표시 응답이 캐시를 덮어쓰지 않음', verifyMetadataRace);
