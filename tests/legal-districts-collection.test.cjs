@@ -104,7 +104,7 @@ async function verifyCollection() {
   }
 
   try {
-    // 최초 다운로드 뒤 날짜만 바뀌는 장기 조회를 확인한다.
+    // 최초 다운로드 뒤 1년을 넘는 조회가 0건이면 날짜와 자료를 그대로 둔다.
     assert.equal((await run('2024-02-29')).status, 'created');
     assert.deepEqual(calls.splice(0), ['download']);
     const first = JSON.parse(await fs.readFile(output, 'utf8'));
@@ -114,12 +114,13 @@ async function verifyCollection() {
     assert.equal((await run('2025-03-01')).status, 'unchanged');
     assert.deepEqual(calls.splice(0), [['2024-02-29', '2025-02-28'], ['2025-02-28', '2025-03-01']]);
     const stored = await fs.readFile(output, 'utf8');
-    assert.deepEqual(JSON.parse(stored), { ...first, lastSuccessfulDate: '2025-03-01' });
+    assert.deepEqual(JSON.parse(stored), first);
     assert.deepEqual(reads, [output]);
-    assert.deepEqual(writes, ['metadata']);
+    assert.deepEqual(writes, []);
     reads.length = writes.length = 0;
-    await run('2025-03-01');
-    assert.deepEqual(calls.splice(0), [['2025-03-01', '2025-03-01']]);
+    assert.equal((await run('2025-03-02')).status, 'unchanged');
+    assert.deepEqual(calls.splice(0), [['2024-02-29', '2025-02-28'], ['2025-02-28', '2025-03-02']]);
+    assert.equal(await fs.readFile(output, 'utf8'), stored);
     assert.deepEqual(reads, [output]);
     assert.deepEqual(writes, []);
     // 조회 검증과 변환 오류 후 파일 바이트가 유지되어야 한다.
@@ -130,8 +131,8 @@ async function verifyCollection() {
       assert.equal(await fs.readFile(output, 'utf8'), stored);
     }
     fault = undefined;
-    count = 0;
-    // 변경 없음 경로에서도 교체가 실패하면 성공일을 보존한다.
+    count = 1;
+    // 새 목록 적용이 실패하면 이전 행과 기준일을 보존한다.
     await assert.rejects(run('2025-03-02', { rename: async () => { throw Error('모의 저장 실패'); } }), /모의 저장 실패/);
     assert.equal(await fs.readFile(output, 'utf8'), stored);
     assert.deepEqual((await fs.readdir(directory)).sort(), ['latest.json', first.listFile].sort());
@@ -143,6 +144,12 @@ async function verifyCollection() {
     assert.equal(latest.lastSuccessfulDate, '2025-03-02');
     assert.equal(JSON.parse(await fs.readFile(join(directory, latest.listFile), 'utf8'))[0].code, code);
     assert.deepEqual((await fs.readdir(directory)).sort(), ['latest.json', latest.listFile].sort());
+    // 실제 갱신 직후 당일 재조회는 새 기준일부터 시작하며 다시 저장하지 않는다.
+    count = 0;
+    calls.length = writes.length = 0;
+    assert.equal((await run('2025-03-02')).status, 'unchanged');
+    assert.deepEqual(calls.splice(0), [['2025-03-02', '2025-03-02']]);
+    assert.deepEqual(writes, []);
     // 기존 형식의 전환이 실패하면 이전 단일 파일이 그대로 남는다.
     const legacy = JSON.stringify({ lastSuccessfulDate: '2025-03-02', rows: firstRows });
     await fs.writeFile(output, legacy);

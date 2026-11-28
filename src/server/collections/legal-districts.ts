@@ -10,7 +10,7 @@ export const legalDistrictOutput = '.data/code/legal-districts.json';
 
 /** 호출자에게 제공할 갱신 기준과 집계다. */
 export type LegalDistrictMetadata = {
-  /** 적용된 한국 날짜. */
+  /** 실제 목록을 적용한 한국 날짜. 기존 저장본은 이전 확인일을 초기 기준으로 사용한다. */
   lastSuccessfulDate: string;
   /** 전체 지역 코드 수. */
   total: number;
@@ -109,8 +109,9 @@ export async function runLegalDistrictCollection(options: LegalDistrictCollectio
     const totals = downloaded ?? previous;
     if (!totals) throw new Error('법정동 수집 결과 누락');
     const { total, active, abolished } = totals;
-    if (downloaded || previous?.lastSuccessfulDate !== requestDate) {
-      await save({ lastSuccessfulDate: requestDate, total, active, abolished }, downloaded?.rows);
+    // 실제 목록을 받은 경우에만 목록과 다음 변경 조회의 시작일을 함께 적용한다.
+    if (downloaded) {
+      await save({ lastSuccessfulDate: requestDate, total, active, abolished }, downloaded.rows);
     }
     return { status: (previous ? (downloaded ? 'updated' : 'unchanged') : 'created') satisfies CollectionStatus, requestDate, total, active, abolished };
   }
