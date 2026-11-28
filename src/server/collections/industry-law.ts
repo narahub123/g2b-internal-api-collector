@@ -20,9 +20,9 @@ export type IndustryLawMetadata = {
   codes: number;
 };
 
-/** 로컬 경로 또는 교체 가능한 저장 구현이다. */
+/** 업종 및 근거법규 목록의 저장소 설정이다. */
 export type IndustryLawStorageOptions = {
-  /** 기본은 로컬 구현이며 별도 저장소를 사용할 때만 지정한다. */
+  /** 기본은 Vercel Blob이며 별도 저장소를 사용할 때만 지정한다. */
   store?: CollectionStore<IndustryLawMetadata, IndustryLawRow>;
 };
 
