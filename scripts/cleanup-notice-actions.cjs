@@ -1,8 +1,9 @@
-// 공고와 첨부의 성공 기록에 같은 보존 기간을 적용한다.
+// 공고, 첨부와 사전의 성공 기록에 같은 보존 기간을 적용한다.
 const retentionMs = 24 * 60 * 60_000;
 const workflowPaths = [
   '/actions/workflows/notice-collection.yml/runs',
   '/actions/workflows/attachment-processing.yml/runs',
+  '/actions/workflows/dictionary-collection.yml/runs',
 ];
 
 function expiredSuccess(run, cutoff) {
@@ -54,7 +55,7 @@ async function cleanupWorkflowRuns(request, workflowRuns, now, dryRun) {
   return selected;
 }
 
-/** 공고와 첨부를 각각 정리하며 한쪽이 실패해도 다른 쪽은 시도한 뒤 전체 실패를 보고한다. */
+/** 각 워크플로를 독립적으로 정리하고 한쪽 오류는 나머지를 처리한 후 보고한다. */
 async function cleanupQueueRuns(request, now, dryRun, report = console.log) {
   const errors = [];
   for (const path of workflowPaths) {

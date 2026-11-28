@@ -20,7 +20,7 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
 
   async function state() {
     return await db.prepare(`SELECT q.manual, q.maintenance, (a.generation > 0 AND a.enabled = 0) AS automaticPaused
-      FROM g2b_notice_queue q JOIN g2b_notice_automatic a ON a.id = q.id WHERE q.id = 1`).get() as
+      FROM g2b_notice_queue q JOIN g2b_notice_automatic_state a ON a.id = q.id WHERE q.id = 1`).get() as
       { manual: number; maintenance: number; automaticPaused: number };
   }
 
@@ -144,7 +144,7 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
         WHERE q.id = 1 AND q.dispatchUntil <= unixepoch()
           AND NOT EXISTS (SELECT 1 FROM g2b_notice_worker_lease WHERE token IS NOT NULL AND expires_at > unixepoch())
           AND EXISTS (
-            SELECT 1 FROM g2b_notice_automatic a WHERE a.id = 1 AND (
+            SELECT 1 FROM g2b_notice_automatic_state a WHERE a.id = 1 AND (
               (a.enabled = 1 AND a.nextAt <= ? AND (q.manual = 0 OR q.maintenance <> 0))
               OR (a.enabled = 1 AND q.maintenance <> 0 AND a.probeMaintenance = q.maintenance)
               OR (q.manual = 0 AND (
@@ -168,7 +168,7 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
     },
     async nextRetryAt() {
       const row = await db.prepare(`SELECT MIN(j.availableAt) AS readyAt
-        FROM g2b_notice_jobs j CROSS JOIN g2b_notice_queue q CROSS JOIN g2b_notice_automatic a
+        FROM g2b_notice_jobs j CROSS JOIN g2b_notice_queue q CROSS JOIN g2b_notice_automatic_state a
         WHERE q.id = 1 AND a.id = 1 AND q.manual = 0 AND q.maintenance = 0
           AND j.status = 'retry_wait' AND (j.source = 'manual' OR a.enabled = 1)`).get();
       return typeof row?.readyAt === "number" ? row.readyAt : null;
@@ -335,7 +335,7 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
     },
     async needsManualMaintenanceCheck() {
       return Boolean(await db.prepare(`SELECT 1
-        FROM g2b_notice_automatic a JOIN g2b_notice_queue q ON q.id = a.id
+        FROM g2b_notice_automatic_state a JOIN g2b_notice_queue q ON q.id = a.id
         WHERE a.id = 1 AND a.enabled = 0 AND q.maintenance <> 0 AND (
           EXISTS (SELECT 1 FROM g2b_notice_runs WHERE source = 'manual' AND phase IN ('pending', 'discovering'))
           OR EXISTS (SELECT 1 FROM g2b_notice_jobs WHERE source = 'manual' AND status IN ('pending', 'retry_wait'))
@@ -515,7 +515,7 @@ export function openNoticeQueue(db: G2bDatabase): NoticeQueue {
     markMaintenance,
     async clearMaintenance(version, scheduleGeneration) {
       await db.prepare(`UPDATE g2b_notice_queue SET maintenance = 0 WHERE id = 1 AND maintenance = ?
-        AND EXISTS (SELECT 1 FROM g2b_notice_automatic
+        AND EXISTS (SELECT 1 FROM g2b_notice_automatic_state
           WHERE (? IS NULL AND enabled = 0) OR (enabled = 1 AND generation = ?))`)
         .run(version, scheduleGeneration ?? null, scheduleGeneration ?? null);
     },

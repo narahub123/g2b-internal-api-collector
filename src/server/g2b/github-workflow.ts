@@ -1,4 +1,4 @@
-type G2bWorkflow = "notice-collection.yml" | "attachment-processing.yml";
+type G2bWorkflow = "notice-collection.yml" | "attachment-processing.yml" | "dictionary-collection.yml";
 type WorkflowTarget = { repository?: string; ref?: string; credential?: string };
 
 // Vercel은 워크플로 실행 접수 응답까지만 기다리며 공고 수집과 첨부 처리에 같은 제한을 적용한다.

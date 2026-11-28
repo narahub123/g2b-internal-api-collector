@@ -22,6 +22,8 @@ export type LegalDistrictMetadata = {
 
 /** 법정동 목록의 저장소 설정이다. */
 export type LegalDistrictStorageOptions = {
+  /** 원격 수집 완료 직후 표시 캐시를 우회할지 여부. */
+  freshMetadata?: boolean;
   /** 기본은 Vercel Blob이며 별도 저장소를 사용할 때만 지정한다. */
   store?: CollectionStore<LegalDistrictMetadata, LegalDistrict>;
 };
@@ -31,6 +33,8 @@ type LegalDistrictCollectionOptions = LegalDistrictStorageOptions &
   Pick<NonNullable<Parameters<typeof collectLegalDistricts>[0]>, 'fetchImpl' | 'onProgress'> & {
     /** 수집 기준일을 계산할 실행 시작 시각. */
     now?: Date;
+    /** 수집 소유자가 실행을 중단하는 신호. */
+    signal?: AbortSignal;
   };
 
 /** 수집 결과를 구분하는 값이다. */
@@ -95,7 +99,7 @@ export async function runLegalDistrictCollection(options: LegalDistrictCollectio
   const { fetchImpl, onProgress, now = new Date() } = options;
   // 모든 구간에 시작 시점의 한국 날짜를 사용한다.
   const requestDate = koreanDate(now);
-  return getStore(options).run(collect);
+  return getStore(options).run(collect, options.signal);
 
   /**
    * 현재 성공일과 건수만 사용해 원본 확인과 결과 적용을 수행한다.
@@ -172,7 +176,7 @@ function readRows(rows: unknown[], metadata: LegalDistrictMetadata): LegalDistri
  * @throws 저장본 형식 또는 목록 참조가 올바르지 않은 경우.
  */
 export function getLegalDistrictMetadata(options: LegalDistrictStorageOptions = {}): Promise<LegalDistrictMetadata | undefined> {
-  return getStore(options).getMetadata();
+  return getStore(options).getMetadata(options.freshMetadata);
 }
 
 /**

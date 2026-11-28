@@ -37,57 +37,114 @@ function verifyDistricts() {
   assert.equal(dictionaryPage("legal-districts", rows, { field: "name", q: "없음" }).total, 0);
 }
 
-/** 권한 검사, 전체 수집 부분 실패, 경로 갱신과 잠금 충돌을 검증한다. */
+/** 관리자 액션은 권한 확인 후 큐에만 접수하고 실패한 호출은 작업을 보존한다. */
 async function verifyActions() {
-  // 실제 권한 요청과 원본 네트워크 대신 검증 가능한 응답을 사용한다.
-  const authModule = require.resolve("../src/server/auth/business-access.ts");
-  const nextCache = require.resolve("next/cache");
-  const authCache = require.cache[authModule];
-  const cacheExports = require.cache[nextCache];
-  const revalidated = [];
-  const calls = [];
+  // 격리된 실제 DB와 모의 인증·호출을 조합한다.
+  const { createClient } = require("@libsql/client");
+  const { G2bDatabase } = require("../src/server/g2b/repository/database.ts");
+  const { migrateG2bDatabase } = require("../src/server/g2b/repository/migrations.ts");
+  const queuePath = require.resolve("../src/server/collections/dictionary-queue.ts");
+  const dispatchPath = require.resolve("../src/server/collections/dictionary-dispatch.ts");
+  const authPath = require.resolve("../src/server/auth/business-access.ts");
+  const cachePath = require.resolve("next/cache");
+  const cardsPath = require.resolve("../src/_pages/admin/manage/dictionary-server.ts");
+  const { openDictionaryQueue } = require(queuePath);
+  const client = createClient({ url: ":memory:" });
+  await migrateG2bDatabase(client);
+  const queue = openDictionaryQueue(new G2bDatabase(client));
+  const originals = new Map();
   let denied = true;
-  require.cache[authModule] = { exports: { checkAdminAction: async () => denied ? { error: "권한 없음" } : null } };
-  require.cache[nextCache] = { exports: { revalidatePath: (path) => revalidated.push(path) } };
-  const { dictionaryServer } = require("../src/_pages/admin/manage/dictionary-server.ts");
-  const { CollectionBusyError } = require("../src/server/collections/blob-collection-store.ts");
-  const industry = dictionaryServer["industry-law"].collect;
-  const districts = dictionaryServer["legal-districts"].collect;
+  let dispatchCalls = 0;
+  let refreshes = 0;
+  const revalidated = [];
+
+  /**
+   * 새 액션이 사용할 모의 서버 의존성을 설치한다.
+   * @param {string} path 의존성 경로.
+   * @param {object} exports 모의 의존성.
+   */
+  function mock(path, exports) {
+    originals.set(path, require.cache[path]);
+    require.cache[path] = { exports };
+  }
+
+  mock(authPath, {
+    checkAdminAction: async () => denied ? { error: "권한 없음" } : null,
+    withBusinessAccess: (role, handler) => {
+      assert.equal(role, "ADMIN");
+      return (request) => denied ? new Response(null, { status: 401 }) : handler(request);
+    },
+  });
+  mock(queuePath, { getDictionaryQueue: () => queue });
+  mock(dispatchPath, { dispatchDictionaries: async () => {
+    dispatchCalls++;
+    if (dispatchCalls === 1) throw new Error("모의 워커 호출 실패");
+  } });
+  mock(cachePath, { revalidatePath: (path) => revalidated.push(path) });
+  mock(cardsPath, {
+    ...require(cardsPath),
+    getDictionaryCards: async (keys) => {
+      refreshes++;
+      assert.deepEqual(keys, ["industry-law"]);
+      return [{ id: "industry-law", details: { total: 1 } }];
+    },
+  });
   try {
-    // 업종이 잠금으로 중단되어도 법정동은 정상적으로 이어서 실행된다.
-    dictionaryServer["industry-law"].collect = async () => {
-      calls.push("industry-law");
-      throw new CollectionBusyError();
-    };
-    dictionaryServer["legal-districts"].collect = async () => {
-      calls.push("legal-districts");
-      return { status: "updated" };
-    };
-    const { collectDictionaries } = require("../src/_pages/admin/manage/collect-dictionaries.ts");
-    assert.deepEqual(await collectDictionaries("all"), { error: "권한 없음", results: [] });
+    // 권한 거절과 잘못된 식별자는 큐 생성이나 설정 변경보다 먼저 끝난다.
+    const { collectDictionaries, saveDictionarySchedule } = require("../src/_pages/admin/manage/collect-dictionaries.ts");
+    const { GET } = require("../app/api/dictionaries/queue/status/route.ts");
+    const { POST } = require("../app/api/dictionaries/queue/tick/route.ts");
+    assert.deepEqual(await collectDictionaries("all"), { error: "권한 없음", ids: [] });
+    assert.deepEqual(await saveDictionarySchedule("industry-law", true, 7), { error: "권한 없음" });
+    assert.equal((await GET(new Request("https://example.test/?id=1"))).status, 401);
     denied = false;
     assert.ok((await collectDictionaries("prototype")).error);
-    assert.deepEqual(calls, []);
-    assert.deepEqual((await collectDictionaries("all")).results, [
-      { id: "industry-law", status: "busy" }, { id: "legal-districts", status: "updated" },
-    ]);
-    assert.deepEqual(calls, ["industry-law", "legal-districts"]);
-    assert.deepEqual(revalidated, ["/admin/manage", "/admin/manage/dictionaries", "/admin/manage/dictionaries/legal-districts"]);
-    // 잠금이 풀린 다음에는 개별 수집을 다시 실행할 수 있다.
-    dictionaryServer["industry-law"].collect = async () => ({ status: "unchanged" });
-    assert.deepEqual((await collectDictionaries("industry-law")).results, [{ id: "industry-law", status: "unchanged" }]);
+    assert.ok((await saveDictionarySchedule("industry-law", true, 1.5)).error);
+    assert.equal(dispatchCalls, 0);
+    const accepted = await collectDictionaries("all");
+    assert.ok(accepted.warning);
+    assert.equal(accepted.ids.length, 2);
+    assert.deepEqual((await collectDictionaries("industry-law")).ids, [accepted.ids[0]]);
+    assert.deepEqual((await queue.jobs(accepted.ids)).map(({ status }) => status), ["pending", "pending"]);
+    assert.deepEqual(await saveDictionarySchedule("industry-law", true, 9), {});
+    assert.equal((await queue.settings()).find(({ key }) => key === "industry-law").days, 9);
+    assert.deepEqual(revalidated, ["/admin/manage/dictionaries"]);
+    // 상태 조회는 대기 중 Blob을 읽지 않고 부분 성공 종료 후 성공 카드만 갱신한다.
+    const statusRequest = new Request("https://example.test/?" + accepted.ids.map((id) => "id=" + id).join("&"));
+    assert.equal((await GET(statusRequest).then((response) => response.json())).pending, true);
+    assert.equal(refreshes, 0);
+    const industry = await queue.claim();
+    await queue.finish(industry.id, industry.token, "updated");
+    const district = await queue.claim();
+    await queue.finish(district.id, district.token, { retry: true });
+    const completed = await GET(statusRequest).then((response) => response.json());
+    assert.equal(completed.pending, false);
+    assert.deepEqual(completed.jobs.map(({ status }) => status), ["succeeded", "failed"]);
+    assert.equal(refreshes, 1);
+
+    // 외부 호출은 토큰이 일치해야 일정과 워커 호출에 접근한다.
+    const previousToken = process.env.NOTICE_CRON_TOKEN;
+    process.env.NOTICE_CRON_TOKEN = "test-cron-token";
+    try {
+      assert.equal((await POST(new Request("https://example.test/"))).status, 401);
+      assert.equal((await POST(new Request("https://example.test/", {
+        headers: { Authorization: "Bearer test-cron-token" },
+      }))).status, 204);
+    } finally {
+      if (previousToken === undefined) delete process.env.NOTICE_CRON_TOKEN;
+      else process.env.NOTICE_CRON_TOKEN = previousToken;
+    }
   } finally {
-    // 모의 함수를 원상 복구해 테스트 간 간섭을 피한다.
-    dictionaryServer["industry-law"].collect = industry;
-    dictionaryServer["legal-districts"].collect = districts;
-    if (authCache) require.cache[authModule] = authCache;
-    else delete require.cache[authModule];
-    if (cacheExports) require.cache[nextCache] = cacheExports;
-    else delete require.cache[nextCache];
+    // 다른 테스트가 실제 모듈을 불러올 수 있게 복구한다.
+    for (const [path, original] of originals) {
+      if (original) require.cache[path] = original;
+      else delete require.cache[path];
+    }
+    client.close();
   }
 }
 
 // 두 상세 목록과 수집 진입점을 독립적으로 검증한다.
 test("업종 검색과 다중 필터가 원본 행을 보존한다", verifyIndustry);
 test("법정동 폐지 필터와 목록 페이지 범위를 적용한다", verifyDistricts);
-test("사전 수집 액션은 권한과 사전별 결과를 처리한다", verifyActions);
+test("사전 수집 액션은 권한과 중복 접수 및 설정을 처리한다", verifyActions);

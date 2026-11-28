@@ -1,0 +1,30 @@
+name: 사전 수집
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    # 두 번의 지연 재시도와 원본 요청을 포함한다.
+    timeout-minutes: 50
+    environment: dictionary-collection
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node scripts/dictionary-worker.cjs
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          BLOB_STORE_ID: ${{ vars.BLOB_STORE_ID }}
+          DICTIONARY_BLOB_PREFIX: ${{ vars.DICTIONARY_BLOB_PREFIX }}

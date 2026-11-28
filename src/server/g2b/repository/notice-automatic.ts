@@ -41,7 +41,7 @@ const failedJobs = "INDEXED BY g2b_notice_auto_failed WHERE automaticWalkId = ? 
 export function openNoticeAutomatic(db: G2bDatabase) {
   async function read() {
     return await db.prepare(`
-      SELECT a.*, q.maintenance, q.manual FROM g2b_notice_automatic a JOIN g2b_notice_queue q ON q.id = a.id WHERE a.id = 1
+      SELECT a.*, q.maintenance, q.manual FROM g2b_notice_automatic_state a JOIN g2b_notice_queue q ON q.id = a.id WHERE a.id = 1
     `).get() as Schedule;
   }
 
@@ -184,8 +184,10 @@ export function openNoticeAutomatic(db: G2bDatabase) {
       return db.transaction(async () => {
         const schedule = await read();
         if (command.action === "stop") {
+          // 공용 설정의 중단과 기존 회차 상태의 초기화를 함께 적용한다.
+          await db.prepare("UPDATE collection_schedule_settings SET enabled = 0 WHERE key = 'notice'").run();
           await db.prepare(`UPDATE g2b_notice_automatic
-            SET enabled = 0, immediate = 0, nextAt = NULL, probeMaintenance = NULL WHERE id = 1`).run();
+            SET immediate = 0, nextAt = NULL, probeMaintenance = NULL WHERE id = 1`).run();
           // 목록 탐색은 아직 공고를 접수하지 않았으므로 중단 중 반환된 응답은 반영하지 않는다.
           await db.prepare(`UPDATE g2b_notice_runs SET phase = 'pending'
             WHERE scheduleGeneration = ? AND phase = 'discovering'`).run(schedule.generation);
@@ -196,7 +198,8 @@ export function openNoticeAutomatic(db: G2bDatabase) {
         if (command.action === "interval") {
           const nextAt = schedule.enabled && schedule.startMinute
             ? nextTime(startTime(schedule.startMinute), command.interval, now) : null;
-          await db.prepare("UPDATE g2b_notice_automatic SET interval = ?, nextAt = ? WHERE id = 1").run(command.interval, nextAt);
+          await db.prepare("UPDATE collection_schedule_settings SET interval_seconds = ? WHERE key = 'notice'").run(command.interval * 60);
+          await db.prepare("UPDATE g2b_notice_automatic SET nextAt = ? WHERE id = 1").run(nextAt);
           return;
         }
 
@@ -208,9 +211,12 @@ export function openNoticeAutomatic(db: G2bDatabase) {
         // 이전 목록 접수는 새 시작 시각으로 대체하되 이미 큐에 저장된 공고는 유지한다.
         await db.prepare(`UPDATE g2b_notice_runs SET phase = 'failed', error = '새 시작 시각으로 재개했습니다.'
           WHERE scheduleGeneration IS NOT NULL AND phase IN ('pending', 'discovering')`).run();
+        // 운영 설정의 저장 위치만 바꾸고 실행 세대는 기존 행에서 관리한다.
+        await db.prepare("UPDATE collection_schedule_settings SET enabled = 1, start_minute = ?, interval_seconds = ? WHERE key = 'notice'")
+          .run(command.startMinute, command.interval * 60);
         await db.prepare(`UPDATE g2b_notice_automatic
-          SET enabled = 1, immediate = 1, generation = generation + 1, startMinute = ?, interval = ?, nextAt = ?, probeMaintenance = NULL
-          WHERE id = 1`).run(command.startMinute, command.interval, nextTime(anchor, command.interval, now));
+          SET immediate = 1, generation = generation + 1, nextAt = ?, probeMaintenance = NULL
+          WHERE id = 1`).run(nextTime(anchor, command.interval, now));
       });
     },
 

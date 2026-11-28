@@ -151,13 +151,14 @@ test('정리 작업은 완료 후 24시간이 지난 성공만 삭제하고 실�
   };
   const reports = [];
   await cleanupQueueRuns(request, now, true, (line) => reports.push(line));
-  assert.equal(reports.length, 2);
+  assert.equal(reports.length, 3);
   assert.match(reports[0], /notice-collection\.yml.*삭제 대상 1건/);
   assert.match(reports[1], /attachment-processing\.yml.*삭제 대상 1건/);
+  assert.match(reports[2], /dictionary-collection\.yml.*삭제 대상 1건/);
   assert.deepEqual(deleted, []);
   await assert.rejects(cleanupQueueRuns((path, method) => {
     if (path.includes('/notice-collection.yml/')) throw new Error('HTTP 403');
     return request(path, method);
   }, now, false, () => {}), /notice-collection.*403/);
-  assert.deepEqual(deleted, [1]);
+  assert.deepEqual(deleted, [1, 1]);
 });

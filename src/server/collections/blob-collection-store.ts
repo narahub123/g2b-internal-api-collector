@@ -119,13 +119,14 @@ export function createBlobCollectionStore<M, R>(
 
   /**
    * 목록을 열지 않고 유효한 표시 메타데이터를 반환한다.
+   * @param fresh 원격 워커가 완료한 직후 최신 메타데이터를 읽을지 여부.
    * @returns 검증한 메타데이터 또는 미수집 상태.
    * @throws Blob 조회나 메타데이터 검증에 실패한 경우.
    */
-  async function getMetadata(): Promise<M | undefined> {
+  async function getMetadata(fresh = false): Promise<M | undefined> {
     // 같은 사전의 진행 중 조회는 합치고 성공한 값만 유효기간 동안 사용한다.
     const cached = metadataCache.get(cacheKey);
-    if (cached) {
+    if (cached && !fresh) {
       if ('pending' in cached) return cached.pending as Promise<M | undefined>;
       if (cached.expiresAt > Date.now()) return cached.metadata as M | undefined;
     }
@@ -259,10 +260,14 @@ export function createBlobCollectionStore<M, R>(
   /**
    * 사전 잠금 아래에서 최신 기준으로 수집하고 검증된 자료만 적용한다.
    * @param collect 업무별 원본 확인과 저장 로직.
+   * @param cancellation 워커 종료 또는 실행권 상실에 따른 중단 신호.
    * @returns 업무 수집 결과.
    */
-  async function run<T>(collect: CollectionRunner<M, R, T>): Promise<T> {
-    const signal = AbortSignal.timeout(runTimeout);
+  async function run<T>(collect: CollectionRunner<M, R, T>, cancellation?: AbortSignal): Promise<T> {
+    // 호출자가 소유권을 잃어도 원본 요청과 저장을 동일한 신호로 중단한다.
+    const timeout = AbortSignal.timeout(runTimeout);
+    const signal = cancellation ? AbortSignal.any([timeout, cancellation]) : timeout;
+    signal.throwIfAborted();
     // 이벤트 루프 정지 후에도 경과 시간이 지난 실행은 쓰기를 시작할 수 없다.
     const deadline = performance.now() + runTimeout;
     const leaseEtag = await acquire(signal);

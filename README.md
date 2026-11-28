@@ -44,6 +44,16 @@ node scripts/collect-legal-districts.cjs
 
 이전 세대의 정리 지연이 기록되면 해당 접두사의 수집이 끝난 뒤 현재 `metadata.json`의 `listFile`을 확인합니다. 정리 작업에서는 해당 사전의 `rows/` 아래에서 현재 참조가 없는 세대만 대상으로 삼습니다.
 
+#### 사전 자동 확인과 수동 큐 배포
+
+공고 설정을 수정하는 관리자 요청과 공고 정기 호출을 잠시 멈추고 실행 중인 공고 워커를 마칩니다. `npm run db:migrate`로 스키마 버전 44를 적용한 뒤 새 웹 코드와 워크플로를 함께 반영합니다. 기존 공고 일정과 큐를 확인한 뒤 공고 호출을 재개합니다.
+
+GitHub Actions의 `dictionary-collection` 환경에 운영과 동일한 `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `BLOB_READ_WRITE_TOKEN` 시크릿을 설정합니다. 웹에 기본값이 아닌 사전 저장 접두사를 사용했다면 같은 값으로 환경 변수 `DICTIONARY_BLOB_PREFIX`를 설정합니다. GitHub 환경 변수 `BLOB_STORE_ID`는 연결한 Blob의 ID로 설정할 수 있습니다. 웹은 기존 워크플로 호출 설정 `NOTICE_GITHUB_REPOSITORY`, `NOTICE_GITHUB_REF`, `NOTICE_GITHUB_TOKEN`을 사용합니다.
+
+사전 워크플로가 기본 브랜치에 반영된 뒤 cron-job.org에서 `POST /api/dictionaries/queue/tick`을 매일 **03:10 Asia/Seoul**로 등록합니다. `Authorization: Bearer <NOTICE_CRON_TOKEN>` 헤더를 사용합니다. 자동 확인은 두 사전 모두 기본 비활성이므로 관리자 화면에서 필요한 사전을 활성화합니다. 실패한 자동 작업의 15분 재시도는 실행 중인 Actions 워커가 맡고, 강제 종료로 남은 작업은 다음 일일 호출에서 복구합니다.
+
+기존 시간별 기록 정리 워크플로의 `dry_run=true`로 사전 큐의 삭제 후보를 확인할 수 있습니다. 정리 워크플로에서 Turso 접속 시크릿을 사용할 수 있게 등록합니다. 실제 정리는 기존 `NOTICE_ACTIONS_CLEANUP_ENABLED` 값에 따라 실행됩니다.
+
 ### Google 회원가입·로그인 개발 검증
 
 검증용 DB에 마이그레이션 19를 적용하고 `.env.local`에 `AUTH_SECRET`, `AUTH_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`을 설정합니다. `AUTH_URL`은 브라우저에서 여는 서비스 origin입니다. Google Cloud의 웹 애플리케이션 OAuth 클라이언트에 `AUTH_URL`과 `/auth/google/callback`을 결합한 콜백 URL을 등록합니다. 로컬 예시는 `http://127.0.0.1:3000/auth/google/callback`입니다.
@@ -119,4 +129,4 @@ npm exec -- postman --version
 2. 테스트 웹 서버에 `NOTICE_WORKER_MODE=github-actions`, `NOTICE_GITHUB_REPOSITORY`(소유자/저장소), `NOTICE_GITHUB_REF`(실행할 브랜치 또는 태그), `NOTICE_GITHUB_TOKEN`(대상 저장소 Actions 쓰기 권한), `NOTICE_CRON_TOKEN`(정기 호출 전용 비밀값)을 설정합니다. 로컬 상시 워커를 함께 실행할 경우 기존 워커가 실행권을 계속 사용하므로 Actions 경로를 검증할 때에는 테스트용 상시 워커를 종료합니다.
 3. 배포 환경에서 관리자 화면과 쓰기 API, PDF 페이지 조회 경로(`/api/g2b/attachment-results/*`)를 같은 인증 정책으로 보호합니다. HTTPS의 `POST /api/g2b/notice-queue/tick` 경로만 정기 호출에 허용하고 애플리케이션의 전용 토큰 검증을 사용합니다. cron-job.org에서 매분 POST와 `Authorization: Bearer <NOTICE_CRON_TOKEN>` 헤더를 설정합니다. 응답은 호출을 요청했으면 202, 실행할 작업이 없거나 이미 예약됐으면 204, 인증 실패 시 401, 호출 오류 시 503입니다.
 4. 테스트 화면에서 수동 수집과 자동 수집 시작·재개를 요청하고 워크플로 실행 및 Turso 저장을 확인합니다. Actions 호출이 실패해도 큐 접수는 유지됩니다. 다음 정기 호출은 실행 가능한 작업을 재확인하고, 러너가 시작하지 않은 예약은 3분 후 만료됩니다.
-5. **공고·첨부 실행 기록 정리**를 `dry_run=true`로 수동 실행해 누적 삭제 후보를 확인합니다. 실제 예약 정리를 활성화하려면 GitHub **Settings → Secrets and variables → Actions → Variables**의 **Repository variables**에 `NOTICE_ACTIONS_CLEANUP_ENABLED=true`를 등록합니다. GitHub가 매시간 17분에 실행을 요청합니다. 두 워크플로의 완료 후 24시간 지난 성공 실행만 정리하며 이전 시도에 실패가 있었던 실행과 실패·취소 기록은 보존합니다.
+5. **공고·첨부·사전 실행 기록 정리**를 `dry_run=true`로 수동 실행해 누적 삭제 후보를 확인합니다. 실제 예약 정리를 활성화하려면 GitHub **Settings → Secrets and variables → Actions → Variables**의 **Repository variables**에 `NOTICE_ACTIONS_CLEANUP_ENABLED=true`를 등록합니다. GitHub가 매시간 17분에 실행을 요청합니다. 세 워크플로의 완료 후 24시간 지난 성공 실행만 정리하며 이전 시도에 실패가 있었던 실행과 실패·취소 기록은 보존합니다.

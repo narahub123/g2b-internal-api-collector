@@ -1,4 +1,4 @@
-name: 공고·첨부 실행 기록 정리
+name: 공고·첨부·사전 실행 기록 정리
 
 on:
   schedule:
@@ -34,3 +34,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NOTICE_CLEANUP_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      - name: 사전 큐 기록 정리
+        if: ${{ !cancelled() }}
+        run: |
+          npm ci
+          node scripts/cleanup-dictionary-jobs.cjs
+        env:
+          NOTICE_CLEANUP_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}

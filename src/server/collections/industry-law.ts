@@ -22,13 +22,18 @@ export type IndustryLawMetadata = {
 
 /** 업종 및 근거법규 목록의 저장소 설정이다. */
 export type IndustryLawStorageOptions = {
+  /** 원격 수집 완료 직후 표시 캐시를 우회할지 여부. */
+  freshMetadata?: boolean;
   /** 기본은 Vercel Blob이며 별도 저장소를 사용할 때만 지정한다. */
   store?: CollectionStore<IndustryLawMetadata, IndustryLawRow>;
 };
 
 /** 수집 실행 중 사용할 요청과 시간 설정이다. */
 type IndustryLawCollectionOptions = IndustryLawStorageOptions &
-  Pick<NonNullable<Parameters<typeof collectIndustryLaw>[0]>, 'fetchImpl' | 'onStep'>;
+  Pick<NonNullable<Parameters<typeof collectIndustryLaw>[0]>, 'fetchImpl' | 'onStep'> & {
+    /** 수집 소유자가 실행을 중단하는 신호. */
+    signal?: AbortSignal;
+  };
 
 /** 수집 결과를 구분하는 값이다. */
 type CollectionStatus = 'created' | 'updated' | 'unchanged';
@@ -74,7 +79,7 @@ function migrate(snapshot: Record<string, unknown>, rows: unknown[]): { metadata
 export async function runIndustryLawCollection(options: IndustryLawCollectionOptions = {}) {
   // 실행 옵션과 저장 구현을 분리한다.
   const { fetchImpl, onStep } = options;
-  return getStore(options).run(collect);
+  return getStore(options).run(collect, options.signal);
 
   /**
    * 기존 기준과 조회 버전을 비교해 변경된 자료만 적용한다.
@@ -152,7 +157,7 @@ function readRows(rows: unknown[], metadata: IndustryLawMetadata): IndustryLawRo
  * @throws 저장본 형식 또는 목록 참조가 올바르지 않은 경우.
  */
 export function getIndustryLawMetadata(options: IndustryLawStorageOptions = {}): Promise<IndustryLawMetadata | undefined> {
-  return getStore(options).getMetadata();
+  return getStore(options).getMetadata(options.freshMetadata);
 }
 
 /**

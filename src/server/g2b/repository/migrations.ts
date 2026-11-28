@@ -872,6 +872,51 @@ export async function migrateG2bDatabase(client: Client): Promise<void> {
       // 관심 저장과 원본 삭제에 필요한 스키마를 적용한 뒤 버전을 기록한다.
       await transaction.executeMultiple(`${interestSchema}\nINSERT INTO g2b_schema_migrations (version) VALUES (43);`);
     }
+    // 공고의 설정값만 공유 테이블로 이전하고 실행 상태는 기존 테이블에서 계속 관리한다.
+    const dictionaryQueue = await transaction.execute("SELECT 1 FROM g2b_schema_migrations WHERE version = 44");
+    if (!dictionaryQueue.rows.length) {
+      await transaction.executeMultiple(`
+        CREATE TABLE collection_schedule_settings (
+          key TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK (enabled IN (0,1)),
+          interval_seconds INTEGER NOT NULL CHECK (interval_seconds > 0), start_minute TEXT
+        );
+        INSERT INTO collection_schedule_settings
+          SELECT 'notice', enabled, interval * 60, startMinute FROM g2b_notice_automatic WHERE id = 1;
+        INSERT INTO collection_schedule_settings VALUES ('industry-law',0,604800,NULL), ('legal-districts',0,604800,NULL);
+        CREATE VIEW g2b_notice_automatic_state AS
+          SELECT a.id, s.enabled, s.interval_seconds / 60 AS interval, s.start_minute AS startMinute,
+            a.nextAt, a.generation, a.immediate, a.probeMaintenance
+          FROM g2b_notice_automatic a JOIN collection_schedule_settings s ON s.key = 'notice';
+        CREATE TABLE dictionary_schedule_state (
+          key TEXT PRIMARY KEY REFERENCES collection_schedule_settings(key),
+          last_success_at INTEGER, next_at INTEGER
+        );
+        INSERT INTO dictionary_schedule_state (key) VALUES ('industry-law'), ('legal-districts');
+        CREATE INDEX dictionary_schedule_due ON dictionary_schedule_state(next_at, key) WHERE next_at IS NOT NULL;
+        CREATE TABLE dictionary_jobs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          key TEXT NOT NULL REFERENCES dictionary_schedule_state(key),
+          source TEXT NOT NULL CHECK (source IN ('manual','automatic')),
+          status TEXT NOT NULL CHECK (status IN ('pending','running','retry_wait','succeeded','failed','cancelled')),
+          available_at INTEGER NOT NULL, finished_at INTEGER,
+          failures INTEGER NOT NULL DEFAULT 0, had_failure INTEGER NOT NULL DEFAULT 0,
+          result TEXT, worker_token TEXT
+        );
+        CREATE UNIQUE INDEX dictionary_job_active ON dictionary_jobs(key)
+          WHERE status IN ('pending','running','retry_wait');
+        CREATE INDEX dictionary_job_ready ON dictionary_jobs(source, id, available_at)
+          WHERE status IN ('pending','retry_wait');
+        CREATE INDEX dictionary_job_running ON dictionary_jobs(worker_token) WHERE status = 'running';
+        CREATE INDEX dictionary_job_cleanup ON dictionary_jobs(finished_at)
+          WHERE status = 'succeeded' AND had_failure = 0;
+        CREATE TABLE dictionary_worker (
+          id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT, expires_at INTEGER NOT NULL DEFAULT 0,
+          dispatch_token TEXT, dispatch_until INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO dictionary_worker(id) VALUES (1);
+        INSERT INTO g2b_schema_migrations(version) VALUES (44);
+      `);
+    }
     // 모든 마이그레이션이 성공한 경우 스키마를 확정한다.
     await transaction.commit();
   } finally {

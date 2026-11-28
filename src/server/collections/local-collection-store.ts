@@ -5,12 +5,12 @@ import { randomUUID } from 'node:crypto';
 
 /** 업무 모듈이 사용하는 저장소 계약이다. */
 export type CollectionStore<M, R> = {
-  /** 적용된 갱신 기준과 집계를 읽는다. */
-  getMetadata(): Promise<M | undefined>;
+  /** 적용된 갱신 기준과 집계를 읽으며 지원하는 저장소는 표시 캐시를 우회할 수 있다. */
+  getMetadata(fresh?: boolean): Promise<M | undefined>;
   /** 적용된 목록의 행을 읽는다. */
   getRows(): Promise<R[] | undefined>;
-  /** 수집기를 배타 실행하고 전달된 저장 함수로 자료를 적용한다. */
-  run<T>(collect: CollectionRunner<M, R, T>): Promise<T>;
+  /** 수집기를 배타 실행하고 지원하는 저장소에는 호출자의 중단 신호를 전달한다. */
+  run<T>(collect: CollectionRunner<M, R, T>, signal?: AbortSignal): Promise<T>;
 };
 
 /** 메타데이터와 선택적 새 목록을 함께 적용하는 함수다. */

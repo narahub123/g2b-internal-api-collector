@@ -8,11 +8,3 @@ export const dictionaries = [
 
 /** 설정에 등록된 사전만 조회와 수집 대상으로 사용한다. */
 export type DictionaryId = (typeof dictionaries)[number]["id"];
-
-/** 수집 결과를 사전별로 구분해 화면에 전달한다. */
-export type DictionaryCollectionResult = {
-  /** 실행을 시도한 사전. */
-  id: DictionaryId;
-  /** 저장 결과 또는 실행할 수 없었던 이유. */
-  status: "created" | "updated" | "unchanged" | "busy" | "failed";
-};
