@@ -2,7 +2,10 @@ import Link from "next/link";
 import { formatCollectionIdentifier } from "@/shared/model/g2b/collection-list-query";
 import type { CollectionSearchParams } from "@/shared/model/g2b/collection-list-query";
 import { RecollectButton } from "@/features/collect-g2b/ui/RecollectButton";
-import { CollectionListSelection, CollectionRowCheckbox } from "@/features/delete-g2b/ui/CollectionListSelection";
+import {
+  CollectionListSelection,
+  CollectionRowCheckbox,
+} from "@/features/delete-g2b/ui/CollectionListSelection";
 import { getG2bRepository } from "@/server/g2b/repository";
 import { loadCollectionList } from "@/server/g2b/repository/load-collection-list";
 import type { CollectionDeletionTarget } from "@/server/g2b/repository/collection-deletion";
@@ -13,7 +16,7 @@ import type {
 import { G2B_SECTIONS } from "@/shared/config/g2b-sections";
 import { cn } from "@/shared/lib/utils";
 import { G2bSectionNav } from "@/shared/ui/g2b/G2bSectionNav";
-import { ADMIN_NAVIGATION } from "../../config/navigation";
+import { ADMIN_G2B_SECTIONS } from "../../config/navigation";
 import { ADMIN_G2B_PATH, collectionDetailPaths } from "../../config/routes";
 import { CollectionQueryView } from "@/shared/ui/g2b/CollectionQueryView";
 import { CollectionForm } from "./CollectionForm";
@@ -50,8 +53,14 @@ function targetKey({ number, revision, openingRevision }: TargetKey) {
 type DisplayRow = {
   item: TargetKey;
   deletionTarget?: CollectionDeletionTarget;
-  savedItem?: Pick<CollectionOverview["saved"][number], "title" | "businessCode" | "businessLabel">;
-  failure?: Pick<CollectionOverview["failures"][number], "id" | "startedAt" | "status" | "error" | "diagnostics">;
+  savedItem?: Pick<
+    CollectionOverview["saved"][number],
+    "title" | "businessCode" | "businessLabel"
+  >;
+  failure?: Pick<
+    CollectionOverview["failures"][number],
+    "id" | "startedAt" | "status" | "error" | "diagnostics"
+  >;
 };
 
 /**
@@ -71,21 +80,39 @@ export async function CollectionListPage({
   const { counts } = paginated.result;
   const selected = paginated.query.status;
   const deletion = getG2bRepository().collectionDeletion;
-  const rows = await Promise.all(paginated.result.rows.map(async (row): Promise<DisplayRow> => {
-    const { target, blocked } = await deletion.snapshot(section, row);
-    // 화면을 조회한 뒤 다른 프로세스가 원본이나 이력을 바꿨다면 새 버전을 대신 제출하지 않는다.
-    const eligible = !blocked && row.status !== "pending" &&
-      (row.collectedAt !== null || row.status === "failed" || row.status === "deferred") &&
-      target.collectedAt === row.collectedAt && target.attemptId === row.id && target.attemptStartedAt === row.startedAt;
-    return {
-      item: row,
-      deletionTarget: eligible ? target : undefined,
-      savedItem: row.collectedAt !== null ? row : undefined,
-      failure: row.id !== null && row.startedAt && row.status && row.status !== "succeeded"
-        ? { id: row.id, startedAt: row.startedAt, status: row.status, error: row.error, diagnostics: row.diagnostics }
-        : undefined,
-    };
-  }));
+  const rows = await Promise.all(
+    paginated.result.rows.map(async (row): Promise<DisplayRow> => {
+      const { target, blocked } = await deletion.snapshot(section, row);
+      // 화면을 조회한 뒤 다른 프로세스가 원본이나 이력을 바꿨다면 새 버전을 대신 제출하지 않는다.
+      const eligible =
+        !blocked &&
+        row.status !== "pending" &&
+        (row.collectedAt !== null ||
+          row.status === "failed" ||
+          row.status === "deferred") &&
+        target.collectedAt === row.collectedAt &&
+        target.attemptId === row.id &&
+        target.attemptStartedAt === row.startedAt;
+      return {
+        item: row,
+        deletionTarget: eligible ? target : undefined,
+        savedItem: row.collectedAt !== null ? row : undefined,
+        failure:
+          row.id !== null &&
+          row.startedAt &&
+          row.status &&
+          row.status !== "succeeded"
+            ? {
+                id: row.id,
+                startedAt: row.startedAt,
+                status: row.status,
+                error: row.error,
+                diagnostics: row.diagnostics,
+              }
+            : undefined,
+      };
+    }),
+  );
   const href = `${ADMIN_G2B_PATH}/${section}`;
 
   return (
@@ -95,10 +122,8 @@ export async function CollectionListPage({
         backHref={ADMIN_G2B_PATH}
         backLabel="나라장터로 돌아가기"
       />
-      <G2bSectionNav
-        items={ADMIN_NAVIGATION.g2b.sections}
-        activeSection={section}
-      />
+      {/* 공통 나라장터 업무 목록을 표시하고 현재 업무를 활성화한다. */}
+      <G2bSectionNav items={ADMIN_G2B_SECTIONS} activeSection={section} />
       <CollectionForm section={section} />
       <nav
         aria-label="수집 상태로 필터링"
@@ -161,11 +186,15 @@ export async function CollectionListPage({
 }
 
 /** 삭제 선택과 저장 상세 링크를 독립된 컨트롤로 표시하고 최신 실패나 보류에 재수집을 제공한다. */
-function CollectionRows({ section, rows }: { section: CollectionSection; rows: DisplayRow[] }) {
+function CollectionRows({
+  section,
+  rows,
+}: {
+  section: CollectionSection;
+  rows: DisplayRow[];
+}) {
   return rows.length === 0 ? (
-    <p className="text-sm text-muted-foreground">
-      해당하는 자료가 없습니다.
-    </p>
+    <p className="text-sm text-muted-foreground">해당하는 자료가 없습니다.</p>
   ) : (
     <ul className="grid gap-2">
       {rows.map(({ item, savedItem, failure, deletionTarget }) => {
@@ -175,7 +204,12 @@ function CollectionRows({ section, rows }: { section: CollectionSection; rows: D
           <CollectionListItem
             key={key}
             href={savedItem ? collectionDetailPaths[section](item) : undefined}
-            selection={<CollectionRowCheckbox identifier={identifier} disabled={!deletionTarget} />}
+            selection={
+              <CollectionRowCheckbox
+                identifier={identifier}
+                disabled={!deletionTarget}
+              />
+            }
             action={
               failure && (
                 <RecollectButton
@@ -199,7 +233,11 @@ function CollectionRows({ section, rows }: { section: CollectionSection; rows: D
                       {failure.error}
                     </p>
                   )}
-                  {failure.diagnostics && <CollectionFailureDetails diagnostics={failure.diagnostics} />}
+                  {failure.diagnostics && (
+                    <CollectionFailureDetails
+                      diagnostics={failure.diagnostics}
+                    />
+                  )}
                 </>
               )
             }

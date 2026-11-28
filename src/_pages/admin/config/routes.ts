@@ -8,6 +8,10 @@ export const ADMIN_MANAGE_PATH = `${ADMIN_HOME_PATH}/manage`;
 export const ADMIN_DICTIONARIES_PATH = `${ADMIN_MANAGE_PATH}/dictionaries`;
 export const NOTICE_QUEUE_PATH = `${ADMIN_G2B_PATH}/notice-queue`;
 export const NOTICE_LIST_PATH = `${ADMIN_G2B_PATH}/notices`;
+// 업종 및 근거법규 목록 페이지의 경로다.
+export const ADMIN_INDUSTRY_LAW_PATH = `${ADMIN_DICTIONARIES_PATH}/industry-law`;
+// 법정동 코드 목록 페이지의 경로다.
+export const ADMIN_LEGAL_DISTRICTS_PATH = `${ADMIN_DICTIONARIES_PATH}/legal-districts`;
 
 /** 공고번호와 차수를 URL 세그먼트로 인코딩해 관리자 공고 상세로 연결한다. */
 export function noticePath(key: NumberWithRevision) {

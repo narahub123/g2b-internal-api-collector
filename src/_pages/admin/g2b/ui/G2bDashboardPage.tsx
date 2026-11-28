@@ -9,7 +9,8 @@ import {
 import { connection } from "next/server";
 import { getG2bRepository } from "@/server/g2b/repository";
 import type { CollectionSection } from "@/server/g2b/repository/collection-attempts";
-import { ADMIN_NAVIGATION } from "../../config/navigation";
+import { G2B_LABEL } from "@/shared/config/g2b-sections";
+import { ADMIN_G2B_SECTIONS } from "../../config/navigation";
 import { AdminDashboardCard } from "../../ui/AdminDashboardCard";
 import {
   collectionCountFormat,
@@ -41,13 +42,15 @@ export async function G2bDashboardPage() {
 
   return (
     <section className="space-y-6">
+      {/* 공용 나라장터 이름을 페이지 제목으로 표시한다. */}
       <AdminPageHeading
-        title={ADMIN_NAVIGATION.g2b.label}
+        title={G2B_LABEL}
         backHref={ADMIN_HOME_PATH}
         backLabel="관리자로 돌아가기"
       />
       <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {ADMIN_NAVIGATION.g2b.sections.map(async ({ section, href, label }) => {
+        {/* 공통 나라장터 업무 목록을 기준으로 업무별 수집 현황 카드를 표시한다. */}
+        {ADMIN_G2B_SECTIONS.map(async ({ section, href, label }) => {
           const Icon = sectionIcons[section];
           const counts = await history.counts(section);
           const hasUncollected = counts.uncollected > 0;
